@@ -1,0 +1,11 @@
+# ESP-IDF Partition Table — 32MB + fonts.fontpack (font_data mmap)
+# Name,   Type, SubType, Offset,  Size, Flags
+nvsfactory, data,   nvs,        ,     200K,
+nvs,        data,   nvs,        ,     840K,
+otadata,    data,   ota,        ,     0x2000,
+phy_init,   data,   phy,        ,     0x1000,
+ota_0,      app,    ota_0,      0x200000,     4M,
+ota_1,      app,    ota_1,      0x600000,     4M,
+# fonts.fontpack 原始分区，esp_partition_mmap 零拷贝
+font_data,  data,   0x40,       0xA00000,     6M,
+assets,     data,   spiffs,     ,             10M,

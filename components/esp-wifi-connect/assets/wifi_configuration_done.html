@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MetalioEInk4Plus — WiFi Configuration</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <style>
+        :root, [data-theme="light"] {
+            --bg: #f5f5f7;
+            --surface: #ffffff;
+            --border: #e5e5ea;
+            --text: #1d1d1f;
+            --text-secondary: #86868b;
+            --success: #34c759;
+            --shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+        }
+        [data-theme="dark"] {
+            --bg: #0a0a0b;
+            --surface: #141416;
+            --border: #2a2a2e;
+            --text: #f5f5f7;
+            --text-secondary: #8e8e93;
+            --success: #30d158;
+            --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-font-smoothing: antialiased;
+        }
+        .container {
+            text-align: center;
+            padding: 40px 24px;
+            max-width: 400px;
+        }
+        .success-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 48px 32px;
+            box-shadow: var(--shadow);
+        }
+        .checkmark {
+            width: 72px;
+            height: 72px;
+            margin: 0 auto 28px;
+        }
+        .checkmark circle { stroke: var(--success); }
+        .checkmark path { stroke: var(--success); }
+        .brand-name {
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+        }
+        .title {
+            font-size: 22px;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin-bottom: 8px;
+        }
+        .subtitle {
+            font-size: 15px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+        .countdown {
+            display: inline-block;
+            font-weight: 600;
+            color: var(--success);
+            font-variant-numeric: tabular-nums;
+        }
+    </style>
+</head>
+<body data-theme="light">
+    <div class="container">
+        <div class="success-card">
+            <svg class="checkmark" viewBox="0 0 52 52">
+                <circle cx="26" cy="26" r="25" fill="none" stroke-width="2"/>
+                <path fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="M14.1 27.2l7.1 7.2 16.7-16.8"/>
+            </svg>
+            <div class="brand-name">MetalioEInk4Plus</div>
+            <div class="title" id="title">连接成功</div>
+            <div class="subtitle">
+                <span id="message">设备将在 <span class="countdown" id="countdown">3</span> 秒后重启</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            var theme = localStorage.getItem('preferred_theme') || 'light';
+            document.body.setAttribute('data-theme', theme);
+
+            var lang = localStorage.getItem('preferred_language') || 'zh-CN';
+            var texts = {
+                'zh-CN': { title: '连接成功', msg: '设备将在 {n} 秒后重启' },
+                'zh-TW': { title: '連接成功', msg: '裝置將在 {n} 秒後重新啟動' },
+                'en-US': { title: 'Connected', msg: 'Device will restart in {n} seconds' }
+            };
+            var t = texts[lang] || texts['en-US'];
+            document.title = 'MetalioEInk4Plus — ' + t.title;
+            document.getElementById('title').textContent = t.title;
+
+            var count = 3;
+            var countdownEl = document.getElementById('countdown');
+            var messageEl = document.getElementById('message');
+
+            function updateMessage() {
+                messageEl.innerHTML = t.msg.replace('{n}', '<span class="countdown" id="countdown">' + count + '</span>');
+                countdownEl = document.getElementById('countdown');
+            }
+
+            var timer = setInterval(function() {
+                count--;
+                if (countdownEl) countdownEl.textContent = count;
+                if (count <= 0) {
+                    clearInterval(timer);
+                    fetch('/reboot', { method: 'POST' })
+                        .then(function(r) { if (r.ok) window.close(); })
+                        .catch(function(e) { console.error(e); });
+                }
+            }, 1000);
+        })();
+    </script>
+</body>
+</html>

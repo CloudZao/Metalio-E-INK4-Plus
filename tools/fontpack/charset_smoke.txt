@@ -1,0 +1,4 @@
+# 冒烟测试用小字集（完整生产请用 --from-ef 或常用字表）
+ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789
+中文汉字测试字体打包方案一二三四五六七八九十
+，。！？、；：""''（）【】

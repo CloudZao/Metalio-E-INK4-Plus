@@ -1,0 +1,15 @@
+.venv/
+.venv-win/
+__pycache__/
+*.pyc
+data/uploads/
+data/library/
+data/staging/
+dist/
+build/
+*.spec.bak
+*.egg-info/
+
+# 大体积本地资源，勿入库（Gitee 单文件上限 100MB）
+ebook.zip
+test-book/

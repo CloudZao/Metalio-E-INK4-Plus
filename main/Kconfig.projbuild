@@ -1,0 +1,52 @@
+menu "Metalio E-Ink4-Plus"
+
+choice BOARD_TYPE
+    prompt "Board Type"
+    default BOARD_TYPE_METALIO_E_INK4_PLUS
+    help
+        S31 并行墨水屏 + 百问 AI。
+
+    config BOARD_TYPE_METALIO_E_INK4_PLUS
+        bool "Metalio E-Ink4-Plus (4.7 parallel)"
+        depends on IDF_TARGET_ESP32S31
+endchoice
+
+choice WAKE_WORD_TYPE
+    prompt "Wake word implementation"
+    default WAKE_WORD_DISABLED
+    help
+        百问为 PTT；默认关闭唤醒词。
+
+    config WAKE_WORD_DISABLED
+        bool "Disabled"
+    config USE_ESP_WAKE_WORD
+        bool "ESP Wake Word"
+    config USE_AFE_WAKE_WORD
+        bool "AFE Wake Word"
+        depends on SPIRAM
+    config USE_CUSTOM_WAKE_WORD
+        bool "Custom Wake Word"
+endchoice
+
+config USE_AUDIO_PROCESSOR
+    bool "Enable audio processor (AFE)"
+    default n
+    depends on SPIRAM
+    help
+        VAD/AEC 处理；S31 无 esp-sr 时关，走 no_audio_processor。
+
+config USE_DEVICE_AEC
+    bool "Device AEC"
+    default n
+    depends on USE_AUDIO_PROCESSOR
+
+config USE_SERVER_AEC
+    bool "Server AEC"
+    default n
+    depends on USE_AUDIO_PROCESSOR
+
+config USE_AUDIO_DEBUGGER
+    bool "Audio debugger"
+    default n
+
+endmenu

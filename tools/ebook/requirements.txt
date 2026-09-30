@@ -1,0 +1,5 @@
+Flask>=3.0.0
+Pillow>=10.0.0
+ebooklib>=0.18
+PyMuPDF>=1.24.0
+mobi>=0.3.3

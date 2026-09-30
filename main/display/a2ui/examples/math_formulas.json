@@ -1,0 +1,81 @@
+{
+  "updateComponents": {
+    "root": "root",
+    "refresh": "partial",
+    "components": [
+      {
+        "id": "root",
+        "component": "Column",
+        "gap": 12,
+        "padding": 8,
+        "align": "center",
+        "children": ["t1", "m_stirling", "t2", "m_quad", "t3", "m_einstein", "t4", "m_integral", "t5", "m_matrixish"]
+      },
+      {
+        "id": "t1",
+        "component": "Text",
+        "text": "斯特林公式（Stirling）",
+        "variant": "title",
+        "bold": true
+      },
+      {
+        "id": "m_stirling",
+        "component": "Math",
+        "display": true,
+        "width": 440,
+        "latex": "$n! \\approx \\sqrt{2\\pi n} \\left( \\frac{n}{\\rm e} \\right)^n$"
+      },
+      {
+        "id": "t2",
+        "component": "Text",
+        "text": "求根公式",
+        "variant": "subtitle",
+        "bold": true
+      },
+      {
+        "id": "m_quad",
+        "component": "Math",
+        "display": true,
+        "latex": "$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$"
+      },
+      {
+        "id": "t3",
+        "component": "Text",
+        "text": "质能关系",
+        "variant": "subtitle",
+        "bold": true
+      },
+      {
+        "id": "m_einstein",
+        "component": "Math",
+        "latex": "$E = mc^2$"
+      },
+      {
+        "id": "t4",
+        "component": "Text",
+        "text": "定积分",
+        "variant": "subtitle",
+        "bold": true
+      },
+      {
+        "id": "m_integral",
+        "component": "Math",
+        "display": true,
+        "latex": "$\\int_{a}^{b} f(x)\\,dx = F(b) - F(a)$"
+      },
+      {
+        "id": "t5",
+        "component": "Text",
+        "text": "大括号与分式",
+        "variant": "subtitle",
+        "bold": true
+      },
+      {
+        "id": "m_matrixish",
+        "component": "Math",
+        "display": true,
+        "latex": "$\\left\\{ \\frac{1}{1+x^2} \\right\\} + \\sum_{k=1}^{n} k$"
+      }
+    ]
+  }
+}

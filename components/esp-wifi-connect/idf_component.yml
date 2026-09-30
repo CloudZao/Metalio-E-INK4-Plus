@@ -1,0 +1,6 @@
+# Vendored from 78/esp-wifi-connect v2.6.2 (https://github.com/78/esp-wifi-connect).
+# 本目录由项目维护，不再走 Component Manager。
+dependencies:
+  idf: '>=5.3'
+description: ESP32 WiFi Configuration (vendored)
+license: MIT

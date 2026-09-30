@@ -1,0 +1,6 @@
+# Vendored from 78/esp-ml307 v3.5.3 (https://github.com/78/esp-ml307).
+# 本目录由项目维护，不再走 Component Manager。
+dependencies:
+  idf: '>=5.3'
+description: ESP32 ML307 / EC801E / NT26K Cat.1 Cellular Module (vendored)
+license: MIT

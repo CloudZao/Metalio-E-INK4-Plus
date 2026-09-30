@@ -1,0 +1,2 @@
+pillow>=10
+pyinstaller>=6.0

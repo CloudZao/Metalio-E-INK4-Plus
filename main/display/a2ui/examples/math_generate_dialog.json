@@ -1,0 +1,66 @@
+{
+  "_comment": "模拟对话：用户要生成复杂公式 → 助手回复本 JSON（updateComponents）。联调时可直接 a2ui_handle_json（忽略 dialog/_comment；设备侧以 updateComponents 为准）。",
+  "dialog": [
+    {
+      "role": "user",
+      "content": "生成一个正态分布概率密度公式"
+    },
+    {
+      "role": "assistant",
+      "content": "好的，已用 Math 组件排版正态分布密度函数："
+    }
+  ],
+  "updateComponents": {
+    "root": "root",
+    "refresh": "partial",
+    "components": [
+      {
+        "id": "root",
+        "component": "Column",
+        "gap": 10,
+        "padding": 8,
+        "align": "center",
+        "children": ["u_label", "u_msg", "a_label", "a_msg", "m_gauss", "a_note"]
+      },
+      {
+        "id": "u_label",
+        "component": "Text",
+        "text": "用户",
+        "variant": "caption",
+        "bold": true
+      },
+      {
+        "id": "u_msg",
+        "component": "Text",
+        "text": "生成一个正态分布概率密度公式",
+        "variant": "body"
+      },
+      {
+        "id": "a_label",
+        "component": "Text",
+        "text": "助手",
+        "variant": "caption",
+        "bold": true
+      },
+      {
+        "id": "a_msg",
+        "component": "Text",
+        "text": "好的，一维正态（高斯）概率密度如下：",
+        "variant": "body"
+      },
+      {
+        "id": "m_gauss",
+        "component": "Math",
+        "display": true,
+        "width": 440,
+        "latex": "$f(x) = \\frac{1}{\\sigma\\sqrt{2\\pi}}\\,\\mathrm{e}^{-\\frac{(x-\\mu)^{2}}{2\\sigma^{2}}}$"
+      },
+      {
+        "id": "a_note",
+        "component": "Text",
+        "text": "μ 为均值，σ>0 为标准差；含分式、根号、希腊字母与复合指数。",
+        "variant": "caption"
+      }
+    ]
+  }
+}

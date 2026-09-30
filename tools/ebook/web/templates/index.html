@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>metalio e-ink · ebook Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-glyph" aria-hidden="true"></span>
+        <div>
+          <div class="brand-name">ebook Studio</div>
+          <div class="brand-tag">metalio e-ink · GDEM0397 · 480×800</div>
+        </div>
+      </div>
+      <div class="header-meta">
+        <span class="chip" id="library-count">书库 —</span>
+        <span class="chip mono" id="device-chip">LVGL WASM</span>
+      </div>
+      <button class="theme-toggle" id="theme-toggle" type="button" title="切换主题" aria-label="切换主题">
+        <span class="icon-sun" aria-hidden="true">☀</span>
+        <span class="icon-moon" aria-hidden="true">☾</span>
+        <span class="theme-label">主题</span>
+      </button>
+    </header>
+
+    <main class="workspace">
+      <!-- 左：书库 -->
+      <aside class="zone zone-library" id="zone-library" aria-label="书库">
+        <div class="zone-head">
+          <div>
+            <h2>书库</h2>
+            <p class="zone-desc">点击阅读 · 拖入 .ebook 导入</p>
+          </div>
+          <div class="zone-actions">
+            <label class="btn icon-btn" id="btn-open-ebook-label" title="打开 .ebook">
+              <input type="file" id="open-ebook-file" accept=".ebook" hidden />
+              ＋
+            </label>
+            <button class="btn icon-btn" type="button" id="btn-refresh" title="刷新">↻</button>
+            <button class="btn icon-btn danger" type="button" id="btn-clear-library" title="清空">⌫</button>
+          </div>
+        </div>
+        <div class="library-list" id="book-grid"></div>
+        <p class="zone-foot muted" id="open-ebook-hint">拖入 .ebook 到列表区域可快速导入</p>
+      </aside>
+
+      <!-- 中：墨水屏模拟器 -->
+      <section class="zone zone-reader" id="zone-reader" aria-label="墨水屏模拟器">
+        <div class="zone-head">
+          <div>
+            <h2>阅读预览</h2>
+            <p class="zone-desc">1:1 LVGL 模拟 · 与 ESP32 排版一致</p>
+          </div>
+          <div class="reader-controls">
+            <label class="inline-field">字体 .ef
+              <select id="ef-font-select"></select>
+            </label>
+            <div class="epd-nav">
+              <button class="btn ghost sm" type="button" id="epd-prev" title="上一页">◀</button>
+              <button class="btn ghost sm" type="button" id="epd-next" title="下一页">▶</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="reader-stage">
+          <div class="epd-main">
+            <div class="epd-bezel">
+              <canvas id="epd-canvas" width="480" height="800" aria-label="E-Ink 480x800"></canvas>
+              <div class="epd-scanline" aria-hidden="true"></div>
+            </div>
+            <p class="epd-status-line" id="epd-status">就绪 · 从书库选择书籍</p>
+          </div>
+          <aside class="epd-toc-panel" id="epd-toc-panel" hidden aria-label="章节目录">
+            <div class="epd-toc-head">
+              <span class="epd-toc-title">目录</span>
+              <span class="muted tight" id="epd-toc-meta"></span>
+            </div>
+            <div class="toc-list epd-toc-list" id="epd-toc-list"></div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- 右：转换 -->
+      <aside class="zone zone-convert" id="zone-convert" aria-label="转换工作台">
+        <div class="zone-head">
+          <div>
+            <h2>转换</h2>
+            <p class="zone-desc">PDF / EPUB / MOBI / TXT → .ebook</p>
+          </div>
+        </div>
+
+        <div class="convert-scroll">
+          <form id="convert-form">
+            <input type="hidden" name="upload_id" id="upload_id" value="" />
+            <label class="drop" id="drop">
+              <input type="file" name="file" id="file" accept=".pdf,.epub,.mobi,.azw,.azw3,.txt,.text" />
+              <div class="drop-inner">
+                <strong id="drop-label">拖入或点击选择</strong>
+                <span class="muted">最大约 512MB</span>
+              </div>
+            </label>
+
+            <div class="fields cols-2">
+              <label>书名<input name="title" type="text" placeholder="默认元数据" /></label>
+              <label>作者<input name="author" type="text" /></label>
+            </div>
+            <div class="book-id-row">
+              <label class="book-id-field">书籍 ID
+                <input name="book_id" id="book_id" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="拖入书籍后自动生成" />
+              </label>
+              <button class="btn ghost sm" type="button" id="btn-regen-book-id" title="重新生成 UUID">换新</button>
+            </div>
+            <p class="muted book-id-hint">写入 Metadata.extra.book_id（无横线 UUID）；可改。空则转换时服务端再生成。</p>
+            <div class="fields cols-2">
+              <label>插图框
+                <select name="image_max" id="image_max">
+                  <option value="432x720" selected>432×720</option>
+                  <option value="360x600">360×600</option>
+                  <option value="480x800">480×800</option>
+                  <option value="orig">原始比例</option>
+                </select>
+              </label>
+              <label>封面框<input name="cover_max" type="text" value="240x320" /></label>
+            </div>
+            <div class="cover-pick">
+              <span>自定义封面（可选，TXT 可注入）</span>
+              <div class="cover-pick-row">
+                <input type="file" name="cover_file" id="cover_file" accept="image/*,.jpg,.jpeg,.png,.webp,.bmp" />
+                <button class="btn ghost sm" type="button" id="btn-clear-cover-file" hidden title="清除已选封面">清空</button>
+              </div>
+              <span class="muted" id="cover-file-hint">未选择；不选则用源书封面（TXT 无封面）</span>
+            </div>
+
+            <details class="fold" open>
+              <summary>PDF 扫描</summary>
+              <fieldset class="scan-box">
+                <label class="check">
+                  <input type="checkbox" name="pdf_pages_as_images" id="pdf_pages_as_images" />
+                  整页转图片
+                </label>
+                <div class="fields cols-2" id="scan-opts" hidden>
+                  <label>倍率<input name="pdf_page_scale" id="pdf_page_scale" type="number" step="0.1" min="0.5" max="3" value="1.5" /></label>
+                  <label>页图框<input name="pdf_page_max" type="text" value="480x720" /></label>
+                </div>
+              </fieldset>
+            </details>
+
+            <label class="check">
+              <input type="checkbox" name="keep_color" id="keep_color" />
+              保留彩色（设备仍黑白）
+            </label>
+
+            <fieldset class="binarize-box" id="binarize-box" hidden>
+              <legend>二值化预览</legend>
+              <div class="fields cols-2">
+                <label>方法
+                  <select name="binarize_method" id="binarize_method">
+                    <option value="bayer">Bayer 设备同款</option>
+                    <option value="otsu" selected>Otsu</option>
+                    <option value="dither">Floyd</option>
+                    <option value="sauvola">Sauvola</option>
+                    <option value="fixed">固定阈值</option>
+                  </select>
+                </label>
+                <label>对比度<input name="binarize_contrast" id="binarize_contrast" type="number" step="0.1" min="0.5" max="3" value="1.0" /></label>
+              </div>
+              <div class="preview-actions">
+                <button class="btn ghost sm" type="button" id="btn-preview">预览</button>
+                <span class="muted" id="preview-status"></span>
+              </div>
+              <div class="preview-grid" id="preview-grid" hidden>
+                <figure><figcaption>原色</figcaption><img id="preview-color" alt="" /></figure>
+                <figure><figcaption>灰度</figcaption><img id="preview-gray" alt="" /></figure>
+                <figure><figcaption>二值</figcaption><img id="preview-binary" alt="" /></figure>
+              </div>
+            </fieldset>
+
+            <div class="checks">
+              <label class="check"><input type="checkbox" name="no_images" />丢弃插图</label>
+              <label class="check"><input type="checkbox" name="no_cover" />不要封面</label>
+            </div>
+
+            <button class="btn primary block" type="submit" id="btn-convert">开始转换</button>
+          </form>
+
+          <div class="status" id="convert-status" hidden>
+            <div class="progress-wrap"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
+            <div class="progress-meta">
+              <span id="progress-pct">0%</span>
+              <span id="progress-msg">—</span>
+            </div>
+            <pre class="progress-log" id="progress-log"></pre>
+            <div class="convert-actions" id="convert-actions" hidden>
+              <a class="btn primary" id="btn-dl-ebook" href="#" download>下载</a>
+              <button class="btn ghost" type="button" id="btn-goto-emulator">阅读</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
