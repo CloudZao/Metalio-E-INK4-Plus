@@ -8,6 +8,8 @@
 #include <chrono>
 #include <esp_timer.h>
 
+struct EpdStatusBar;
+
 /**
  * @brief EPDiy + LVGL9：默认 I1，内容按需 L8 灰度渲染；转发百问 SetChatMessage / 状态栏
  */
@@ -65,6 +67,8 @@ public:
     void BindStatusBar(lv_obj_t* status_label, lv_obj_t* notification_label,
                        lv_obj_t* network_label, lv_obj_t* battery_label,
                        lv_obj_t* battery_pct_label, lv_obj_t* mute_label);
+    /** @brief 获取当前绑定的状态栏标签，供临时面板关闭时恢复绑定 */
+    EpdStatusBar GetBoundStatusBar() const;
 
     /**
      * @brief 兼容 397 BindStatusWidgets 参数序
@@ -90,19 +94,19 @@ public:
         RequestFullOnNextCommit();
     }
 
-    /** @brief 进待机：只攒 FB 不上墨，随后 Park 一次全刷带出画面（对齐 397 defer） */
+    /** @brief 进待机：只攒 FB 不上墨，随后 Park 推白带出画面（对齐 397 defer） */
     void BeginStandbyEnterPaint();
 
-    /** @brief 待机定格：一次 GC16 上屏后冻结 flush */
-    void ParkEpdForStandby();
+    /** @brief 待机定格：冻结 flush 后推白上屏，成功返回 true */
+    bool ParkEpdForStandby();
 
-    /** @brief 退出待机：解冻；下一帧全刷（勿同步 GC16，以免堵 dismiss 日志） */
+    /** @brief 退出待机：解冻；下一帧推白恢复界面 */
     void WakeEpdFromStandby();
 
     /** @brief 下一帧实际落墨后再恢复前光（配合退出待机） */
     void RequestRestoreFrontlightAfterCommit();
 
-    /** @brief 待机期间暂停 touch_feed（对齐 397，避免 Park/GC16 误报触摸） */
+    /** @brief 待机期间暂停 touch_feed（对齐 397，避免刷屏误报触摸） */
     void PauseStandbyBackgroundWork();
 
     /** @brief 退出待机恢复 touch_feed */
@@ -110,9 +114,10 @@ public:
 
     /**
      * @brief 关机图：NVS 壁纸 → 中英文应用内置图 → resources 默认图 → 关机文案；刷完冻结 flush
+     * @return 画面刷新成功返回 true，失败时调用方不得断电
      * @note 可在非 LVGL 任务调用（持内部锁）
      */
-    void ShowPoweredOffScreen();
+    bool ShowPoweredOffScreen();
 
     /** @brief 关机前 Deep Sleep（S31：刷图后由 PWR_KEY 硬断，暂无独立 deep sleep） */
     void SleepEpdForPowerOff() {}
@@ -144,8 +149,6 @@ private:
     char status_body_cache_[64] = {};
     char battery_pct_cache_[8] = {}; // 如「100%」；与 397 一致跨页保留
     int battery_level_cache_ = -1;
-    int battery_candidate_ = -1;
-    int64_t battery_candidate_since_ = 0;
     const char* battery_icon_ = nullptr;
     const char* network_icon_ = nullptr;
     bool network_busy_status_ = false;

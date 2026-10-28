@@ -99,7 +99,7 @@ static void OnCloudClicked(lv_event_t* e) {
     // LVGL runs on a PSRAM stack. Even opening a writable NVS namespace can
     // write Flash and disable caches, so the entire Settings lifetime must
     // run on the application's internal-RAM task, including its commit.
-    Application::GetInstance().Schedule([provider]() {
+    if (!Application::GetInstance().Schedule([provider]() {
         chat_cloud::SaveProvider(static_cast<chat_cloud::Provider>(provider));
         auto* display = Board::GetInstance().GetDisplay();
         if (display != nullptr) {
@@ -110,7 +110,10 @@ static void OnCloudClicked(lv_event_t* e) {
         }
         // SaveProvider commits before returning; release the display lock before teardown.
         Application::GetInstance().Reboot();
-    });
+    }, Application::TaskDomain::Storage)) {
+        s_cloud_busy.store(false);
+        RefreshCloudOptions();
+    }
 }
 
 static const char* OptionTitle(bool enabled) {
@@ -353,7 +356,7 @@ static void OnOptionClicked(lv_event_t* e) {
         if (s_busy.exchange(true)) { return; }
         RefreshOptions();
         const auto generation = s_ui_generation;
-        Application::GetInstance().Schedule([enable, generation]() {
+        if (!Application::GetInstance().Schedule([enable, generation]() {
             Application::GetInstance().SetLocalChatTtsEnabled(enable);
             auto* display = Board::GetInstance().GetDisplay();
             if (display != nullptr) {
@@ -368,7 +371,11 @@ static void OnOptionClicked(lv_event_t* e) {
             } else {
                 s_busy.store(false);
             }
-        });
+        })) {
+            s_busy.store(false);
+            SetStatus(Lang::Strings::SETTINGS_CONV_BUSY);
+            RefreshOptions();
+        }
         return;
     }
     if (!StartWorker(PutTask, enable ? reinterpret_cast<void*>(1) : nullptr, "tts_put")) {

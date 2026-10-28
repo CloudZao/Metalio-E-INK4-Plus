@@ -99,6 +99,7 @@ esp_err_t UartEthModem::Start() {
     stop_flag_ = false;
     handshake_done_ = false;
     initializing_ = true;
+    xEventGroupClearBits(event_group_, kEventAllTasksDone | kEventStop | kEventStart);
 
     // Create event queue FIRST (before GPIO init, since ISR uses it)
     event_queue_ = xQueueCreate(32, sizeof(Event));
@@ -129,11 +130,7 @@ esp_err_t UartEthModem::Start() {
     // Initialize GPIO
     ret = InitGpio();
     if (ret != ESP_OK) {
-        DeinitUart();
-        vQueueDelete(tx_queue_);
-        tx_queue_ = nullptr;
-        vQueueDelete(event_queue_);
-        event_queue_ = nullptr;
+        CleanupResources(false);
         return ret;
     }
 
@@ -141,11 +138,7 @@ esp_err_t UartEthModem::Start() {
     reassembly_buffer_ = static_cast<uint8_t*>(heap_caps_malloc(kMaxFrameSize, MALLOC_CAP_INTERNAL));
     if (!reassembly_buffer_) {
         ESP_LOGE(kTag, "Failed to allocate reassembly buffer");
-        vQueueDelete(tx_queue_);
-        tx_queue_ = nullptr;
-        vQueueDelete(event_queue_);
-        DeinitGpio();
-        DeinitUart();
+        CleanupResources(false);
         return ESP_ERR_NO_MEM;
     }
     reassembly_size_ = 0;
@@ -164,13 +157,7 @@ esp_err_t UartEthModem::Start() {
     ret = uart_uhci_.Init(uhci_cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(kTag, "Failed to init UHCI: %s", esp_err_to_name(ret));
-        free(reassembly_buffer_);
-        reassembly_buffer_ = nullptr;
-        vQueueDelete(tx_queue_);
-        tx_queue_ = nullptr;
-        vQueueDelete(event_queue_);
-        DeinitGpio();
-        DeinitUart();
+        CleanupResources(false);
         return ret;
     }
 
@@ -199,16 +186,12 @@ esp_err_t UartEthModem::Start() {
 
     if (!main_task_ || !init_task_ || !tx_task_) {
         ESP_LOGE(kTag, "Failed to create tasks");
-        stop_flag_ = true;
-        vTaskDelay(pdMS_TO_TICKS(100));
-        uart_uhci_.Deinit();
-        free(reassembly_buffer_);
-        reassembly_buffer_ = nullptr;
-        vQueueDelete(tx_queue_);
-        tx_queue_ = nullptr;
-        vQueueDelete(event_queue_);
-        DeinitGpio();
-        DeinitUart();
+        EventBits_t missing = 0;
+        if (!main_task_) missing |= kEventMainTaskDone;
+        if (!init_task_) missing |= kEventInitTaskDone;
+        if (!tx_task_) missing |= kEventTxTaskDone;
+        xEventGroupSetBits(event_group_, missing);
+        Stop();
         return ESP_ERR_NO_MEM;
     }
 
@@ -233,7 +216,8 @@ esp_err_t UartEthModem::Stop() {
     stop_flag_ = true;
     initializing_ = false;
     if (event_group_) {
-        xEventGroupSetBits(event_group_, kEventStop);
+        // 取消尚未收到 Start 的初始化任务，部分任务创建失败也能正常汇合。
+        xEventGroupSetBits(event_group_, kEventStop | kEventStart);
     }
 
     // Send Stop event to main task queue to wake it up from xQueueReceive
@@ -252,11 +236,17 @@ esp_err_t UartEthModem::Stop() {
 
     // Wait for tasks to finish
     if (event_group_) {
-        auto bits = xEventGroupWaitBits(event_group_, kEventAllTasksDone, pdTRUE, pdTRUE, pdMS_TO_TICKS(10000));
-        if (!(bits & kEventAllTasksDone)) {
-            ESP_LOGE(kTag, "Timeout to wait for tasks to finish");
+        for (;;) {
+            const auto bits = xEventGroupWaitBits(event_group_, kEventAllTasksDone, pdFALSE, pdTRUE, pdMS_TO_TICKS(10000));
+            if ((bits & kEventAllTasksDone) == kEventAllTasksDone) break;
+            // 未退出的任务仍引用队列和 DMA，不能按部分完成位提前释放。
+            ESP_LOGE(kTag, "Waiting for modem tasks to stop: missing=0x%lx",
+                     static_cast<unsigned long>(kEventAllTasksDone & ~bits));
         }
     }
+    main_task_ = nullptr;
+    init_task_ = nullptr;
+    tx_task_ = nullptr;
 
     // AT requests observe kEventStop before their queues/UHCI are released.
     std::lock_guard<std::mutex> at_lock(at_mutex_);
@@ -692,9 +682,10 @@ void UartEthModem::DeinitUart() {
 }
 
 void UartEthModem::DeinitGpio() {
-    srdy_pin_isr_ = GPIO_NUM_NC;
+    gpio_intr_disable(config_.srdy_pin);
     gpio_wakeup_disable(config_.srdy_pin);
     gpio_isr_handler_remove(config_.srdy_pin);
+    srdy_pin_isr_ = GPIO_NUM_NC;
     // Re-enable sleep select (was disabled in InitGpio for MRDY)
     gpio_sleep_sel_en(config_.mrdy_pin);
     // Reset GPIO pins to default state (input, no pull) to save power
@@ -1846,6 +1837,8 @@ void UartEthModem::IpEventHandler(void* arg, esp_event_base_t event_base,
 }
 
 void UartEthModem::CleanupResources(bool cleanup_iot_eth) {
+    // 先断开握手中断，事件队列须保留到所有中断生产者停止之后。
+    DeinitGpio();
     // Cleanup iot_eth if requested
     if (cleanup_iot_eth) {
         DeinitIotEth();
@@ -1883,7 +1876,6 @@ void UartEthModem::CleanupResources(bool cleanup_iot_eth) {
         event_queue_ = nullptr;
     }
 
-    // Cleanup GPIO and UART
-    DeinitGpio();
+    // 释放 UART 资源。
     DeinitUart();
 }

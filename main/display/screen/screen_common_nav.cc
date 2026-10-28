@@ -1,8 +1,8 @@
+#include "screen_frontlight.h"
 #include "screen_common.h"
 #include "screen_common_nav.h"
 #include "screen_common_priv.h"
 
-#include "application.h"
 #include "home_screen/home_screen.h"
 #include "book_screen/book_nav.h"
 #include "display_orient.h"
@@ -14,23 +14,36 @@
 
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include <lvgl.h>
+
+namespace {
+struct UiMessage {
+    void (*callback)(void*); // 仅由 UI 线程执行
+    void* context; // 接收成功后交给回调释放
+};
+
+struct UiMailboxes {
+    static constexpr size_t kNormalDepth = 80; // 普通结果和进度消息
+    static constexpr size_t kUrgentDepth = 16; // 导航、待机等优先消息
+    StaticQueue_t normal_storage{}, urgent_storage{}; // 静态队列控制块
+    uint8_t normal_buffer[kNormalDepth * sizeof(UiMessage)]{}; // 有界普通消息缓冲
+    uint8_t urgent_buffer[kUrgentDepth * sizeof(UiMessage)]{}; // 独立优先缓冲
+    QueueHandle_t normal = xQueueCreateStatic(kNormalDepth, sizeof(UiMessage), normal_buffer, &normal_storage);
+    QueueHandle_t urgent = xQueueCreateStatic(kUrgentDepth, sizeof(UiMessage), urgent_buffer, &urgent_storage);
+};
+
+UiMailboxes& Mailboxes() {
+    static UiMailboxes mailboxes;
+    return mailboxes;
+}
+}
 
 /** S31 走 LvAdapterEpdiy，不用 esp_lv_adapter */
 static bool ScreenAdapterReady() {
     auto* d = LvAdapterEpdiy::Instance();
     return d != nullptr && d->IsReady();
-}
-
-static bool ScreenAdapterLock(int timeout_ms) {
-    auto* d = LvAdapterEpdiy::Instance();
-    return d != nullptr && d->LockUi(timeout_ms);
-}
-
-static void ScreenAdapterUnlock() {
-    if (auto* d = LvAdapterEpdiy::Instance()) {
-        d->UnlockUi();
-    }
 }
 
 void ScreenSetIsHome(bool is_home) {
@@ -42,6 +55,7 @@ bool ScreenIsHome() {
 }
 
 void ScreenLoadReplace(lv_obj_t* new_scr) {
+    ScreenFrontlightHide();
     lv_obj_t* old_scr = lv_screen_active();
     EpdCancelPageTurn();
     EpdRequestScreenChange();
@@ -75,6 +89,10 @@ void ScreenNavigateTo(lv_obj_t* (*create)()) {
 }
 
 void ScreenNavigateBack() {
+    if (ScreenFrontlightIsVisible()) {
+        ScreenFrontlightHide();
+        return;
+    }
     if (!ScreenAdapterReady()) {
         ESP_LOGW(TAG, "ScreenNavigateBack: adapter not ready");
         return;
@@ -85,7 +103,7 @@ void ScreenNavigateBack() {
         ESP_LOGI(TAG, "ScreenNavigateBack: skip stale back from screen=%s", active ? active : "null");
         return;
     }
-    // 直接 lv_async_call，勿经主循环 Schedule；StartXiaozhiVoice 等可能长时间占住 MainEventLoop。
+    // 调用方已持有 UI 锁，延后导航到下一次 LVGL 定时器处理。
     if (lv_async_call(ScreenCommon_NavigateBackAsync, nullptr) != LV_RESULT_OK) {
         ESP_LOGW(TAG, "ScreenNavigateBack: lv_async_call failed");
     }
@@ -105,9 +123,7 @@ void ScreenGoHome() {
 }
 
 void ScreenRequestHome() {
-    // 与 ScreenNavigateBack / 电源键同：勿经 MainEventLoop。
-    // 长待机醒后 WiFi/蜂窝 EnsureNetworkReady、百问 StartXiaozhiVoice 等可占死主循环数秒～数十秒；
-    // 若仍走 ScreenLvAsync，VkKey 有日志但 ScreenCommon_GoHomeAsync 迟迟不跑，表现为短按/长按都「没反应」。
+    // 导航优先进入 UI 队列，避免普通结果和重绘消息延迟主页操作。
     if (!ScreenLvAsyncUrgent(ScreenCommon_GoHomeAsync)) {
         ScreenLvAsync(ScreenCommon_GoHomeAsync);
     }
@@ -125,21 +141,8 @@ bool ScreenLvAsync(void (*cb)(void*), void* user_data) {
         ESP_LOGW(TAG, "ScreenLvAsync: adapter not ready");
         return false;
     }
-    // 页码等状态由调用方已改完；此处只排队。主循环再抢锁，不堵 touch_feed。
-    Application::GetInstance().Schedule([cb, user_data]() {
-        if (!ScreenAdapterReady()) {
-            return;
-        }
-        if (!ScreenAdapterLock(-1)) {
-            ESP_LOGW(TAG, "ScreenLvAsync: adapter lock failed");
-            return;
-        }
-        if (lv_async_call(cb, user_data) != LV_RESULT_OK) {
-            ESP_LOGW(TAG, "ScreenLvAsync: lv_async_call failed");
-        }
-        ScreenAdapterUnlock();
-    });
-    return true;
+    const UiMessage message{cb, user_data};
+    return xQueueSend(Mailboxes().normal, &message, 0) == pdTRUE;
 }
 
 bool ScreenLvAsyncUrgent(void (*cb)(void*), void* user_data) {
@@ -150,21 +153,26 @@ bool ScreenLvAsyncUrgent(void (*cb)(void*), void* user_data) {
         ESP_LOGW(TAG, "ScreenLvAsyncUrgent: adapter not ready");
         return false;
     }
-    // 勿经 MainEventLoop：百问等网可占死主循环数十秒
-    if (!ScreenAdapterLock(50)) {
-        ESP_LOGW(TAG, "ScreenLvAsyncUrgent: adapter lock failed");
-        return false;
+    const UiMessage message{cb, user_data};
+    return xQueueSend(Mailboxes().urgent, &message, 0) == pdTRUE;
+}
+
+void ScreenLvAsyncDrain() {
+    auto& queues = Mailboxes();
+    const int64_t begin = esp_timer_get_time();
+    UiMessage message{};
+    for (unsigned count = 0; count < 8; ++count) {
+        if (xQueueReceive(queues.urgent, &message, 0) != pdTRUE &&
+            xQueueReceive(queues.normal, &message, 0) != pdTRUE) break;
+        message.callback(message.context);
+        // 单个回调可能绘制整页；本轮完成后交还输入采样与刷新。
+        if (esp_timer_get_time() - begin >= 5000) break;
     }
-    const bool ok = lv_async_call(cb, user_data) == LV_RESULT_OK;
-    if (!ok) {
-        ESP_LOGW(TAG, "ScreenLvAsyncUrgent: lv_async_call failed");
-    }
-    ScreenAdapterUnlock();
-    return ok;
 }
 
 void ScreenPaintCoalesceEnqueue(ScreenPaintCoalesce* c);
 void ScreenPaintCoalesceArmDefer(ScreenPaintCoalesce* c, uint64_t delay_us);
+bool ScreenPaintCoalesceEnsureTimer(ScreenPaintCoalesce* c);
 
 void ScreenPaintCoalesceAsync(void* user_data) {
     auto* c = static_cast<ScreenPaintCoalesce*>(user_data);
@@ -198,8 +206,16 @@ void ScreenPaintCoalesceEnqueue(ScreenPaintCoalesce* c) {
     if (!c->queued.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         return;
     }
-    if (!ScreenLvAsync(ScreenPaintCoalesceAsync, c)) {
-        c->queued.store(false, std::memory_order_release);
+    // 重绘直接进入 UI 队列，与网络和语音任务独立。
+    if (ScreenLvAsync(ScreenPaintCoalesceAsync, c)) return;
+    c->queued.store(false, std::memory_order_release);
+    // 不阻塞触摸或定时器任务；队列满时保留序号并稍后重试。
+    if (ScreenAdapterReady() && ScreenPaintCoalesceEnsureTimer(c)) {
+        auto* timer = static_cast<esp_timer_handle_t>(c->defer_timer.load());
+        esp_timer_stop(timer);
+        if (esp_timer_start_once(timer, 20000) != ESP_OK) {
+            ESP_LOGW(TAG, "paint coalesce retry start failed");
+        }
     }
 }
 
@@ -223,7 +239,8 @@ bool ScreenPaintCoalesceEnsureTimer(ScreenPaintCoalesce* c) {
         ESP_LOGW(TAG, "paint coalesce timer create failed");
         return false;
     }
-    c->defer_timer = t;
+    void* expected = nullptr;
+    if (!c->defer_timer.compare_exchange_strong(expected, t)) esp_timer_delete(t);
     return true;
 }
 
@@ -232,7 +249,7 @@ void ScreenPaintCoalesceArmDefer(ScreenPaintCoalesce* c, uint64_t delay_us) {
         ScreenPaintCoalesceEnqueue(c);
         return;
     }
-    auto* t = static_cast<esp_timer_handle_t>(c->defer_timer);
+    auto* t = static_cast<esp_timer_handle_t>(c->defer_timer.load());
     esp_timer_stop(t);
     if (esp_timer_start_once(t, delay_us) != ESP_OK) {
         ScreenPaintCoalesceEnqueue(c);
@@ -254,7 +271,7 @@ void ScreenPaintCoalesceRequest(ScreenPaintCoalesce* c) {
 
     // 触摸空闲（含刚交完最后一拍）：立刻排队画最终页；盖板键连点靠 seq 合并
     if (c->defer_timer != nullptr) {
-        esp_timer_stop(static_cast<esp_timer_handle_t>(c->defer_timer));
+        esp_timer_stop(static_cast<esp_timer_handle_t>(c->defer_timer.load()));
     }
     ScreenPaintCoalesceEnqueue(c);
 }
@@ -281,7 +298,7 @@ void ScreenPaintCoalesceReset(ScreenPaintCoalesce* c) {
         return;
     }
     if (c->defer_timer != nullptr) {
-        esp_timer_stop(static_cast<esp_timer_handle_t>(c->defer_timer));
+        esp_timer_stop(static_cast<esp_timer_handle_t>(c->defer_timer.load()));
     }
     c->queued.store(false, std::memory_order_release);
     const uint32_t seq = c->seq.load(std::memory_order_acquire);

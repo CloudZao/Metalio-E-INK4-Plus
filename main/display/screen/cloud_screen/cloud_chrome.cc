@@ -1,3 +1,4 @@
+#include "assets/lang_network.h"
 #include "cloud_screen/cloud_chrome.h"
 #include "cloud_screen/cloud_screen_priv.h"
 #include "cloud_screen/cloud_fetch.h"
@@ -21,13 +22,16 @@
 #include <esp_heap_caps.h>
 
 #include "wifi_station.h"
+#include "network_screen/network_screen.h"
 
 #include "application.h"
 #include "assets/lang_config.h"
 #include "board.h"
+#include "dual_network_board.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "settings_storage_tab.h"
+#include "screen_common.h"
 
 void ScheduleUserCloudSync() {
     auto& st = Cloud_State();
@@ -103,8 +107,6 @@ constexpr uint32_t kRadioMemoryCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 #else
 constexpr uint32_t kRadioMemoryCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 #endif
-constexpr int kWifiWaitMs = 30000; // DHCP 常在 8s 边界才到，提前判失败会和状态栏相反
-constexpr int kWifiPollMs = 200;
 
 std::atomic<uint32_t> s_radio_gen{0};
 std::atomic<int> s_radio_mode{kRadioClosed};
@@ -113,23 +115,25 @@ TaskHandle_t s_radio_task = nullptr;
 std::mutex s_radio_work_mu;
 StaticSemaphore_t s_radio_ui_storage;
 SemaphoreHandle_t s_radio_ui_mu = nullptr;
-bool s_ap_standby_held = false;
+bool s_transfer_power_held = false;
 bool s_activation_held = false;
 
-void HoldApStandby() {
-    if (s_ap_standby_held) {
+void HoldTransferPower() {
+    if (s_transfer_power_held) {
         return;
     }
     PowerPolicy::GetInstance().Acquire(PowerNeed::StandbyInhibit);
-    s_ap_standby_held = true;
+    PowerPolicy::GetInstance().Acquire(PowerNeed::UiKeepNet);
+    s_transfer_power_held = true;
 }
 
-void ReleaseApStandby() {
-    if (!s_ap_standby_held) {
+void ReleaseTransferPower() {
+    if (!s_transfer_power_held) {
         return;
     }
+    PowerPolicy::GetInstance().Release(PowerNeed::UiKeepNet);
     PowerPolicy::GetInstance().Release(PowerNeed::StandbyInhibit);
-    s_ap_standby_held = false;
+    s_transfer_power_held = false;
 }
 
 void HoldActivationPause() {
@@ -159,6 +163,9 @@ struct RadioResult {
 RadioResult s_radio_result;
 
 void SetRadioStatus(const char* text) {
+    if (text == Lang::Strings::WIFI_DISABLED_RETRY) {
+        ScreenShowToast(text);
+    }
     auto& st = Cloud_State();
     if (st.chrome.radio_status_lbl == nullptr) {
         return;
@@ -199,12 +206,18 @@ void ApplyRadioResult(void* /*user*/) {
         SetRadioStatus(nullptr);
         return;
     }
+    if (local.mode == kCloudModeWifi) {
+        SetRadioStatus(nullptr);
+        ShowObj(st.chrome.wifi_panel, true);
+        NetworkScreen::BuildTransfer(st.chrome.wifi_panel);
+        return;
+    }
     if (local.mode != kCloudModeApp) {
         return;
     }
     if (!local.ok) {
         ShowAppBody(false);
-        const char* fail = local.fail != nullptr ? local.fail : Lang::Strings::CLOUD_WIFI_FAIL;
+        const char* fail = local.fail != nullptr ? local.fail : Lang::Strings::CLOUD_NET_NOT_READY;
         SetRadioStatus(fail);
         return;
     }
@@ -253,43 +266,13 @@ void RadioTask(void* /*arg*/) {
             ApTransferInfo info{};
             const bool ok = ApTransferStart(&info);
             PostRadioResult(gen, mode, ok, info.fail, &info);
+        } else if (mode == kCloudModeWifi) {
+            if (!stop_pending) ApTransferStop(true);
+            PostRadioResult(gen, mode, true, nullptr, nullptr);
         } else if (mode == kCloudModeApp) {
             if (!stop_pending) ApTransferStop(true);
-            bool connected = false;
-            int waited = 0;
-            while (s_radio_gen.load() == gen) {
-                auto& sta = WifiStation::GetInstance();
-                if (sta.IsConnected()) {
-                    connected = true;
-                    break;
-                }
-                // 射频没拉起来才是失败。还在关联或等 IP 时继续等。
-                if (!sta.IsLinkInProgress() && waited >= kWifiPollMs) {
-                    break;
-                }
-                if (waited >= kWifiWaitMs) {
-                    break;
-                }
-                vTaskDelay(pdMS_TO_TICKS(kWifiPollMs));
-                waited += kWifiPollMs;
-            }
-            if (!connected && s_radio_gen.load() == gen) {
-                connected = WifiStation::GetInstance().IsConnected();
-            }
-            if (s_radio_gen.load() == gen) {
-                PostRadioResult(gen, mode, connected,
-                                connected ? nullptr : Lang::Strings::CLOUD_WIFI_FAIL, nullptr);
-            }
-            // 超时后 IP 仍可能到。到了就换成列表，避免顶部已连上、中间仍是失败。
-            if (!connected) {
-                while (s_radio_gen.load() == gen &&
-                       !WifiStation::GetInstance().IsConnected()) {
-                    vTaskDelay(pdMS_TO_TICKS(kWifiPollMs));
-                }
-                if (s_radio_gen.load() == gen && WifiStation::GetInstance().IsConnected()) {
-                    PostRadioResult(gen, mode, true, nullptr, nullptr);
-                }
-            }
+            // 云同步复用 NetPrepTask 的通用联网流程，不依赖 STA 状态。
+            PostRadioResult(gen, mode, true, nullptr, nullptr);
         } else if (mode == kCloudModeUsb && !stop_pending) {
             ApTransferStop(false);
         }
@@ -311,6 +294,10 @@ void RadioTask(void* /*arg*/) {
 }
 
 void KickRadio(int mode) {
+    if ((mode == kCloudModeAp || mode == kCloudModeWifi) && !WifiStation::GetInstance().IsUserEnabled()) {
+        SetRadioStatus(Lang::Strings::WIFI_DISABLED_RETRY);
+        return;
+    }
     std::lock_guard<std::mutex> lock(s_radio_work_mu);
     if (s_radio_ui_mu == nullptr) {
         s_radio_ui_mu = xSemaphoreCreateMutexStatic(&s_radio_ui_storage);
@@ -329,8 +316,7 @@ void KickRadio(int mode) {
                                            kRadioMemoryCaps) != pdPASS) {
             s_radio_task = nullptr;
             ESP_LOGW(TAG, "cloud_radio create failed");
-            SetRadioStatus(mode == kCloudModeAp ? Lang::Strings::CLOUD_AP_FAIL :
-                                                Lang::Strings::CLOUD_WIFI_FAIL);
+            SetRadioStatus(Lang::Strings::CLOUD_TASK_FAIL);
         }
     }
 }
@@ -339,7 +325,7 @@ void KickRadio(int mode) {
 
 void CloudRadioAbandon() {
     KickRadio(kRadioClosed);
-    ReleaseApStandby();
+    ReleaseTransferPower();
     ReleaseActivationPause();
 }
 
@@ -365,26 +351,35 @@ void ReloadApAfterStandby() {
 void EnterCloudMode(int mode) {
     auto& st = Cloud_State();
     const int prev = st.data.mode;
+    if (prev == kCloudModeWifi) NetworkScreen::CloseTransfer();
     if (prev == kCloudModeUsb && mode != kCloudModeUsb) {
         LeaveUsbMode();
     }
     st.data.mode = mode;
     ShowAppBody(false);
     ShowObj(st.chrome.ap_panel, false);
+    ShowObj(st.chrome.wifi_panel, false);
     ShowObj(st.chrome.usb_panel, mode == kCloudModeUsb);
     RefreshTabUi();
+    auto* dual = dynamic_cast<DualNetworkBoard*>(&Board::GetInstance());
+    if ((mode == kCloudModeAp || mode == kCloudModeWifi) &&
+        dual != nullptr && dual->GetNetworkType() == NetworkType::CELLULAR) {
+        CloudRadioAbandon();
+        SetRadioStatus(Lang::Strings::CLOUD_CELLULAR_NEED_WIFI);
+        return;
+    }
     if (mode == kCloudModeApp) {
         ReleaseActivationPause();
     } else {
         HoldActivationPause();
     }
-    if (mode == kCloudModeAp) {
-        HoldApStandby();
-        SetRadioStatus(Lang::Strings::CLOUD_AP_OPENING);
+    if (mode == kCloudModeAp || mode == kCloudModeWifi) {
+        HoldTransferPower();
+        SetRadioStatus(mode == kCloudModeAp ? Lang::Strings::CLOUD_AP_OPENING : "正在准备WIFI传输…");
         KickRadio(mode);
         return;
     }
-    ReleaseApStandby();
+    ReleaseTransferPower();
     if (mode == kCloudModeUsb) {
         SetRadioStatus(nullptr);
         if (st.chrome.usb_panel != nullptr && prev != kCloudModeUsb) {
@@ -394,7 +389,7 @@ void EnterCloudMode(int mode) {
         KickRadio(mode);
         return;
     }
-    SetRadioStatus(Lang::Strings::CLOUD_WIFI_CONNECTING);
+    SetRadioStatus(Lang::Strings::CLOUD_CONNECTING_NET);
     KickRadio(mode);
 }
 
@@ -517,6 +512,7 @@ void BuildCloudMainChrome(lv_obj_t* scr, lv_coord_t status_height) {
     lv_obj_clear_flag(tab_row, LV_OBJ_FLAG_CLICKABLE);
     MakeTabBtn(tab_row, Lang::Strings::CLOUD_TAB_APP, kCloudModeApp);
     MakeTabBtn(tab_row, Lang::Strings::CLOUD_TAB_AP, kCloudModeAp);
+    MakeTabBtn(tab_row, "WIFI传输", kCloudModeWifi);
     MakeTabBtn(tab_row, Lang::Strings::CLOUD_TAB_USB, kCloudModeUsb);
     RefreshTabUi();
 
@@ -564,7 +560,7 @@ void BuildCloudMainChrome(lv_obj_t* scr, lv_coord_t status_height) {
     lv_obj_clear_flag(st.chrome.status_lbl, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(st.chrome.status_lbl, LV_OBJ_FLAG_HIDDEN);
 
-    // 细外框三种传输方式共用；App 时框内是列表和刷新，页码贴底在框外
+    // 传输内容共用细外框；App 列表的页码贴底放在框外
     lv_obj_t* list_frame = lv_obj_create(body);
     st.chrome.list_frame = list_frame;
     lv_obj_remove_style_all(list_frame);
@@ -766,7 +762,7 @@ void BuildCloudMainChrome(lv_obj_t* scr, lv_coord_t status_height) {
     lv_obj_add_flag(st.chrome.radio_status_lbl, LV_OBJ_FLAG_HIDDEN);
     Cloud_DisableScroll(st.chrome.radio_status_lbl);
 
-    // 热点 / U 盘都画在列表外框里，三种传输方式外框位置一致
+    // 本地传输面板共用列表外框
     lv_obj_t* ap_panel = lv_obj_create(list_frame);
     st.chrome.ap_panel = ap_panel;
     lv_obj_remove_style_all(ap_panel);
@@ -808,36 +804,11 @@ void BuildCloudMainChrome(lv_obj_t* scr, lv_coord_t status_height) {
         lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
         return lbl;
     };
-    auto add_qr = [](lv_obj_t* parent) {
-        lv_obj_t* box = lv_obj_create(parent);
-        lv_obj_remove_style_all(box);
-        const int box_side = kApQrSide + kApQrPad * 2 + kApQrBorder * 2;
-        lv_obj_set_size(box, box_side, box_side);
-        lv_obj_set_style_bg_color(box, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(box, kApQrRadius, 0);
-        lv_obj_set_style_clip_corner(box, true, 0);
-        lv_obj_set_style_border_width(box, kApQrBorder, 0);
-        lv_obj_set_style_border_color(box, lv_color_black(), 0);
-        lv_obj_set_style_border_opa(box, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_side(box, LV_BORDER_SIDE_FULL, 0);
-        lv_obj_set_style_pad_all(box, kApQrPad, 0);
-        lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE);
-        Cloud_DisableScroll(box);
-        lv_obj_t* qr = lv_canvas_create(box);
-        lv_obj_set_size(qr, kApQrSide, kApQrSide);
-        lv_obj_set_style_bg_color(qr, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(qr, LV_OPA_COVER, 0);
-        lv_obj_clear_flag(qr, LV_OBJ_FLAG_CLICKABLE);
-        return qr;
-    };
     lv_obj_t* ap_top = make_step(ap_panel);
     lv_obj_set_style_pad_top(ap_top, kListFramePad, 0);
     add_center(ap_top, Lang::Strings::CLOUD_AP_STEP1, true);
     add_center(ap_top, Lang::Strings::CLOUD_AP_JOIN, false);
-    st.chrome.ap_qr_wifi = add_qr(ap_top);
+    st.chrome.ap_qr_wifi = ApQrCreate(ap_top);
     st.chrome.ap_ssid_lbl = add_center(ap_top, "", false);
     st.chrome.ap_status_lbl = add_center(ap_top, "", false);
     lv_obj_add_flag(st.chrome.ap_status_lbl, LV_OBJ_FLAG_HIDDEN);
@@ -851,7 +822,17 @@ void BuildCloudMainChrome(lv_obj_t* scr, lv_coord_t status_height) {
     add_center(ap_bot, Lang::Strings::CLOUD_AP_OPEN, false);
     st.chrome.ap_url_lbl = add_center(ap_bot, "", false);
     add_center(ap_bot, Lang::Strings::CLOUD_AP_HINT, false);
-    st.chrome.ap_qr_url = add_qr(ap_bot);
+    st.chrome.ap_qr_url = ApQrCreate(ap_bot);
+
+    lv_obj_t* wifi_panel = lv_obj_create(list_frame);
+    st.chrome.wifi_panel = wifi_panel;
+    lv_obj_remove_style_all(wifi_panel);
+    lv_obj_set_width(wifi_panel, lv_pct(100));
+    lv_obj_set_height(wifi_panel, 0);
+    lv_obj_set_flex_grow(wifi_panel, 1);
+    Cloud_DisableScroll(wifi_panel);
+    lv_obj_clear_flag(wifi_panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(wifi_panel, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t* usb_panel = lv_obj_create(list_frame);
     st.chrome.usb_panel = usb_panel;

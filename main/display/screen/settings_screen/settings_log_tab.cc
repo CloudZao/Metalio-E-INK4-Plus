@@ -93,7 +93,7 @@ static void OnClearClicked(lv_event_t* e) {
     RefreshOptions();
     // The LVGL task uses a PSRAM stack. Perform SD I/O on the application's
     // internal-RAM task and acquire the display lock only for the result.
-    Application::GetInstance().Schedule([]() {
+    if (!Application::GetInstance().Schedule([]() {
         const bool ok = SdLogWriter_Clear();
         auto* display = Board::GetInstance().GetDisplay();
         DisplayLockGuard lock(display);
@@ -105,7 +105,11 @@ static void OnClearClicked(lv_event_t* e) {
             lv_label_set_text(s_ui.clear_status, ok ? Lang::Strings::SETTINGS_LOG_CLEAR_OK
                                                    : Lang::Strings::SETTINGS_LOG_CLEAR_FAIL);
         }
-    });
+    }, Application::TaskDomain::Storage)) {
+        s_clearing = false;
+        RefreshOptions();
+        lv_label_set_text(s_ui.clear_status, Lang::Strings::SETTINGS_LOG_CLEAR_FAIL);
+    }
 }
 
 void SettingsLogTab_Reset() {

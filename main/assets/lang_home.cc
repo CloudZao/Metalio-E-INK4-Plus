@@ -1,8 +1,11 @@
 #include "assets/lang_reader.h"
 #include "assets/lang_config.h"
+#include "assets/lang_screen.h"
 #include "assets/lang_pixel.h"
 #include "assets/lang_log.h"
 #include "assets/lang_haptic.h"
+#include "assets/lang_network.h"
+#include "assets/lang_charging.h"
 #include "assets/lang_bluetooth.h"
 
 #include "settings.h"
@@ -18,6 +21,7 @@
 
 // X(name, zh, en)
 #define LANG_STRING_LIST(X)                                                                                    \
+    X(WIFI_DISABLED_RETRY, "Wi-Fi 已关闭，请打开 Wi-Fi 后重试", "Wi-Fi is off. Turn it on and try again.") \
     X(AUDIO_INIT_FAILED, "音频初始化失败", "Audio initialization failed") \
     X(SETTINGS_TEST_CAMERA_DETECTED, "已检测到", "Detected") \
     X(SETTINGS_TEST_CAMERA_NOT_DETECTED, "未检测到", "Not detected") \
@@ -44,6 +48,7 @@
     X(SETTINGS_NET_CFUN0, "正在关闭射频…\nAT+CFUN=0", "RF off…\nAT+CFUN=0") \
     X(SETTINGS_NET_CFUN0_FAIL, "AT+CFUN=0 执行失败", "AT+CFUN=0 failed") \
     X(SETTINGS_NET_CFUN1, "正在重新搜网…\nAT+CFUN=1", "Searching network…\nAT+CFUN=1") \
+    X(SETTINGS_NET_CFUN1_FAIL, "恢复4G通信失败，请重试或重启设备", "Could not restore 4G. Retry or restart the device.") \
     X(SETTINGS_NET_CURRENT_FMT, "当前：%s", "Current: %s") \
     X(SETTINGS_NET_CUR_4G, "当前：4G 上网", "Current: Cellular") \
     X(SETTINGS_NET_CUR_DASH, "当前：--", "Current: --") \
@@ -141,6 +146,10 @@
     X(SETTINGS_TAB_THEME, "主题", "Theme")                                                                     \
     X(SETTINGS_TAB_LANGUAGE, "语言", "Language")                                                               \
     X(SETTINGS_TAB_HAPTIC, "震动", "Haptic")                                                                   \
+    X(SETTINGS_TAB_CHARGING, "充电", "Charging") \
+    X(SETTINGS_CHARGING_CURRENT, "充电电流", "Charge current") \
+    X(SETTINGS_CHARGING_HINT, "默认 1A，选择后自动保存", "Default: 1A. Selection is saved automatically.") \
+    X(SETTINGS_CHARGING_FAILED, "设置失败，请重试", "Could not apply setting. Try again.") \
     X(SETTINGS_TAB_POWER, "功耗", "Power")                                                                     \
     X(SETTINGS_SCREEN_BLACK_DEPTH_TITLE, "黑色深度", "Black depth") \
     X(SETTINGS_SCREEN_BLACK_DEPTH_DEFAULT, "默认", "Default") \
@@ -210,7 +219,7 @@
     X(SETTINGS_POWER_IDLE_MHZ_TITLE, "空闲降频（默认320Mhz）", "Idle CPU (def 320 MHz)")                       \
     X(SETTINGS_POWER_IDLE_MHZ_HINT, "无操作空闲时的 CPU 频率", "CPU clock when idle")                            \
     X(SETTINGS_POWER_NET_GRACE_TITLE, "保网时长（默认 30 秒）", "Keep-alive (def 30 s)")                        \
-    X(SETTINGS_POWER_NET_GRACE_HINT, "无保网需求后，仍保持联网的时长", "How long to stay online after last need") \
+    X(SETTINGS_POWER_NET_GRACE_HINT, "无保网需求后仍联网的时长；待机仍断网", "Time online after last need; standby disconnects") \
     X(SETTINGS_POWER_STANDBY_TITLE, "浅睡待机（默认 3 分钟）", "Light sleep (def 3 min)")                       \
     X(SETTINGS_POWER_STANDBY_HINT, "无操作多久进入浅睡待机", "Idle time before light sleep")                     \
     X(SETTINGS_POWER_OFF_TITLE, "自动关机（默认 30 分钟）", "Auto power-off (def 30 min)")                      \
@@ -255,8 +264,11 @@
     X(SETTINGS_STORAGE_USB_HINT_FORMAT, "内存卡需要格式化 (FAT32)", "SD card needs formatting (FAT32)")           \
     X(SETTINGS_STORAGE_USB_HINT_HOST_BUSY, "操作失败，请先在电脑上弹出 U 盘", "Failed — eject the disk on PC first") \
     X(BT_TITLE, "蓝牙", "Bluetooth")                                                                           \
-    X(BT_DESC, "外置蓝牙音频解码芯片设置（非 ESP32 内置蓝牙）", "External BT audio chip settings (not ESP32 BLE)") \
-    X(BT_RESET_HINT, "烧录蓝牙固件时使用", "Use when flashing BT firmware")                                     \
+    X(BT_RESET_HINT, "点击以复位蓝牙", "Tap to reset Bluetooth")                                              \
+    X(BT_VERSION_FMT, "蓝牙版本号：%s", "Bluetooth version: %s")                                              \
+    X(BT_CHECK_VERSION, "检测版本", "Check version") \
+    X(BT_CHECKING_VERSION, "检测中", "Checking") \
+    X(BT_MODE_TITLE, "模式切换", "Mode selection")                                                           \
     X(BT_RESET_BTN, "复位蓝牙", "Reset BT")                                                                    \
     X(BT_MODE1, "模式1", "Mode 1")                                                                             \
     X(BT_MODE2, "模式2", "Mode 2")                                                                             \
@@ -582,6 +594,7 @@
     X(BOOK_OPEN_CANCELLED, "已取消打开", "Opening cancelled") \
     X(BOOK_OPEN_FAILED_TASK, "打开失败\n无法启动解析任务", "Open failed\nCannot start parse task") \
     X(BOOK_OPENING, "正在打开", "Opening") \
+    X(BOOK_LOADING, "加载中...", "Loading...") \
     X(BOOK_ORIENT, "屏幕方向", "Orientation") \
     X(BOOK_ORIENT_LAND_LEFT, "左横", "Left") \
     X(BOOK_ORIENT_LAND_RIGHT, "右横", "Right") \
@@ -668,6 +681,7 @@
     X(CLOUD_REFRESHED, "已刷新", "Refreshed") \
     X(CLOUD_REFRESHING, "刷新中…", "Refreshing…") \
     X(CLOUD_REQUEST_FAIL, "请求失败", "Request failed") \
+    X(CLOUD_FETCH_FAIL, "获取推送内容失败，请检查网络后重试", "Failed to fetch incoming content. Check your network and try again.") \
     X(CLOUD_SAVE, "保存", "Save") \
     X(CLOUD_FILE_EXISTS, "此位置已有同名文件", "A file with this name already exists") \
     X(CLOUD_CONFLICT_FMT, "此位置已有同名文件\n%s\n请选择保存方式", "File already exists\n%s\nChoose how to save") \
@@ -696,12 +710,12 @@
     X(CLOUD_AP_OPEN, "用手机或电脑浏览器访问这个地址：", "Open this address in a browser:") \
     X(CLOUD_AP_HINT, "也可以扫描下方二维码打开地址", "Or scan the code below") \
     X(CLOUD_AP_OPENING, "AP打开中...", "Starting hotspot...") \
-    X(CLOUD_WIFI_CONNECTING, "WiFi连接中...", "Connecting Wi-Fi...") \
     X(CLOUD_AP_FAIL, "热点启动失败", "Hotspot failed to start") \
     X(CLOUD_AP_FAIL_INIT, "WiFi初始化失败", "Wi-Fi init failed") \
     X(CLOUD_AP_FAIL_START, "热点打开失败", "Hotspot failed to start") \
     X(CLOUD_AP_FAIL_HTTP, "网页服务启动失败", "Web page failed to start") \
     X(CLOUD_WIFI_FAIL, "WiFi连接失败", "Wi-Fi connection failed") \
+    X(CLOUD_CELLULAR_NEED_WIFI, "当前为4G联网，请切换到Wi-Fi后重试", "Using 4G. Switch to Wi-Fi and try again.") \
     X(CLOUD_USB_WAY, "方式一", "Method") \
     X(CLOUD_TAB_BOOK, "书籍", "Books") \
     X(CLOUD_TAB_FONT, "字体", "Fonts") \
@@ -742,6 +756,7 @@
     X(WALLPAPER_FILE_INVALID, "文件无效", "Invalid file") \
     X(WALLPAPER_FILE_MISSING, "文件不存在", "File not found") \
     X(WALLPAPER_LOADING, "加载中…", "Loading…") \
+    X(WALLPAPER_ENTER_LOADING, "壁纸正在加载中...", "Loading wallpaper...") \
     X(WALLPAPER_MIRROR_H, "镜像", "Mirror") \
     X(WALLPAPER_NAME_INVALID, "文件名无效", "Invalid filename") \
     X(WALLPAPER_NO_SD, "未检测到 SD 卡", "No SD card") \

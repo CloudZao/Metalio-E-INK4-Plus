@@ -1,4 +1,5 @@
 #include "cloud_screen/cloud_screen.h"
+#include "network_screen/network_screen.h"
 #include "cloud_screen/cloud_screen_priv.h"
 #include "cloud_screen/cloud_chrome.h"
 #include "cloud_screen/cloud_dialogs.h"
@@ -69,12 +70,12 @@ void DetachCloudNetPrep(const char* why) {
              why != nullptr ? why : "?", static_cast<void*>(s_net_prep_task));
 }
 
-// Close 绑定 Http：必须丢到主循环，禁止在 LVGL 锁内 Disconnect join
+// HTTP 取消交给清理任务，LVGL 锁内仅置取消标记。
 void AbortCloudGatesOffLvgl() {
     Application::GetInstance().Schedule([]() {
         s_dl_gate.AbortBoundHttp();
         s_sync_gate.AbortBoundHttp();
-    });
+    }, Application::TaskDomain::Cleanup);
 }
 
 void InvalidateSession() {
@@ -87,6 +88,7 @@ void InvalidateSession() {
              static_cast<unsigned>(st.xfer.op_generation + 1));
     // 停传输业务；等网任务可复用（勿杀句柄）
     DetachCloudNetPrep("InvalidateSession");
+    NetworkScreen::CloseTransfer();
     CloudRadioAbandon();
     SettingsStorageTab_Reset();
     s_dl_gate.RequestCancel();
@@ -174,7 +176,7 @@ void RequestStopTransfer(const char* why) {
              Cloud_State().data.waiting_net ? 1 : 0);
     // 页业务停干净；底层 EnsureNetworkReady/扫网可继续
     DetachCloudNetPrep(why != nullptr ? why : "stop");
-    // LVGL 锁内只置位；Close/join 丢主循环，避免踩坏 timer 链
+    // LVGL 锁内只置位；关闭连接由清理任务执行。
     s_dl_gate.RequestCancel();
     s_sync_gate.RequestCancel();
     AbortCloudGatesOffLvgl();
@@ -193,6 +195,16 @@ bool Cloud_OnVkKey(const char* key) {
     if (std::strcmp(key, "vk_home") == 0) {
         RequestStopTransfer("vk_home");
         ScreenRequestHome();
+        return true;
+    }
+    if (st.data.mode == kCloudModeWifi) {
+        if (NetworkScreen::OnVkKey(key)) return true;
+        if (std::strcmp(key, "vk_prev") == 0) {
+            RequestStopTransfer("wifi_vk_prev");
+            ScreenLvAsync([](void*) {
+                if (ScreenAlive()) ScreenNavigateBack();
+            });
+        }
         return true;
     }
     if (st.xfer.pending_index >= 0) {
@@ -287,6 +299,7 @@ bool CloudPageRepeatStep(int page_delta) {
 }
 
 bool Cloud_OnVkKeyLongPress(const char* key) {
+    if (Cloud_State().data.mode != kCloudModeApp) return false;
     return VkPageRepeatTryStart(key, CloudPageRepeatStep);
 }
 
@@ -330,6 +343,7 @@ void Cloud_OnScreenDeleted(lv_event_t* e) {
     st.chrome.status_lbl = nullptr;
     st.chrome.header_row = nullptr;
     st.chrome.list_frame = nullptr;
+    st.chrome.wifi_panel = nullptr;
     st.chrome.ap_panel = nullptr;
     st.chrome.ap_ssid_lbl = nullptr;
     st.chrome.ap_url_lbl = nullptr;
@@ -400,6 +414,7 @@ lv_obj_t* CloudScreen::Create() {
     st.chrome.status_lbl = nullptr;
     st.chrome.header_row = nullptr;
     st.chrome.list_frame = nullptr;
+    st.chrome.wifi_panel = nullptr;
     st.chrome.ap_panel = nullptr;
     st.chrome.ap_ssid_lbl = nullptr;
     st.chrome.ap_url_lbl = nullptr;
@@ -450,6 +465,7 @@ lv_obj_t* CloudScreen::Create() {
     ScreenSetIsHome(false);
 
     lv_obj_t* scr = lv_obj_create(nullptr);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_text_font(scr, Cloud_UiFont(), 0);

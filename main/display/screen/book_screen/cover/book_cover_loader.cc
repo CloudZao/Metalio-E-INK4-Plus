@@ -1,4 +1,5 @@
 #include "book_screen/cover/book_cover_loader.h"
+#include "sd_paths.h"
 
 #include "reader/book_cover_sidecar.h"
 #include "reader/ebook_document.h"
@@ -68,7 +69,7 @@ static bool LoadCoverFromDocument(reader::BookInfo& info, reader::RasterImage& a
 
 static bool LoadSidecarScaled(const reader::BookInfo& info, int max_w, int max_h, reader::RasterImage& out) {
     out.Reset();
-    char sidecar[192];
+    char sidecar[SD_FILE_PATH_CAPACITY];
     if (!reader::BookCoverSidecarPath(info.path.c_str(), sidecar, sizeof(sidecar))) {
         return false;
     }

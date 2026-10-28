@@ -1,5 +1,8 @@
 #pragma once
 
+#include "assets/lang_screen.h"
+#include "sd_paths.h"
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -65,7 +68,7 @@ constexpr lv_coord_t kHeaderH = UiSy(36);
 constexpr lv_coord_t kHeaderIcon = UiSx(32);
 constexpr lv_coord_t kHeaderGap = UiSx(8);
 constexpr lv_coord_t kStatusGap = UiSx(12);  // 标题与拉取提示间距（同每日清单）
-constexpr int kTabCount = 3;
+constexpr int kTabCount = 4;
 constexpr int kFilterTabCount = 4; // APP 推送框内：全部 / 壁纸 / 书籍 / 字体
 constexpr lv_coord_t kFilterH = UiSy(40);
 constexpr lv_coord_t kChipRadius = 999;  // 预览元信息胶囊
@@ -104,6 +107,7 @@ enum CloudXferMode : int {
     kCloudModeApp = 0,  // 云端待收，框内再按类型筛选
     kCloudModeAp = 1,   // 开放热点文件页
     kCloudModeUsb = 2,  // 模拟 U 盘
+    kCloudModeWifi = 3, // 局域网文件传输
 };
 
 struct UiState {
@@ -126,6 +130,7 @@ struct UiState {
         lv_obj_t* list_frame = nullptr;
         lv_obj_t* section_title = nullptr;
         lv_obj_t* status_lbl = nullptr;
+        lv_obj_t* wifi_panel = nullptr; // WIFI 列表、密码与连接信息共用内容区
         lv_obj_t* ap_panel = nullptr;
         lv_obj_t* ap_ssid_lbl = nullptr;
         lv_obj_t* ap_url_lbl = nullptr;
@@ -266,7 +271,7 @@ struct NetPrepDoneMsg {
 struct WallpaperPreviewWork {
     int index = -1;
     uint32_t epoch = 0;
-    char local_path[256] = {};
+    char local_path[SD_FILE_PATH_CAPACITY] = {};
     char download_url[768] = {};
     bool use_local = false;
     std::vector<uint8_t> cached_bytes;  // 非空则本地按详情尺寸解码，不再 HTTP

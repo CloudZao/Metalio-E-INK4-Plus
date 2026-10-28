@@ -9,7 +9,11 @@
 #include "book_screen/settings/book_settings_sheet.h"
 #include "book_screen/book_nav.h"
 
+#include "screen_common.h"
+#include "book_screen/book_text_util.h"
+
 #include <lvgl.h>
+#include <esp_timer.h>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -20,7 +24,11 @@
 void OnFontImportClick(lv_event_t* e) {
     lv_event_stop_bubbling(e);
     auto& st = Book_State();
-    if (st.reader.opening.load() || st.settings.font_scan_loading || ttf_convert::Busy()) {
+    if (ttf_convert::Busy()) {
+        ScreenShowToast("转换任务正在收尾，请稍后重试");
+        return;
+    }
+    if (st.reader.opening.load() || st.settings.font_scan_loading) {
         return;
     }
     if (st.settings.font_multi) {
@@ -37,7 +45,7 @@ void OnFontImportClick(lv_event_t* e) {
 void OnTtfRowClick(lv_event_t* e) {
     lv_event_stop_bubbling(e);
     auto& st = Book_State();
-    if (st.reader.opening.load()) {
+    if (st.reader.opening.load() || ttf_convert::Busy()) {
         return;
     }
     lv_obj_t* target = static_cast<lv_obj_t*>(lv_event_get_target(e));
@@ -74,16 +82,16 @@ void RefreshTtfConfirmTexts() {
         const uint16_t sz = static_cast<uint16_t>(st.ttf.ttf_size_px);
         char out_name[80];
         ttf_convert::FormatOutputFileList(st.ttf.ttf_pick.c_str(), &sz, 1, out_name, sizeof(out_name));
-        char buf[200];
-        std::snprintf(buf, sizeof(buf),
-                      "将 %.32s 转为：\n%s\n约需 1-2 分钟，同名 .ef 将被覆盖。",
-                      st.ttf.ttf_pick.c_str(), out_name);
-        lv_label_set_text(st.ttf.ttf_msg_lbl, buf);
+        Book_SetFilenameMiddle(st.ttf.ttf_msg_lbl, out_name);
     }
 }
 
 void OnTtfSizeDec(lv_event_t* e) {
     lv_event_stop_bubbling(e);
+    const auto code = lv_event_get_code(e);
+    if (code != LV_EVENT_PRESSED && code != LV_EVENT_LONG_PRESSED_REPEAT) {
+        return;
+    }
     auto& st = Book_State();
     if (st.ttf.ttf_mode != BookUiState::TtfMode::kConfirm || st.reader.opening.load() ||
         ttf_convert::Busy()) {
@@ -97,6 +105,10 @@ void OnTtfSizeDec(lv_event_t* e) {
 
 void OnTtfSizeInc(lv_event_t* e) {
     lv_event_stop_bubbling(e);
+    const auto code = lv_event_get_code(e);
+    if (code != LV_EVENT_PRESSED && code != LV_EVENT_LONG_PRESSED_REPEAT) {
+        return;
+    }
     auto& st = Book_State();
     if (st.ttf.ttf_mode != BookUiState::TtfMode::kConfirm || st.reader.opening.load() ||
         ttf_convert::Busy()) {
@@ -161,36 +173,43 @@ void OnTtfConfirmYes(lv_event_t* e) {
     TtfStartConvert();
 }
 
+void ReturnToTtfList() {
+    StopTtfPollTimer();
+    Book_State().ttf.ttf_mode = BookUiState::TtfMode::kList;
+    RebuildSettingsSheet();
+}
+
 void OnTtfConfirmNo(lv_event_t* e) {
     lv_event_stop_bubbling(e);
-    auto& st = Book_State();
-    st.ttf.ttf_mode = BookUiState::TtfMode::kList;
-    TtfRebuildContent();
+    ReturnToTtfList();
 }
 
 void OnTtfClose(lv_event_t* e) {
     lv_event_stop_bubbling(e);
-    TtfPanelClose();
-    StartReadFontScan();
-    RequestSettingsSheetPaint();
-}
-
-void OnTtfResultOk(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    TtfPanelClose();
-    StartReadFontScan();
-    RequestSettingsSheetPaint();
+    if (Book_State().ttf.ttf_mode == BookUiState::TtfMode::kList) {
+        SelectReadingSheetTab(1);
+    } else {
+        ReturnToTtfList();
+    }
 }
 
 void TtfPollTimerCb(lv_timer_t* t) {
     auto& st = Book_State();
     if (ttf_convert::Busy()) {
+        const int percent = ttf_convert::Percent();
+        if (st.ttf.ttf_bar && lv_obj_is_valid(st.ttf.ttf_bar) &&
+            lv_bar_get_value(st.ttf.ttf_bar) == percent) return;
+        constexpr int64_t kProgressUiIntervalUs = 3 * 1000 * 1000;
+        const int64_t now = esp_timer_get_time();
+        if (percent > 0 && percent < 99 && st.ttf.ttf_progress_ui_us != 0 &&
+            now - st.ttf.ttf_progress_ui_us < kProgressUiIntervalUs) return;
+        st.ttf.ttf_progress_ui_us = now;
         if (st.ttf.ttf_bar != nullptr && lv_obj_is_valid(st.ttf.ttf_bar)) {
-            lv_bar_set_value(st.ttf.ttf_bar, ttf_convert::Percent(), LV_ANIM_OFF);
+            lv_bar_set_value(st.ttf.ttf_bar, percent, LV_ANIM_OFF);
         }
         if (st.ttf.ttf_pct_lbl != nullptr && lv_obj_is_valid(st.ttf.ttf_pct_lbl)) {
             char buf[16];
-            std::snprintf(buf, sizeof(buf), "%d%%", ttf_convert::Percent());
+            std::snprintf(buf, sizeof(buf), "%d%%", percent);
             lv_label_set_text(st.ttf.ttf_pct_lbl, buf);
         }
         return;
@@ -207,8 +226,12 @@ void TtfPollTimerCb(lv_timer_t* t) {
     if (st.ttf.ttf_mode == BookUiState::TtfMode::kProgress && st.settings.settings_sheet != nullptr &&
         lv_obj_is_valid(st.settings.settings_sheet) && st.ttf.ttf_sheet != nullptr &&
         lv_obj_is_valid(st.ttf.ttf_sheet)) {
-        st.ttf.ttf_mode = BookUiState::TtfMode::kResult;
+        st.ttf.ttf_mode = st.ttf.ttf_result_ok ? BookUiState::TtfMode::kList
+                                            : BookUiState::TtfMode::kResult;
         TtfRebuildContent();
+        if (st.ttf.ttf_result_ok) {
+            TtfShowSuccessNotice();
+        }
     } else {
         // 面板已关：静默收尾；字库仍刷新，下次打开设置可见
         st.ttf.ttf_mode = BookUiState::TtfMode::kNone;

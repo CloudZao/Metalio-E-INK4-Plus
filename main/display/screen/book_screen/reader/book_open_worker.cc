@@ -1,6 +1,7 @@
 #pragma GCC optimize("O1")
 
 #include "assets/lang_reader.h"
+#include "sd_paths.h"
 
 #include "book_screen/reader/book_open_worker.h"
 #include "book_screen/reader/book_auto_turn.h"
@@ -267,7 +268,7 @@ void OpenBookWorker(void* arg) {
         if (ok && ctx->token == st.reader.open_token.load() &&
             (ctx->info.format == reader::BookFormat::kEbook ||
              ctx->info.format == reader::BookFormat::kEpub)) {
-            char sidecar[192];
+            char sidecar[SD_FILE_PATH_CAPACITY];
             if (reader::BookCoverSidecarPath(ctx->info.path.c_str(), sidecar, sizeof(sidecar)) &&
                 access(sidecar, R_OK) != 0) {
                 reader::SaveBookCoverSidecar(ctx->info.path.c_str());

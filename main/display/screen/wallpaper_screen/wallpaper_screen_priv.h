@@ -46,7 +46,6 @@ constexpr lv_coord_t kGridCoverHDefault = UiSy(160);
 constexpr lv_coord_t kPreviewMetaH = UiSy(36);
 constexpr lv_coord_t kPreviewBtnRowH = UiSy(48);
 constexpr lv_coord_t kPreviewChipH = UiSy(32);
-constexpr int kMaxItems = 64;
 // 预览和缩略使用 L8；不要直接用全屏 I1，容易出现白底。
 constexpr int kPreviewMaxW = UiSx(280);
 constexpr int kPreviewMaxH = UiSy(420);
@@ -61,9 +60,9 @@ inline int FrameInner(lv_coord_t outer, lv_coord_t border) {
 enum class UiMode : uint8_t { kList = 0, kPreview = 1 };
 
 struct FileEntry {
-    char name[96] = {};
-    char title[160] = {};
-    char path[192] = {};
+    char name[SD_FILE_NAME_CAPACITY] = {};
+    char title[SD_FILE_NAME_CAPACITY] = {};
+    char path[SD_FILE_PATH_CAPACITY] = {};
     size_t size_bytes = 0;
 };
 

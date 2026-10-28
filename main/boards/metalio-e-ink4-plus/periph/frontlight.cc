@@ -6,6 +6,7 @@
 #include "frontlight.h"
 
 #include "settings.h"
+#include <algorithm>
 
 #include <driver/gpio.h>
 #include <driver/ledc.h>
@@ -19,7 +20,7 @@
 #define FL_CH_WARM      LEDC_CHANNEL_1
 #define FL_LEDC_RES     LEDC_TIMER_10_BIT
 #define FL_DUTY_MAX     1023
-#define FL_OUTPUT_MAX_PERCENT 20 // UI 100 maps to 20% of the original PWM output.
+#define FL_OUTPUT_MAX_PERCENT 10 // 界面亮度 100 对应满量程 PWM 输出的 10%。
 #define FL_STEP_US      (5 * 1000) // 与参考 Backlight 一致：每 5ms 步进 1
 
 Frontlight& Frontlight::GetInstance() {
@@ -51,6 +52,7 @@ Frontlight::~Frontlight() {
 }
 
 bool Frontlight::Init(gpio_num_t cool_pin, gpio_num_t warm_pin, uint32_t freq_hz) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (initialized_) {
         return true;
     }
@@ -82,6 +84,7 @@ bool Frontlight::Init(gpio_num_t cool_pin, gpio_num_t warm_pin, uint32_t freq_hz
 }
 
 void Frontlight::Deinit() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!initialized_) {
         return;
     }
@@ -96,7 +99,14 @@ void Frontlight::Deinit() {
     ESP_LOGI(TAG, "deinit");
 }
 
+void Frontlight::SetOutputDeferred(bool deferred) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    output_deferred_ = deferred;
+    if (initialized_) ApplyOutput(brightness_);
+}
+
 void Frontlight::SetDriveMode(FrontlightDriveMode mode) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!initialized_ || mode == drive_mode_) {
         return;
     }
@@ -117,6 +127,7 @@ void Frontlight::SetDriveMode(FrontlightDriveMode mode) {
 }
 
 void Frontlight::PrepareBrightnessRestore() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!initialized_) {
         return;
     }
@@ -128,21 +139,27 @@ void Frontlight::PrepareBrightnessRestore() {
         saved_brightness = 100;
     }
     target_brightness_ = static_cast<uint8_t>(saved_brightness);
+    if (cct_ == FrontlightCct::kBoth || cct_ == FrontlightCct::kOff) {
+        warmth_ = static_cast<uint8_t>(std::clamp<int32_t>(settings.GetInt("warmth", 50), 0, 100));
+    }
 }
 
 void Frontlight::RestoreBrightness() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!initialized_) return;
     PrepareBrightnessRestore();
-    // 开机恢复瞬时到位，避免首帧已出仍在 5ms/档爬升
+    // 恢复逻辑亮度时不走渐变，物理输出仍受启动延后标志控制。
     if (transition_timer_ != nullptr) {
         esp_timer_stop(transition_timer_);
     }
     brightness_ = target_brightness_;
     ApplyOutput(brightness_);
-    ESP_LOGI(TAG, "Restore brightness to %d", brightness_);
+    ESP_LOGI(TAG, "Restore brightness to %d (output %s)", brightness_,
+             output_deferred_ ? "deferred" : "enabled");
 }
 
 void Frontlight::SetBrightness(uint8_t brightness, bool permanent) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!initialized_) {
         return;
     }
@@ -150,7 +167,7 @@ void Frontlight::SetBrightness(uint8_t brightness, bool permanent) {
         brightness = 100;
     }
 
-    if (brightness_ == brightness) {
+    if (target_brightness_ == brightness) {
         return;
     }
 
@@ -168,24 +185,38 @@ void Frontlight::SetBrightness(uint8_t brightness, bool permanent) {
 }
 
 void Frontlight::SetCct(FrontlightCct cct) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!initialized_) {
         return;
     }
     cct_ = cct;
+    if (cct == FrontlightCct::kCool) warmth_ = 0;
+    else if (cct == FrontlightCct::kWarm) warmth_ = 100;
+    else if (cct == FrontlightCct::kBoth) warmth_ = 50;
+    ApplyOutput(brightness_);
+}
+
+void Frontlight::SetWarmth(uint8_t percent) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!initialized_) return;
+    warmth_ = std::min<uint8_t>(percent, 100);
+    cct_ = warmth_ == 0 ? FrontlightCct::kCool :
+           warmth_ == 100 ? FrontlightCct::kWarm : FrontlightCct::kBoth;
     ApplyOutput(brightness_);
 }
 
 void Frontlight::ToggleCct() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!initialized_) {
         return;
     }
-    cct_ = static_cast<FrontlightCct>((static_cast<int>(cct_) + 1) % 4);
-    ApplyOutput(brightness_);
+    SetCct(static_cast<FrontlightCct>((static_cast<int>(cct_) + 1) % 4));
     static const char* names[] = {"warm", "cool", "both", "off"};
     ESP_LOGI(TAG, "cct -> %s", names[static_cast<int>(cct_)]);
 }
 
 void Frontlight::ForceAllLow() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!initialized_) {
         return;
     }
@@ -200,6 +231,7 @@ void Frontlight::ForceAllLow() {
 }
 
 void Frontlight::OnTransitionTimer() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (brightness_ == target_brightness_) {
         esp_timer_stop(transition_timer_);
         return;
@@ -277,14 +309,17 @@ void Frontlight::TeardownHardware() {
 }
 
 void Frontlight::ApplyOutput(uint8_t brightness) {
+    if (output_deferred_) brightness = 0;
     const bool cool_on = (cct_ == FrontlightCct::kCool || cct_ == FrontlightCct::kBoth);
     const bool warm_on = (cct_ == FrontlightCct::kWarm || cct_ == FrontlightCct::kBoth);
 
     if (drive_mode_ == FrontlightDriveMode::kPwm) {
         const uint32_t duty = (FL_DUTY_MAX * brightness * FL_OUTPUT_MAX_PERCENT) / 10000;
-        ledc_set_duty(FL_LEDC_MODE, FL_CH_COOL, cool_on ? duty : 0);
+        const uint32_t cool_mix = std::min<unsigned>(100, 2 * (100 - warmth_));
+        const uint32_t warm_mix = std::min<unsigned>(100, 2 * warmth_);
+        ledc_set_duty(FL_LEDC_MODE, FL_CH_COOL, cool_on ? duty * cool_mix / 100 : 0);
         ledc_update_duty(FL_LEDC_MODE, FL_CH_COOL);
-        ledc_set_duty(FL_LEDC_MODE, FL_CH_WARM, warm_on ? duty : 0);
+        ledc_set_duty(FL_LEDC_MODE, FL_CH_WARM, warm_on ? duty * warm_mix / 100 : 0);
         ledc_update_duty(FL_LEDC_MODE, FL_CH_WARM);
         return;
     }

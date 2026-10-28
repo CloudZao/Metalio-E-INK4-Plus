@@ -24,6 +24,17 @@ void MetalioAccel_ReleaseIntLine(void);
 /** @brief 加速度计是否就绪 */
 bool MetalioAccel_Ok(void);
 
+/** @brief 启停阅读姿态采样，复用加速度计任务；停止时清除缓存 */
+void MetalioAccel_SetReadingTracking(bool enabled);
+
+/**
+ * @brief 获取最近的阅读重力样本
+ * @param x X 轴加速度输出，单位 mg
+ * @param y Y 轴加速度输出，单位 mg
+ * @return 采样已启用且样本未过期时返回 true，否则输出不可用于姿态判定
+ */
+bool MetalioAccel_GetReadingGravity(int* x, int* y);
+
 #ifdef __cplusplus
 }
 #endif

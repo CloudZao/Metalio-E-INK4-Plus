@@ -68,6 +68,10 @@ static void complete_du_build(void) {
             }
         }
     }
+    // 在末尾四相为黑→黑补黑，不增加总相数。
+    for (int f = MY_FULL_DU_FRAMES - 4; f < MY_FULL_DU_FRAMES; ++f) {
+        lut_or(s_du_data, f, 0, 0, 1);
+    }
 }
 
 // 白底 15→15 源表全保持：挂在已有往白推的一相上再推 1 帧
@@ -196,8 +200,7 @@ static const EpdWaveform s_gray8_waveform = {
 };
 const EpdWaveform* my_waveform_gray8(void) { return &s_gray8_waveform; }
 
-// Binary endpoints only: seven black pushes, eight white pushes. Equal gray
-// pairs stay held; the worker uses this only for changed binary UI pixels.
+// 黑白转换推黑七相、推白八相；黑→黑在末尾四相补黑，其余同色保持。
 static uint8_t s_short_du_data[8][16][4];
 static const EpdWaveformPhases s_short_du_phases = {
     .phases=8, .phase_times=NULL, .luts=(const uint8_t*)s_short_du_data,
@@ -209,6 +212,21 @@ static const EpdWaveform s_short_du_waveform = {
     .num_modes=1, .num_temp_ranges=1, .mode_data=s_short_du_modes, .temp_intervals=my_waveform_intervals,
 };
 const EpdWaveform* my_waveform_short_du(void) { return &s_short_du_waveform; }
+
+static uint8_t s_fast_du_data[14][16][4];
+static const EpdWaveformPhases s_fast_du_phases = {
+    .phases=14, .phase_times=NULL, .luts=(const uint8_t*)s_fast_du_data,
+};
+static const EpdWaveformPhases* s_fast_du_ranges[] = { &s_fast_du_phases };
+static const EpdWaveformMode s_fast_du_mode = {
+    .type=1, .temp_ranges=1, .range_data=s_fast_du_ranges,
+};
+static const EpdWaveformMode* s_fast_du_modes[] = { &s_fast_du_mode };
+static const EpdWaveform s_fast_du_waveform = {
+    .num_modes=1, .num_temp_ranges=1,
+    .mode_data=s_fast_du_modes, .temp_intervals=my_waveform_intervals,
+};
+const EpdWaveform* my_waveform_fast_du(void) { return &s_fast_du_waveform; }
 // Binary page navigation: each band starts one phase later. The target nibble
 // holds the band, and the source nibble holds old/new binary flags. Index 15
 // keeps existing white pixels and the border undriven.
@@ -299,5 +317,9 @@ static void short_du_build(void) {
         const int action=endpoint==0 ? 1 : 2;
         const int frames=endpoint==0 ? 7 : 8;
         for (int f=0;f<frames;++f) lut_or(s_short_du_data,f,to,from,action);
+        const int fast_frames=endpoint==0 ? 13 : 14;
+        for (int f=0;f<fast_frames;++f) lut_or(s_fast_du_data,f,to,from,action);
     }
+    for (int f=4;f<8;++f) lut_or(s_short_du_data,f,0,0,1);
+    for (int f=10;f<14;++f) lut_or(s_fast_du_data,f,0,0,1);
 }

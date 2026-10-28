@@ -190,6 +190,7 @@ std::string CloudBookTask::LocalPath() const {
         // name 无已知扩展名时补上，保证书库扫描能识别
         file.append(FileExtension());
     }
+    if (!SdIsValidFileName(file.c_str())) return {};
     path.append(file);
     return path;
 }

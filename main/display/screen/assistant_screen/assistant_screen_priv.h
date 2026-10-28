@@ -164,6 +164,7 @@ struct AssistantUiState {
         bool touch_ptt_finger_down = false;         // hit 层 PRESSED 尚未抬起（LVGL 任务内）
         bool touch_suppress_click = false;          // 长按 PTT 臂听后抑制紧随 CLICKED
         bool ptt_wave_visible = false;
+        bool ptt_connecting_hint_shown = false; // 当前按住连接期间已显示提示
         lv_coord_t ptt_wave_max_h = 20;  // 竖条最大高度（Create 时按状态栏高度的约一半写入）
         lv_obj_t* ptt_wave_bars[kPttWaveBars] = {};
         uint8_t ptt_wave_frame = 0;

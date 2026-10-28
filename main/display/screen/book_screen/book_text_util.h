@@ -38,3 +38,6 @@ int Book_CachedProgressX10OrZero(const char* book_abs_path);
  * @brief 封面白底黑字进度框；文案与列表一致（如 12.3% / 100%）
  */
 lv_obj_t* Book_CreateProgressPctBadge(lv_obj_t* parent, int pct_x10);
+
+/** @brief 文件名单行居中省略，保留首尾，按控件实际宽度显示。 */
+void Book_SetFilenameMiddle(lv_obj_t* label, const char* filename);

@@ -1,4 +1,5 @@
 #include "book_screen/book_font_runtime.h"
+#include "sd_paths.h"
 #include "book_screen/book_screen_priv.h"
 #include "book_screen/reader/book_reader_prefs.h"
 
@@ -34,7 +35,7 @@ void EnsureBookFont() {
     if (s_epdfont != nullptr) {
         return;
     }
-    char path[192];
+    char path[SD_FILE_PATH_CAPACITY];
     if (BookReaderPrefsFontFullPath(path, sizeof(path)) != nullptr) {
         s_epdfont = epdfont_open(path);
     }

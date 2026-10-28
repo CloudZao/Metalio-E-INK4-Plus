@@ -4,6 +4,8 @@
 
 #include "assets/lang_config.h"
 #include "assets/lang_bluetooth.h"
+#include "application.h"
+#include "lv_adapter_epdiy.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "power_policy.h"
@@ -17,6 +19,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <string>
 #include <vector>
@@ -30,13 +33,42 @@ BluetoothUiState& Bluetooth_State() {
     static BluetoothUiState s;
     return s;
 }
-BtMode Bluetooth_active_mode = BtMode::kNone;
-ConnState Bluetooth_conn_state = ConnState::kIdle;
+std::atomic<BtMode> Bluetooth_active_mode{BtMode::kNone};
+std::atomic<ConnState> Bluetooth_conn_state{ConnState::kIdle};
+std::mutex Bluetooth_rx_mutex;
 std::string Bluetooth_rx_buffer;
 std::vector<BtDevice> Bluetooth_devices;
-bool Bluetooth_screen_active = false;
+std::atomic<bool> Bluetooth_screen_active{false};
 
 namespace {
+lv_timer_t* version_query_timer = nullptr; // UI 线程持有的版本查询超时计时器
+
+void RestoreVersionButton() {
+    if (version_query_timer != nullptr) {
+        lv_timer_delete(version_query_timer);
+        version_query_timer = nullptr;
+    }
+    auto* button = Bluetooth_State().check_version_btn;
+    if (button != nullptr) {
+        lv_label_set_text(lv_obj_get_child(button, 0), Lang::Strings::BT_CHECK_VERSION);
+        lv_obj_remove_state(button, LV_STATE_DISABLED);
+    }
+}
+
+void QueryVersion() {
+    auto* button = Bluetooth_State().check_version_btn;
+    if (!Bluetooth_screen_active || button == nullptr || version_query_timer != nullptr) return;
+    version_query_timer = lv_timer_create(
+        [](lv_timer_t*) { RestoreVersionButton(); }, 5000, nullptr);
+    if (version_query_timer == nullptr) {
+        ESP_LOGE(TAG, "Cannot create version query timer");
+        return;
+    }
+    lv_label_set_text(lv_obj_get_child(button, 0), Lang::Strings::BT_CHECKING_VERSION);
+    lv_obj_add_state(button, LV_STATE_DISABLED);
+    if (!Bluetooth_query_version()) RestoreVersionButton();
+}
+
 std::string last_connect_address; // UI 线程记录最近主动连接的耳机。
 struct ResetArgs {
     BtMode mode;
@@ -70,9 +102,25 @@ void Bluetooth_post_status(const char* text) {
     if (!Bluetooth_screen_active) {
         return;
     }
-    auto* msg = new AsyncStatusMsg{};
+    auto* msg = new (std::nothrow) AsyncStatusMsg{};
+    if (msg == nullptr) return;
     snprintf(msg->text, sizeof(msg->text), "%s", text);
-    lv_async_call(Bluetooth_async_update_status, msg);
+    if (!ScreenLvAsync(Bluetooth_async_update_status, msg)) delete msg;
+}
+
+void Bluetooth_post_version(const char* version) {
+    if (!Bluetooth_screen_active || version == nullptr) return;
+    auto* message = new (std::nothrow) AsyncStatusMsg{};
+    if (message == nullptr) return;
+    std::snprintf(message->text, sizeof(message->text), "%s", version);
+    if (!ScreenLvAsync([](void* context) {
+        std::unique_ptr<AsyncStatusMsg> message(static_cast<AsyncStatusMsg*>(context));
+        if (Bluetooth_screen_active && Bluetooth_State().version_label != nullptr) {
+            RestoreVersionButton();
+            lv_label_set_text_fmt(Bluetooth_State().version_label,
+                                  Lang::Strings::BT_VERSION_FMT, message->text);
+        }
+    }, message)) delete message;
 }
 
 void Bluetooth_refresh_mode_buttons() {
@@ -80,7 +128,7 @@ void Bluetooth_refresh_mode_buttons() {
         if (Bluetooth_State().mode_btns[i] == nullptr) {
             continue;
         }
-        const bool active = (static_cast<int>(Bluetooth_active_mode) == i + 1);
+        const bool active = (static_cast<int>(Bluetooth_active_mode.load()) == i + 1);
         SettingsStyleSelectable(Bluetooth_State().mode_btns[i], lv_obj_get_child(Bluetooth_State().mode_btns[i], 0), active);
     }
 }
@@ -182,10 +230,11 @@ void Bluetooth_add_device_to_list(const char* address, const char* name) {
     if (!Bluetooth_screen_active) {
         return;
     }
-    auto* msg = new AsyncAddDeviceMsg{};
+    auto* msg = new (std::nothrow) AsyncAddDeviceMsg{};
+    if (msg == nullptr) return;
     snprintf(msg->address, sizeof(msg->address), "%s", address);
     snprintf(msg->name, sizeof(msg->name), "%s", name);
-    lv_async_call(Bluetooth_async_add_device_item, msg);
+    if (!ScreenLvAsync(Bluetooth_async_add_device_item, msg)) delete msg;
 }
 
 void Bluetooth_async_clear_list(void* /*user_data*/) {
@@ -196,7 +245,7 @@ void Bluetooth_post_clear_list() {
     if (!Bluetooth_screen_active) {
         return;
     }
-    lv_async_call(Bluetooth_async_clear_list, nullptr);
+    ScreenLvAsync(Bluetooth_async_clear_list);
 }
 
 void Bluetooth_async_on_mode1_set(void* /*user_data*/) {
@@ -276,7 +325,7 @@ void Bluetooth_on_reset_bt_clicked(lv_event_t* /*e*/) {
     bool expected = false;
     if (!Bluetooth_mode_cmd_busy.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) return;
     auto* args = new (std::nothrow) ResetArgs{
-        Bluetooth_active_mode == BtMode::kNone ? BtMode::kMode1 : Bluetooth_active_mode,
+        Bluetooth_active_mode == BtMode::kNone ? BtMode::kMode1 : Bluetooth_active_mode.load(),
         last_connect_address, EpdGetStats().submitted + 1};
     Bluetooth_update_status_label(Lang::Strings::BT_PWR_RESETTING);
     if (args == nullptr || xTaskCreate(Bluetooth_bt_reset_task, "bt_reset", 4096, args, 5, nullptr) != pdPASS) {
@@ -299,7 +348,10 @@ void Bluetooth_on_scan_clicked(lv_event_t* /*e*/) {
     }
     SimpleUart::getInstance().sendString("AT+INQUIRING\r\n");
     ESP_LOGI(TAG, "TX: AT+INQUIRING");
-    Bluetooth_devices.clear();
+    {
+        std::lock_guard<std::mutex> lock(Bluetooth_rx_mutex);
+        Bluetooth_devices.clear();
+    }
     Bluetooth_post_clear_list();
     Bluetooth_post_status(Lang::Strings::BT_SCAN_START);
 }
@@ -324,8 +376,11 @@ void Bluetooth_on_music_mode_clicked(lv_event_t* /*e*/) {
 
 void BluetoothScreen::BuildInto(lv_obj_t* parent) {
     Bluetooth_conn_state = ConnState::kIdle;
-    Bluetooth_rx_buffer.clear();
-    Bluetooth_devices.clear();
+    {
+        std::lock_guard<std::mutex> lock(Bluetooth_rx_mutex);
+        Bluetooth_rx_buffer.clear();
+        Bluetooth_devices.clear();
+    }
     Bluetooth_State().root = parent;
 
     lv_obj_t* title = lv_label_create(parent);
@@ -334,31 +389,54 @@ void BluetoothScreen::BuildInto(lv_obj_t* parent) {
     lv_obj_set_style_text_color(title, lv_color_black(), 0);
     lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t* desc = lv_label_create(parent);
-    lv_label_set_text(desc, Lang::Strings::BT_DESC);
-    lv_obj_set_width(desc, lv_pct(100));
-    lv_label_set_long_mode(desc, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(desc, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(desc, lv_color_black(), 0);
-    lv_obj_clear_flag(desc, LV_OBJ_FLAG_CLICKABLE);
+    auto add_divider = [parent]() {
+        lv_obj_t* divider = lv_obj_create(parent);
+        Bluetooth_strip_container(divider);
+        lv_obj_set_size(divider, lv_pct(100), kSettingsBorderW);
+        lv_obj_set_style_bg_color(divider, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(divider, LV_OBJ_FLAG_CLICKABLE);
+    };
+
+    lv_obj_t* version = lv_label_create(parent);
+    Bluetooth_State().version_label = version;
+    lv_label_set_text_fmt(version, Lang::Strings::BT_VERSION_FMT, Lang::Strings::COMMON_UNKNOWN);
+    lv_obj_set_width(version, lv_pct(100));
+    lv_label_set_long_mode(version, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(version, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(version, lv_color_black(), 0);
+    lv_obj_clear_flag(version, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* check_version = Bluetooth_make_action_button(
+        parent, Lang::Strings::BT_CHECK_VERSION,
+        [](lv_event_t* /*e*/) { QueryVersion(); });
+    Bluetooth_State().check_version_btn = check_version;
+    lv_obj_set_width(check_version, LV_SIZE_CONTENT);
+    add_divider();
 
     lv_obj_t* reset_row = lv_obj_create(parent);
     Bluetooth_strip_container(reset_row);
     lv_obj_set_width(reset_row, lv_pct(100));
     lv_obj_set_height(reset_row, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(reset_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(reset_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_flow(reset_row, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(reset_row, kSettingsOptionGap, 0);
 
     lv_obj_t* reset_hint = lv_label_create(reset_row);
     lv_label_set_text(reset_hint, Lang::Strings::BT_RESET_HINT);
     lv_obj_set_style_text_font(reset_hint, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(reset_hint, lv_color_black(), 0);
-    lv_obj_set_flex_grow(reset_hint, 1);
+    lv_obj_set_width(reset_hint, lv_pct(100));
+    lv_label_set_long_mode(reset_hint, LV_LABEL_LONG_WRAP);
     lv_obj_clear_flag(reset_hint, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* reset = Bluetooth_make_action_button(reset_row, Lang::Strings::BT_RESET_BTN, Bluetooth_on_reset_bt_clicked);
     lv_obj_set_width(reset, UiSx(120));
+    add_divider();
+
+    lv_obj_t* mode_title = lv_label_create(parent);
+    lv_label_set_text(mode_title, Lang::Strings::BT_MODE_TITLE);
+    lv_obj_set_style_text_font(mode_title, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(mode_title, lv_color_black(), 0);
+    lv_obj_clear_flag(mode_title, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* mode_row = lv_obj_create(parent);
     Bluetooth_strip_container(mode_row);
@@ -371,15 +449,6 @@ void BluetoothScreen::BuildInto(lv_obj_t* parent) {
     for (int i = 0; i < 3; ++i) {
         Bluetooth_State().mode_btns[i] = Bluetooth_make_mode_button(mode_row, mode_labels[i], i);
     }
-
-    lv_obj_t* status = lv_label_create(parent);
-    Bluetooth_State().status_label = status;
-    lv_label_set_text(status, Lang::Strings::BT_SELECT_MODE);
-    lv_obj_set_style_text_font(status, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(status, lv_color_black(), 0);
-    lv_obj_set_width(status, lv_pct(100));
-    lv_label_set_long_mode(status, LV_LABEL_LONG_WRAP);
-    lv_obj_clear_flag(status, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* m1_panel = lv_obj_create(parent);
     Bluetooth_State().mode1_panel = m1_panel;
@@ -445,6 +514,15 @@ void BluetoothScreen::BuildInto(lv_obj_t* parent) {
     Bluetooth_State().call_btn = call;
     lv_obj_set_flex_grow(call, 1);
 
+    lv_obj_t* status = lv_label_create(parent);
+    Bluetooth_State().status_label = status;
+    lv_label_set_text(status, Lang::Strings::BT_SELECT_MODE);
+    lv_obj_set_style_text_font(status, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(status, lv_color_black(), 0);
+    lv_obj_set_width(status, lv_pct(100));
+    lv_label_set_long_mode(status, LV_LABEL_LONG_WRAP);
+    lv_obj_clear_flag(status, LV_OBJ_FLAG_CLICKABLE);
+
     // 开机 MetalioAudio 已下发模式1；UI 首次进入时对齐选中态
     if (Bluetooth_active_mode == BtMode::kNone) {
         Bluetooth_active_mode = BtMode::kMode1;
@@ -453,6 +531,7 @@ void BluetoothScreen::BuildInto(lv_obj_t* parent) {
 }
 
 void BluetoothScreen::ResetUi() {
+    RestoreVersionButton();
     Bluetooth_reset_ui_state();
 }
 
@@ -476,12 +555,22 @@ void BluetoothScreen::ApplyDefaultMode() {
 void BluetoothScreen::OnActivated() {
     ESP_LOGI(TAG, "activate: bluetooth tab");
     Bluetooth_screen_active = true;
-    Bluetooth_rx_buffer.clear();
-    SimpleUart::getInstance().registerCallback(Bluetooth_on_uart_data);
+    {
+        std::lock_guard<std::mutex> lock(Bluetooth_rx_mutex);
+        Bluetooth_rx_buffer.clear();
+    }
+    auto& uart = SimpleUart::getInstance();
+    if (Bluetooth_State().version_label != nullptr) {
+        lv_label_set_text_fmt(Bluetooth_State().version_label, Lang::Strings::BT_VERSION_FMT,
+                              Lang::Strings::COMMON_UNKNOWN);
+    }
+    uart.registerCallback(Bluetooth_on_uart_data);
+    QueryVersion();
 }
 
 void BluetoothScreen::OnDeactivated() {
     ESP_LOGI(TAG, "deactivate: bluetooth tab");
+    RestoreVersionButton();
     Bluetooth_release_page_audio_power();
     SimpleUart::getInstance().registerCallback(
         std::function<void(const std::vector<uint8_t>&)>());

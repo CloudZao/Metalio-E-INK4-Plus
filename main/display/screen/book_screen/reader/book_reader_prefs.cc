@@ -27,7 +27,7 @@ static constexpr const char* kNvsShelfViewKey = "shelf_view";
 static constexpr const char* kNvsShelfPctKey = "shelf_pct";
 static constexpr const char* kNvsOrientKey = "orient";
 static constexpr const char* kDefaultFile = "misans_40_2.ef"; // SD 现网默认 40px/2bpp
-static constexpr size_t kMaxFileLen = 63;
+static constexpr size_t kMaxFileLen = SD_FILE_NAME_MAX_BYTES;
 static constexpr int kDefaultSpacingPreset = 1;  // 标准
 static constexpr int kDefaultMarginPreset = 1;   // 标准（约原 kListPad=12）
 static constexpr int kDefaultFooterMask = kBookReaderFooterDefault;
@@ -46,12 +46,12 @@ struct BookMarginPreset {
     int bottom;
 };
 
-// 行距档为主（每档明显拉开行间）；段距≈行距+固定余量，避免「调行距却像调段距」
+// 普通正文使用固定行距，段落仅首行缩进，不额外占用垂直空间。
 static constexpr BookSpacingPreset kSpacingTable[kBookReaderSpacingPresetCount] = {
-    {0, 10},
-    {4, 12},
-    {14, 20},
-    {22, 26},
+    {0, 0},
+    {4, 0},
+    {14, 0},
+    {22, 0},
 };
 
 // 成套页边距：与分页 viewport 共用，避免只改 UI pad 导致裁切/留白不一致
@@ -79,20 +79,7 @@ static bool s_ready = false;
 
 
 static bool IsSafeBasename(const char* name) {
-    if (name == nullptr || name[0] == '\0') {
-        return false;
-    }
-    const size_t n = std::strlen(name);
-    if (n == 0 || n > kMaxFileLen) {
-        return false;
-    }
-    for (size_t i = 0; i < n; ++i) {
-        const char c = name[i];
-        if (c == '/' || c == '\\' || c == ':' || c == '\0') {
-            return false;
-        }
-    }
-    return true;
+    return SdIsValidFileName(name);
 }
 static int ClampSpacing(int preset) {
     if (preset < 0 || preset >= kBookReaderSpacingPresetCount) {
@@ -127,7 +114,7 @@ static int ClampFooterMask(int mask) {
 }
 
 static int ClampOrient(int orient) {
-    if (orient < 0 || orient >= kBookReaderOrientCount) {
+    if (orient < kBookReaderOrientAuto || orient >= kBookReaderOrientCount) {
         return kBookReaderOrientPortrait;
     }
     return orient;
@@ -158,7 +145,7 @@ static void LoadFromNvs() {
     s_background = settings.GetInt("background", 0);
     if (s_background < 0 || s_background > 2) s_background = 0;
     s_page_turn = settings.GetInt("page_turn", kBookReaderPageTurnSlide);
-    if (s_page_turn != kBookReaderPageTurnRipple) s_page_turn = kBookReaderPageTurnSlide;
+    if (s_page_turn != kBookReaderPageTurnSlide && s_page_turn != kBookReaderPageTurnWipe) s_page_turn = kBookReaderPageTurnSlide;
     s_shelf_view = ClampShelfView(settings.GetInt(kNvsShelfViewKey, kDefaultShelfView));
     s_shelf_pct = settings.GetInt(kNvsShelfPctKey, kDefaultShelfPct) != 0 ? 1 : 0;
     s_orient = ClampOrient(settings.GetInt(kNvsOrientKey, kBookReaderOrientPortrait));
@@ -551,7 +538,7 @@ int BookReaderPrefsOrient(void) {
 }
 
 void BookReaderPrefsSetOrient(int orient) {
-    if (orient < 0 || orient >= kBookReaderOrientCount) {
+    if (orient < kBookReaderOrientAuto || orient >= kBookReaderOrientCount) {
         ESP_LOGW(TAG, "reject bad orient=%d", orient);
         return;
     }
@@ -582,7 +569,7 @@ int BookReaderPrefsPageTurn() {
     return s_page_turn;
 }
 void BookReaderPrefsSetPageTurn(int mode) {
-    if (mode != kBookReaderPageTurnSlide && mode != kBookReaderPageTurnRipple) return;
+    if (mode != kBookReaderPageTurnSlide && mode != kBookReaderPageTurnWipe) return;
     BookReaderPrefsEnsureLoaded();
     s_page_turn = mode;
     auto* arg = new BookPrefsPersistArg{};

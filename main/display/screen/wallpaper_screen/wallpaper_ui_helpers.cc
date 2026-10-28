@@ -138,7 +138,7 @@ bool IsListableFile(const char* name) {
     if (EndsWithIgnoreCase(name, ".tmp")) {
         return false;
     }
-    if (EndsWithIgnoreCase(name, ".meta.json")) {
+    if (EndsWithIgnoreCase(name, ".meta.json") || EndsWithIgnoreCase(name, ".meta")) {
         return false;
     }
     return true;

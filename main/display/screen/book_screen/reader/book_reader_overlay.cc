@@ -86,7 +86,6 @@ void SetReadSettingsSheetVisible(bool visible) {
 void HideReadChrome() {
     CancelReadFontScan();
     CloseBookmarkMessage();
-    HideReadLightPanel();
     ResetBookmarkSelection();
     auto& st = Book_State();
     st.settings.reader_sheet_scrolling = false;
@@ -123,9 +122,6 @@ void HideReadChrome() {
         if (st.settings.settings_sheet && lv_obj_is_valid(st.settings.settings_sheet))
             lv_obj_clean(st.settings.settings_sheet);
         st.settings.reader_sheet_cover.Reset();
-        if (st.settings.reader_light_panel && lv_obj_is_valid(st.settings.reader_light_panel))
-            lv_obj_delete(st.settings.reader_light_panel);
-        st.settings.reader_light_panel = nullptr;
         ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
         StartChapterPageWorker();
         if (st.reader.session && st.reader.session->IsOpen() && st.reader.content != nullptr) {
@@ -365,12 +361,10 @@ void ShowReadSettingsSheet(bool default_duration) {
         return;
     }
     if (default_duration) {
-        HideReadLightPanel();
         // A fresh reader tap starts at duration, never resurrecting an import subpanel.
         TtfPanelClose();
         ResetBookmarkSelection();
         st.settings.reader_tab = 4;
-        st.settings.reader_light_page = true;
     }
     if (st.settings.reader_tab == 1) StartReadFontScan();
     else CancelReadFontScan();
@@ -388,27 +382,23 @@ void ShowReadSettingsSheet(bool default_duration) {
 }
 
 void OpenReadToc() {
-    HideReadLightPanel();
     ResetBookmarkSelection();
     Book_State().settings.reader_tab = 0;
     ShowReadSettingsSheet(false);
 }
 
 void OpenReadBookmarks() {
-    HideReadLightPanel();
     Book_State().settings.reader_tab = 2;
     ShowReadSettingsSheet(false);
 }
 
 void OpenReadFontSettings() {
-    HideReadLightPanel();
     ResetBookmarkSelection();
     Book_State().settings.reader_tab = 1;
     ShowReadSettingsSheet(false);
 }
 
 void OpenReadSettings() {
-    HideReadLightPanel();
     ResetBookmarkSelection();
     Book_State().settings.reader_tab = 3;
     ShowReadSettingsSheet(false);

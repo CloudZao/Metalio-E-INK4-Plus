@@ -447,14 +447,12 @@ void IRAM_ATTR epd_apply_line_mask(uint8_t* buf, const uint8_t* mask, int len) {
     }
 }
 
-// Dirty rows and the union of dirty columns can include unchanged pixels.
-// Suppress the diagonal in a local copy of this phase, before LUT expansion.
-// The source waveform stays immutable, and per-pixel lookup remains unchanged.
+// 脏行与汇总脏列的交集可能包含未变化像素；DU 仅保留黑→黑补黑。
 static void IRAM_ATTR changed_only_phase(
-    uint8_t data[16][4], const EpdWaveformPhases* phases, int frame
+    uint8_t data[16][4], const EpdWaveformPhases* phases, int frame, bool keep_black
 ) {
     memcpy(data, phases->luts + frame * 16 * 4, 16 * 4);
-    for (unsigned gray = 0; gray < 16; ++gray) {
+    for (unsigned gray = keep_black ? 1 : 0; gray < 16; ++gray) {
         const unsigned shift = 6 - 2 * (gray & 3);
         data[gray][gray / 4] &= (uint8_t)~(3u << shift);
     }
@@ -464,7 +462,7 @@ static void IRAM_ATTR build_changed_1ppB_lut_S3_VE_1k(
     uint8_t* lut, const EpdWaveformPhases* phases, int frame
 ) {
     uint8_t data[16][4];
-    changed_only_phase(data, phases, frame);
+    changed_only_phase(data, phases, frame, false);
     EpdWaveformPhases phase = *phases;
     phase.luts = (const uint8_t*)data;
     build_1ppB_lut_S3_VE_1k(lut, &phase, 0);
@@ -474,7 +472,27 @@ static void IRAM_ATTR build_changed_1ppB_lut_64k(
     uint8_t* lut, const EpdWaveformPhases* phases, int frame
 ) {
     uint8_t data[16][4];
-    changed_only_phase(data, phases, frame);
+    changed_only_phase(data, phases, frame, false);
+    EpdWaveformPhases phase = *phases;
+    phase.luts = (const uint8_t*)data;
+    build_1ppB_lut_64k(lut, &phase, 0);
+}
+
+static void IRAM_ATTR build_du_1ppB_lut_S3_VE_1k(
+    uint8_t* lut, const EpdWaveformPhases* phases, int frame
+) {
+    uint8_t data[16][4];
+    changed_only_phase(data, phases, frame, true);
+    EpdWaveformPhases phase = *phases;
+    phase.luts = (const uint8_t*)data;
+    build_1ppB_lut_S3_VE_1k(lut, &phase, 0);
+}
+
+static void IRAM_ATTR build_du_1ppB_lut_64k(
+    uint8_t* lut, const EpdWaveformPhases* phases, int frame
+) {
+    uint8_t data[16][4];
+    changed_only_phase(data, phases, frame, true);
     EpdWaveformPhases phase = *phases;
     phase.luts = (const uint8_t*)data;
     build_1ppB_lut_64k(lut, &phase, 0);
@@ -489,12 +507,16 @@ LutFunctionPair find_lut_functions(enum EpdDrawMode mode, uint32_t lut_size) {
         if (EPD_CURRENT_RENDER_METHOD == RENDER_METHOD_LCD && !(mode & MODE_FORCE_NO_PIE)
             && lut_size >= 1024) {
             pair.build_func = mode & MODE_SKIP_UNCHANGED
-                ? &build_changed_1ppB_lut_S3_VE_1k : &build_1ppB_lut_S3_VE_1k;
+                ? ((mode & MODE_UNKNOWN_WAVEFORM) == MODE_DU
+                    ? &build_du_1ppB_lut_S3_VE_1k : &build_changed_1ppB_lut_S3_VE_1k)
+                : &build_1ppB_lut_S3_VE_1k;
             pair.lookup_func = &calc_epd_input_1ppB_1k_S3_VE;
             return pair;
         } else if (lut_size >= 1 << 16) {
             pair.build_func = mode & MODE_SKIP_UNCHANGED
-                ? &build_changed_1ppB_lut_64k : &build_1ppB_lut_64k;
+                ? ((mode & MODE_UNKNOWN_WAVEFORM) == MODE_DU
+                    ? &build_du_1ppB_lut_64k : &build_changed_1ppB_lut_64k)
+                : &build_1ppB_lut_64k;
             pair.lookup_func = &calc_epd_input_1ppB_64k;
             return pair;
         }

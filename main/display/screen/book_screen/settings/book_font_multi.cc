@@ -107,12 +107,12 @@ bool CollectReadFonts(FontScanResult& result) {
             continue;
         }
         const size_t n = std::strlen(ent->d_name);
-        if (n < 4 || n > 63 || strcasecmp(ent->d_name + (n - 3), ".ef") != 0) {
+        if (n < 4 || !SdIsValidFileName(ent->d_name) || strcasecmp(ent->d_name + (n - 3), ".ef") != 0) {
             continue;
         }
-        char name[64];
+        char name[SD_FILE_NAME_CAPACITY];
         std::memcpy(name, ent->d_name, n + 1);
-        char full[96];
+        char full[SD_FILE_PATH_CAPACITY];
         std::snprintf(full, sizeof(full), "%s/%s", SD_PATH_FONTS, name);
         struct stat st_info {};
         if (stat(full, &st_info) != 0) return false;
@@ -364,13 +364,12 @@ void EnterFontMultiModeSelect(int idx) {
 
 bool DeleteReadFontFile(const std::string& file, std::string& err_out) {
     err_out.clear();
-    if (file.empty() || file.size() > 63 || file.find('/') != std::string::npos ||
-        file == "." || file == ".." || file.size() < 4 ||
+    if (!SdIsValidFileName(file.c_str()) || file.size() < 4 ||
         strcasecmp(file.c_str() + file.size() - 3, ".ef") != 0) {
         err_out = Lang::Strings::BOOK_FONT_NAME_INVALID;
         return false;
     }
-    char path[96];
+    char path[SD_FILE_PATH_CAPACITY];
     std::snprintf(path, sizeof(path), "%s/%s", SD_PATH_FONTS, file.c_str());
     if (unlink(path) != 0 && errno != ENOENT) {
         err_out = Lang::Strings::BOOK_DELETE_FAILED;

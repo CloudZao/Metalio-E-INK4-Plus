@@ -2,9 +2,9 @@
 
 #include "lvgl.h"
 
-/** @brief 构建设置→屏幕页的刷新模式及前光选项 */
+/** @brief 构建设置→屏幕页的刷新模式及黑色深度选项 */
 void SettingsFrontlightTab_Build(lv_obj_t* page);
-/** @brief 重置前光页 UI 指针 */
+/** @brief 重置屏幕设置页 UI 指针 */
 void SettingsFrontlightTab_Reset();
-/** @brief 唤醒后同步前光亮度控件 */
+/** @brief 同步屏幕刷新配置控件 */
 void SettingsFrontlightTab_Refresh();

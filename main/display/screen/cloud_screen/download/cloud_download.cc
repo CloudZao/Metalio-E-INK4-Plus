@@ -86,7 +86,7 @@ void AbortDownloadJobFromUi() {
         st.xfer.dl_cancel_key = st.xfer.download_key;
         ESP_LOGI(TAG, "abort download job key=%s", st.xfer.dl_cancel_key.c_str());
         s_dl_gate.RequestCancel();
-        Application::GetInstance().Schedule([]() { s_dl_gate.AbortBoundHttp(); });
+        Application::GetInstance().Schedule([]() { s_dl_gate.AbortBoundHttp(); }, Application::TaskDomain::Cleanup);
         if (st.xfer.dl_title_lbl != nullptr) {
             lv_label_set_text(st.xfer.dl_title_lbl, Lang::Strings::CLOUD_CANCELLING);
         }
@@ -290,8 +290,8 @@ void StartResourceDownload(int index, CloudSaveChoice choice) {
             }
             if (n == 9999) save_path.clear();
         }
-        // FAT 长文件名上限；保留完整 UTF-8 名称，超长时报告失败。
-        if (save_path.size() - slash - 1 > 255 || save_path == original) save_path.clear();
+        // 遵循统一文件名上限；保留完整 UTF-8 名称，超长时报告失败。
+        if (save_path.size() - slash - 1 > SD_FILE_NAME_MAX_BYTES || save_path == original) save_path.clear();
     } else if ((found != 0 && errno != ENOENT) ||
                (found == 0 && choice == CloudSaveChoice::kReplace && !S_ISREG(info.st_mode))) {
         save_path.clear();

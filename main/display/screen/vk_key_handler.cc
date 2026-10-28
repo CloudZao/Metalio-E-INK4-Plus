@@ -12,6 +12,7 @@
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
 #include "ota_confirm_dialog/ota_confirm_dialog.h"
 #include "screen_common.h"
+#include "screen_frontlight.h"
 #include "standby_screen/standby_screen.h"
 
 
@@ -255,6 +256,11 @@ void VkKey_Dispatch(const char* key_name) {
         return;
     }
 
+    if (ScreenFrontlightIsVisible() &&
+        (std::strcmp(key_name, "vk_prev") == 0 || std::strcmp(key_name, "vk_home") == 0)) {
+        ScreenFrontlightHide();
+        return;
+    }
     const char* screen = StackTop();
     const int64_t t0 = esp_timer_get_time();
     ESP_LOGD(TAG, "%s on screen=%s (depth=%d) begin", key_name, screen, s_depth);

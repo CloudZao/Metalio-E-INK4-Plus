@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 
 #include <driver/gpio.h>
 #include <esp_timer.h>
@@ -47,6 +48,9 @@ public:
      */
     void Deinit();
 
+    /** @brief 暂缓物理输出但保留亮度和色温，解除后应用当前状态 */
+    void SetOutputDeferred(bool deferred);
+
     /**
      * @brief 切换 PWM / GPIO 驱动；保持当前亮度与色温
      * @param mode 目标驱动方式
@@ -56,14 +60,17 @@ public:
     /**
      * @brief 当前驱动方式
      */
-    FrontlightDriveMode drive_mode() const { return drive_mode_; }
+    FrontlightDriveMode drive_mode() const {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        return drive_mode_;
+    }
 
     /**
      * @brief 从 NVS 恢复亮度（默认 40，范围 0–100）；瞬时到位，不走渐变
      */
     void RestoreBrightness();
 
-    /** Restore the saved UI target without enabling the hardware output. */
+    /** @brief 恢复界面亮度目标，不开启硬件输出 */
     void PrepareBrightnessRestore();
 
     /**
@@ -76,18 +83,36 @@ public:
     /**
      * @brief 当前亮度（渐变过程中的瞬时值）
      */
-    uint8_t brightness() const { return brightness_; }
+    uint8_t brightness() const {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        return brightness_;
+    }
 
     /**
      * @brief 目标亮度
      */
-    uint8_t target_brightness() const { return target_brightness_; }
+    uint8_t target_brightness() const {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        return target_brightness_;
+    }
 
     /**
      * @brief 设置色温通道组合，立即按当前亮度输出
      * @param cct 暖 / 冷 / 同开 / 关
      */
     void SetCct(FrontlightCct cct);
+
+    /**
+     * @brief 设置冷暖混光比例，0 为纯冷光、50 为冷暖同开、100 为纯暖光
+     * @param percent 暖光比例，范围 0–100
+     */
+    void SetWarmth(uint8_t percent);
+
+    /** @brief 获取冷暖混光比例，关闭前光时仍保留该比例 */
+    uint8_t warmth() const {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        return warmth_;
+    }
 
     /**
      * @brief 暖 → 冷 → 同开 → 关 → 暖
@@ -97,7 +122,10 @@ public:
     /**
      * @brief 当前色温组合
      */
-    FrontlightCct cct() const { return cct_; }
+    FrontlightCct cct() const {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        return cct_;
+    }
 
     /**
      * @brief 立即关输出（停渐变、亮度置 0），保留 PWM/GPIO 驱动挂接，供待机/浅睡关光
@@ -107,9 +135,14 @@ public:
     /**
      * @brief 是否已初始化
      */
-    bool initialized() const { return initialized_; }
+    bool initialized() const {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        return initialized_;
+    }
 
 private:
+    mutable std::recursive_mutex mutex_; // 保护 UI、亮度定时器与电源任务的共享状态
+    bool output_deferred_ = false; // 启动电源复位完成前禁止物理输出
     Frontlight();
     ~Frontlight();
     Frontlight(const Frontlight&) = delete;
@@ -126,6 +159,7 @@ private:
     uint32_t freq_hz_ = 20000;                      // PWM 频率
     FrontlightDriveMode drive_mode_ = FrontlightDriveMode::kPwm; // 驱动方式
     FrontlightCct cct_ = FrontlightCct::kOff;       // 色温组合（默认关）
+    uint8_t warmth_ = 50;                          // 暖光比例，中心档保持双路原有输出上限
     uint8_t brightness_ = 0;                        // 当前亮度
     uint8_t target_brightness_ = 0;                 // 目标亮度
     int8_t step_ = 1;                               // 每拍步进

@@ -46,8 +46,10 @@ WebSocket::WebSocket(NetworkInterface* network, int connect_id) : network_(netwo
 }
 
 WebSocket::~WebSocket() {
-    if (connected_) {
+    // 关闭帧只更新协议状态，底层接收任务须在回调和同步对象销毁前回收。
+    if (tcp_) {
         tcp_->Disconnect();
+        tcp_.reset();
     }
     if (handshake_event_group_) {
         vEventGroupDelete(handshake_event_group_);

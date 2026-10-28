@@ -11,7 +11,12 @@
 #include "metalio_touch.h"
 #include "power_policy.h"
 #include "vk_key_handler.h"
+#include "screen_frontlight.h"
+#include "ota_upgrade_screen/ota_upgrade_screen.h"
+#include "standby_screen/standby_screen.h"
+#include "ui_scale.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -150,16 +155,101 @@ void LvAdapterEpdiy_TouchBind(void) {
     metalio_touch_set_sample_cb(OnTouchSample);
 }
 
-void LvAdapterEpdiy_TouchReadCb(lv_indev_t* /*indev*/, lv_indev_data_t* data) {
+static lv_obj_t* FindGestureTarget(lv_obj_t* obj, lv_point_t point) {
+    if (lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN)) return nullptr;
+    lv_obj_transform_point(obj, &point, LV_OBJ_POINT_TRANSFORM_FLAG_INVERSE);
+    lv_area_t area;
+    lv_obj_get_coords(obj, &area);
+    if (point.x < area.x1 || point.x > area.x2 || point.y < area.y1 || point.y > area.y2)
+        return nullptr;
+    for (int32_t i = static_cast<int32_t>(lv_obj_get_child_count(obj)) - 1; i >= 0; --i) {
+        if (auto* child = FindGestureTarget(lv_obj_get_child(obj, i), point)) return child;
+    }
+    return obj;
+}
+
+static bool PageOwnsVerticalDrag(lv_point_t point) {
+    lv_obj_t* layers[] = {lv_layer_sys(), lv_layer_top(), lv_screen_active()};
+    for (auto* layer : layers) {
+        auto* target = FindGestureTarget(layer, point);
+        if (target == nullptr || target == layer) continue;
+        for (auto* obj = target; obj != nullptr; obj = lv_obj_get_parent(obj)) {
+            const auto dir = lv_obj_get_scroll_dir(obj);
+            // 指定纵向滚动的列表在边界和内容未填满时仍拥有手势，不依赖点击标志。
+            if (lv_obj_has_flag(obj, LV_OBJ_FLAG_SCROLLABLE) && (dir & LV_DIR_VER) != 0 &&
+                (dir == LV_DIR_VER || (obj != lv_screen_active() &&
+                 lv_obj_get_scroll_top(obj) + lv_obj_get_scroll_bottom(obj) > 0))) return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+void LvAdapterEpdiy_TouchReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
+    static bool tracking = false;
+    static bool consumed = false;
+    static bool close_panel = false;
+    static bool ignore_until_release = false;
+    static lv_point_t origin = {};
+    static lv_obj_t* start_screen = nullptr;
     metalio_touch_point_t p = {};
-    if (!metalio_touch_read(&p)) {
+    const bool pressed = metalio_touch_read(&p);
+    const bool blocked = OtaUpgradeScreen::IsActive() || StandbyScreen::IsActive();
+    if (blocked || (tracking && start_screen != lv_screen_active())) {
+        tracking = false;
+        consumed = false;
+        ignore_until_release = pressed;
+    }
+    if (!pressed) {
         data->state = LV_INDEV_STATE_RELEASED;
+        if (consumed && !blocked) {
+            // 松手后再创建遮罩，避免当前手势继续操作新面板。
+            if (close_panel) {
+                if (lv_async_call([](void*) { ScreenFrontlightHide(); }, nullptr) != LV_RESULT_OK)
+                    ESP_LOGW(TAG, "quick panel close request failed");
+            } else {
+                if (lv_async_call([](void* screen) {
+                    if (screen == lv_screen_active()) ScreenFrontlightShow();
+                }, start_screen) != LV_RESULT_OK)
+                    ESP_LOGW(TAG, "quick panel open request failed");
+            }
+        }
+        tracking = false;
+        consumed = false;
+        ignore_until_release = false;
         return;
     }
     int ux = 0;
     int uy = 0;
     if (!MapLogicalToUi(p.x, p.y, &ux, &uy)) {
         data->state = LV_INDEV_STATE_RELEASED;
+        tracking = false;
+        consumed = false;
+        ignore_until_release = true;
+        return;
+    }
+    if (!blocked && !ignore_until_release && !tracking) {
+        tracking = true;
+        origin = {static_cast<int32_t>(ux), static_cast<int32_t>(uy)};
+        start_screen = lv_screen_active();
+        close_panel = ScreenFrontlightIsVisible();
+        if ((close_panel && ScreenFrontlightOwnsDrag(ux, uy)) ||
+            (!close_panel && PageOwnsVerticalDrag(origin))) {
+            tracking = false;
+            ignore_until_release = true;
+        }
+    }
+    if (tracking && !consumed) {
+        const int dy = uy - origin.y;
+        const int distance = close_panel ? -dy : dy;
+        if (distance >= UiSy(60) && distance > 2 * std::abs(ux - origin.x)) {
+            consumed = true;
+            lv_indev_wait_release(indev);
+        }
+    }
+    if (consumed) {
+        data->state = LV_INDEV_STATE_RELEASED;
+        data->continue_reading = metalio_touch_has_pending_edges();
         return;
     }
     data->state = LV_INDEV_STATE_PRESSED;

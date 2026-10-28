@@ -14,12 +14,12 @@ constexpr lv_coord_t kRowGap = UiSx(8);
 constexpr lv_coord_t kPagePadRow = UiSy(8); // 本页行距略紧于全局 kSettingsOptionGap
 
 struct MhzOption {
-    int mhz;
-    const char* title;
+    int mhz; // CPU 频率，单位 MHz
+    const char* title; // 选项显示文本
 };
 
 struct SecOption {
-    int sec;
+    int sec; // 时长，单位秒；0 表示永不
 };
 
 constexpr MhzOption kMhzOptions[] = {
@@ -50,6 +50,7 @@ constexpr SecOption kNetGraceOptions[] = {
     {30},
     {60},
     {120},
+    {0}, // 永不因空闲断网
 };
 constexpr int kNetGraceCount = sizeof(kNetGraceOptions) / sizeof(kNetGraceOptions[0]);
 

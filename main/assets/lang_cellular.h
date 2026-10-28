@@ -14,6 +14,7 @@ extern const char* SETTINGS_NET_BOARD_NO_AP;
 extern const char* SETTINGS_NET_CFUN0;
 extern const char* SETTINGS_NET_CFUN0_FAIL;
 extern const char* SETTINGS_NET_CFUN1;
+extern const char* SETTINGS_NET_CFUN1_FAIL;
 extern const char* SETTINGS_NET_CURRENT_FMT;
 extern const char* SETTINGS_NET_CUR_4G;
 extern const char* SETTINGS_NET_CUR_DASH;

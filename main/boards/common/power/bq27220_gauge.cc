@@ -12,9 +12,32 @@ constexpr uint8_t  kRegVoltage   = 0x08;
 constexpr uint8_t  kRegCurrent   = 0x0C;
 constexpr int      kI2cTimeoutMs = 200; // 含时钟拉伸
 constexpr int      kProbeTimeoutMs = 100;
-constexpr float    kBatteryEmptyV = 3.3f;
-constexpr float    kBatteryFullV  = 4.33f; // 显示满电；充电截止见 CX25601N VREG 4400mV
+constexpr uint16_t kBatteryEmptyMv = 3300;
+constexpr uint16_t kBatteryFullMv = 4330; // 显示满电；充电截止见 CX25601N VREG
+// 424860-2000：工步 6，约 1A 放电至 3.3V，以 1870.7mAh 归一化，每 10% 取点。
+constexpr uint16_t kDischargeMv[] = {
+    3300, 3481, 3565, 3624, 3663, 3702, 3757, 3828, 3919, 4021, 4211
+};
 } // namespace
+
+float Bq27220Gauge::VoltageToPercent(uint16_t mv, bool charging) {
+    if (mv <= kBatteryEmptyMv) {
+        return 0.0f;
+    }
+    if (charging) {
+        if (mv >= kBatteryFullMv) {
+            return 100.0f;
+        }
+        return (mv - kBatteryEmptyMv) * 100.0f / (kBatteryFullMv - kBatteryEmptyMv);
+    }
+    for (int i = 1; i < 11; ++i) {
+        if (mv <= kDischargeMv[i]) {
+            return (i - 1) * 10.0f + (mv - kDischargeMv[i - 1]) * 10.0f /
+                   (kDischargeMv[i] - kDischargeMv[i - 1]);
+        }
+    }
+    return 100.0f;
+}
 
 bool Bq27220Gauge::Begin(const power_i2c_t* bus, uint8_t addr) {
     if (bus == NULL) {
@@ -89,6 +112,7 @@ int Bq27220Gauge::ApplyMonoStep(int target_pct, bool charging) {
     if (target_pct > 100) {
         target_pct = 100;
     }
+    target_pct = (target_pct / kSocStepPct) * kSocStepPct;
 
     const int64_t now = esp_timer_get_time();
     if (displayed_soc_ < 0) {
@@ -103,12 +127,12 @@ int Bq27220Gauge::ApplyMonoStep(int target_pct, bool charging) {
 
     if (charging) {
         if (target_pct > displayed_soc_) {
-            ++displayed_soc_;
+            displayed_soc_ += kSocStepPct;
             last_soc_step_us_ = now;
         }
     } else {
         if (target_pct < displayed_soc_) {
-            --displayed_soc_;
+            displayed_soc_ -= kSocStepPct;
             last_soc_step_us_ = now;
         }
     }
@@ -116,7 +140,12 @@ int Bq27220Gauge::ApplyMonoStep(int target_pct, bool charging) {
 }
 
 bool Bq27220Gauge::GetBatteryLevel(int& level, bool& charging, bool& discharging) {
+    std::lock_guard<std::mutex> lock(soc_mutex_);
+    if (esp_timer_get_time() < sample_ready_at_us_) {
+        return false;
+    }
     if (!ready_) {
+        full_above_since_us_ = 0;
         if (++retry_counter_ % 10 != 1) {
             return false;
         }
@@ -126,21 +155,33 @@ bool Bq27220Gauge::GetBatteryLevel(int& level, bool& charging, bool& discharging
     }
 
     uint16_t mv = 0;
-    if (!ReadU16(kRegVoltage, &mv)) {
+    if (!ReadU16(kRegVoltage, &mv) || mv < 2500 || mv > 5000) {
+        full_above_since_us_ = 0;
         return false;
     }
-    float bat_v = static_cast<float>(mv) / 1000.0f;
-
-    float raw_pct;
-    if (bat_v >= kBatteryFullV) {
-        raw_pct = 100.0f;
-    } else if (bat_v <= kBatteryEmptyV) {
-        raw_pct = 0.0f;
-    } else {
-        raw_pct = (bat_v - kBatteryEmptyV) / (kBatteryFullV - kBatteryEmptyV) * 100.0f;
+    int16_t current_ma = 0;
+    if (!ReadCurrentMa(current_ma)) {
+        full_above_since_us_ = 0;
+        return false;
     }
-    float smoothed = FilterPush(raw_pct);
-    int target = static_cast<int>(smoothed + 0.5f);
+    const int64_t now = esp_timer_get_time();
+    if (last_sample_us_ != 0 && now - last_sample_us_ > 2 * kSamplePeriodUs) {
+        full_above_since_us_ = 0;
+    }
+    last_sample_us_ = now;
+    const bool raw_charging = (current_ma > 5);
+    // 两条曲线的百分比不能混合滤波；保留显示值及正常步进限制。
+    if (displayed_soc_ >= 0 && raw_charging != (last_charge_dir_ > 0)) {
+        filter_primed_ = false;
+    }
+    float smoothed;
+    if (!filter_primed_ || now - last_filter_us_ >= kSamplePeriodUs) {
+        smoothed = FilterPush(VoltageToPercent(mv, raw_charging));
+        last_filter_us_ = now;
+    } else {
+        smoothed = filter_sum_ / filter_count_;
+    }
+    int target = static_cast<int>(smoothed);
     if (target < 0) {
         target = 0;
     }
@@ -148,7 +189,6 @@ bool Bq27220Gauge::GetBatteryLevel(int& level, bool& charging, bool& discharging
         target = 100;
     }
 
-    const int64_t now = esp_timer_get_time();
     bool full_ok = false;
     if (mv >= kFullConfirmMv) {
         if (full_above_since_us_ == 0) {
@@ -158,16 +198,19 @@ bool Bq27220Gauge::GetBatteryLevel(int& level, bool& charging, bool& discharging
     } else {
         full_above_since_us_ = 0;
     }
-    if (target >= 100 && !full_ok) {
-        target = 99;
+    if (full_ok) {
+        full_confirmed_ = true;
     }
-    if (displayed_soc_ >= 100 && mv >= kFullExitMv) {
+    if (mv < kFullExitMv) {
+        full_confirmed_ = false;
+    }
+    if (target >= 100 && !full_confirmed_) {
+        target = 100 - kSocStepPct;
+    }
+    if (full_confirmed_) {
         target = 100;
     }
 
-    int16_t current_ma = 0;
-    ReadCurrentMa(current_ma);
-    const bool raw_charging = (current_ma > 5);
     discharging = (current_ma < -5);
     const int charge_dir = raw_charging ? 1 : (discharging ? -1 : 0);
 
@@ -178,16 +221,15 @@ bool Bq27220Gauge::GetBatteryLevel(int& level, bool& charging, bool& discharging
         last_charge_dir_ = charge_dir;
     }
 
-    level = ApplyMonoStep(target, raw_charging);
-    if (full_ok && target >= 100 && displayed_soc_ >= 99) {
-        displayed_soc_ = 100;
-        level = 100;
-    }
+    // 尾充终止后电流可归零，已确认满电仍允许沿步进升至 100%。
+    level = ApplyMonoStep(target, raw_charging || full_confirmed_);
     charging = raw_charging && (level < 100);
     return true;
 }
 
 void Bq27220Gauge::ResetFilter() {
+    std::lock_guard<std::mutex> lock(soc_mutex_);
+    sample_ready_at_us_ = esp_timer_get_time() + kStartupDelayUs;
     filter_idx_ = 0;
     filter_count_ = 0;
     filter_sum_ = 0.0f;
@@ -196,6 +238,8 @@ void Bq27220Gauge::ResetFilter() {
     last_soc_step_us_ = 0;
     full_above_since_us_ = 0;
     last_charge_dir_ = 0;
+    last_sample_us_ = 0;
+    last_filter_us_ = 0;
 }
 
 bool Bq27220Gauge::ReadU16(uint8_t reg, uint16_t* out) {

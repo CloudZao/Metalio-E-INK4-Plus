@@ -45,6 +45,11 @@ static inline __attribute__((always_inline)) uint32_t EpdGrayNibbles(uint32_t va
     return result;
 }
 
+// 推白只反转分带顺序，不旋转目标像素；方向值与 display_orient.h 一致。
+static inline int EpdWipeOrient(int orient,int direction) {
+    return direction > 0 ? (orient ^ 3) : orient;
+}
+
 // Preparation only: these routines do not choose waveforms or schedule scans.
 static inline __attribute__((always_inline)) uint8_t EpdRevealPixel(unsigned old,unsigned target,int band) {
     return ((old==15 && target==15 ? 15 : band)<<4)|(old==15 ? 1 : 0)|(target==0 ? 2 : 0);

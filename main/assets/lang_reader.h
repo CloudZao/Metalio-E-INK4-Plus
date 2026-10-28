@@ -9,4 +9,5 @@ extern const char* BOOK_OPEN_FAILED_CACHE;
 extern const char* BOOK_OPEN_FAILED_UNSUPPORTED;
 extern const char* BOOK_OPEN_CANCELLED;
 extern const char* BOOK_TOC_BUILDING;
+extern const char* BOOK_LOADING;
 }

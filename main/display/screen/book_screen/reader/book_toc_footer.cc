@@ -66,8 +66,11 @@ void SyncFooterClockTimer() {
     const bool need = st.reader.read_scr != nullptr && lv_obj_is_valid(st.reader.read_scr) && mask != 0 &&
                       ((mask & (kBookReaderFooterTime | kBookReaderFooterBattery)) != 0);
     if (need) {
+        const uint32_t period_ms = (mask & kBookReaderFooterBattery) != 0 ? 1000 : 30000;
         if (st.reader.footer_clock_timer == nullptr) {
-            st.reader.footer_clock_timer = lv_timer_create(OnFooterClockTick, 30 * 1000, nullptr);
+            st.reader.footer_clock_timer = lv_timer_create(OnFooterClockTick, period_ms, nullptr);
+        } else {
+            lv_timer_set_period(st.reader.footer_clock_timer, period_ms);
         }
         return;
     }
@@ -136,7 +139,8 @@ void UpdateReadFooter() {
         int level = 0;
         bool charging = false;
         bool discharging = false;
-        if (Board::GetInstance().GetBatteryLevel(level, charging, discharging)) {
+        const bool battery_ready = Board::GetInstance().GetBatteryLevel(level, charging, discharging);
+        if (battery_ready) {
             if (charging) {
                 std::snprintf(batt, sizeof(batt), "%d%%+", level);
             } else {

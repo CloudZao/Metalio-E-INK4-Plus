@@ -1,4 +1,5 @@
 #include "ap_qr.h"
+#include "ui_qrcode.h"
 
 #include "qrcodegen.h"
 
@@ -47,6 +48,16 @@ void SetBlack(uint8_t* row, int x) {
 }
 
 }  // namespace
+
+lv_obj_t* ApQrCreate(lv_obj_t* parent) {
+    lv_obj_t* box = UiCreateQrFrame(parent, kApQrSide);
+    lv_obj_t* qr = lv_canvas_create(box);
+    lv_obj_set_size(qr, kApQrSide, kApQrSide);
+    lv_obj_set_style_bg_color(qr, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(qr, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(qr, LV_OBJ_FLAG_CLICKABLE);
+    return qr;
+}
 
 void ApQrPaint(lv_obj_t* canvas, const char* text) {
     if (canvas == nullptr || text == nullptr || text[0] == '\0') {

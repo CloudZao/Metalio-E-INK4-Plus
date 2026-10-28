@@ -19,10 +19,6 @@ static constexpr uint32_t kPollPeriodMs = 1000;
 static constexpr lv_coord_t kRowH = UiSy(48);
 static constexpr lv_coord_t kTitleW = UiSx(168);
 
-// 与 bq27220_gauge.cc 电压→SOC 曲线一致，用于显示瞬时电量（未平滑）。
-static constexpr float kBatteryEmptyV = 3.3f;
-static constexpr float kBatteryFullV = 4.33f; // 显示 100%；充电恒压目标见 CX25601N VREG（默认 4400mV）
-
 struct SettingsTestBatRow {
     lv_obj_t* value = nullptr;
 };
@@ -132,26 +128,6 @@ static SettingsTestBatRow CreateRow(lv_obj_t* parent, const char* title) {
     return out;
 }
 
-static int VoltageToRawPct(uint16_t mv) {
-    const float bat_v = static_cast<float>(mv) / 1000.0f;
-    float raw_pct;
-    if (bat_v >= kBatteryFullV) {
-        raw_pct = 100.0f;
-    } else if (bat_v <= kBatteryEmptyV) {
-        raw_pct = 0.0f;
-    } else {
-        raw_pct = (bat_v - kBatteryEmptyV) / (kBatteryFullV - kBatteryEmptyV) * 100.0f;
-    }
-    int pct = static_cast<int>(raw_pct + 0.5f);
-    if (pct < 0) {
-        pct = 0;
-    }
-    if (pct > 100) {
-        pct = 100;
-    }
-    return pct;
-}
-
 static void TrackVoltage(uint16_t mv) {
     if (!s_have_volt) {
         s_volt_min = mv;
@@ -183,6 +159,7 @@ static void Poll() {
     int16_t ma = 0;
     bool have_mv = false;
     bool have_ma = false;
+    int raw_pct = -1;
 
     if (!gauge.IsReady()) {
         SetValue(s_gauge, Lang::Strings::SETTINGS_TEST_NOT_DETECTED);
@@ -197,6 +174,9 @@ static void Poll() {
         gauge_ok = gauge.GetBatteryLevel(level, charging, discharging);
         have_mv = gauge.ReadVoltageMv(mv);
         have_ma = gauge.ReadCurrentMa(ma);
+        if (gauge_ok && have_mv && have_ma) {
+            raw_pct = static_cast<int>(Bq27220Gauge::VoltageToPercent(mv, ma > 5) + 0.5f);
+        }
 
         if (gauge_ok) {
             std::snprintf(buf, sizeof(buf), "%d%%", level);
@@ -206,7 +186,7 @@ static void Poll() {
                               : (discharging ? Lang::Strings::SETTINGS_TEST_BATTERY_DISCHARGING
                                              : Lang::Strings::SETTINGS_TEST_BATTERY_IDLE_LOAD));
         } else {
-            SetValue(s_soc, Lang::Strings::SETTINGS_TEST_READ_FAIL);
+            SetValue(s_soc, "--");
             SetValue(s_gauge_chg, "--");
         }
 
@@ -214,7 +194,11 @@ static void Poll() {
             TrackVoltage(mv);
             std::snprintf(buf, sizeof(buf), "%u mV", static_cast<unsigned>(mv));
             SetValue(s_volt, buf);
-            std::snprintf(buf, sizeof(buf), "%d%%", VoltageToRawPct(mv));
+            if (raw_pct >= 0) {
+                std::snprintf(buf, sizeof(buf), "%d%%", raw_pct);
+            } else {
+                std::snprintf(buf, sizeof(buf), "--");
+            }
             SetValue(s_soc_raw, buf);
             std::snprintf(buf, sizeof(buf), "%u~%u Δ%u", static_cast<unsigned>(s_volt_min),
                           static_cast<unsigned>(s_volt_max),
@@ -315,7 +299,7 @@ static void Poll() {
 
     if (have_mv || have_ma) {
         ESP_LOGI(TAG, "soc=%d%% raw=%d%% mv=%u(%u~%u) ma=%+d chg=%d cx=%s/%s en=%d",
-                 gauge_ok ? level : -1, have_mv ? VoltageToRawPct(mv) : -1, static_cast<unsigned>(mv),
+                 gauge_ok ? level : -1, raw_pct, static_cast<unsigned>(mv),
                  static_cast<unsigned>(s_volt_min), static_cast<unsigned>(s_volt_max),
                  have_ma ? static_cast<int>(ma) : 0, charging ? 1 : 0,
                  have_vbus ? cx25601n_vbus_stat_str(vbus_stat) : "-",

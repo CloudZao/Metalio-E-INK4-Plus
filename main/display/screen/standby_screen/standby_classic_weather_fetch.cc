@@ -18,7 +18,6 @@
 #include "api_http.h"
 #include "assets/lang_config.h"
 #include "board.h"
-#include "wifi_station.h"
 
 void StandbyClassic_NotifyWeatherListeners() {
     for (int i = 0; i < kMaxWeatherListeners; ++i) {
@@ -170,8 +169,8 @@ void StandbyClassic_EnsureWeatherCachedLocked() {
         StandbyClassic_WeatherRamStore(snap, today);
         ESP_LOGI(TAG, "weather nvs hit day=%s text=%s temp=%d", today, snap.text, snap.temp);
         done = true;
-    } else if (!WifiStation::GetInstance().IsConnected()) {
-        ESP_LOGI(TAG, "weather skip http (wifi down)");
+    } else if (!Board::GetInstance().IsNetworkReady()) {
+        ESP_LOGI(TAG, "weather skip http (network down)");
         done = true;
     }
 

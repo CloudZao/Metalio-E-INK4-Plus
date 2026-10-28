@@ -2,7 +2,7 @@
 
 Resource-partition icons must be black-only to preserve the original decoder's
 colour handling. Embedded overrides also support coloured and white artwork.
-Pixel-theme black icons use native A8 descriptors, preserving alpha without RGB copies.
+Pixel-theme and black WorkBuddy icons use native A8 descriptors for scaling without RGB copies.
 """
 from pathlib import Path
 import argparse
@@ -40,20 +40,25 @@ def generate(asset_dir,output,override_dir=None,pixel_dir=None):
             decoded=bgra_pixels(path,black_only=not (override_dir and path.parent == Path(override_dir)))
             if decoded is None:continue
             w,h,data=decoded
+        is_alpha = is_pixel or bool(path.name == 'ic_app_home_workbuddy.png' and
+                                   override_dir and path.parent == Path(override_dir) and
+                                   not any(data[i] or data[i+1] or data[i+2] for i in range(0,len(data),4)))
+        if is_alpha and not is_pixel:
+            data = data[3::4]
         name=path.stem
         lines.append('alignas(16) static const uint8_t '+name+'_pixels[] = {')
         lines.extend(','.join('0x%02x'%v for v in data[i:i+32])+',' for i in range(0,len(data),32))
         lines.append('};')
-        color_format = 'LV_COLOR_FORMAT_A8' if is_pixel else 'LV_COLOR_FORMAT_RAW'
-        flags = '0' if is_pixel else 'LV_IMAGE_FLAGS_USER8'
-        stride = w if is_pixel else w*4
+        color_format = 'LV_COLOR_FORMAT_A8' if is_alpha else 'LV_COLOR_FORMAT_RAW'
+        flags = '0' if is_alpha else 'LV_IMAGE_FLAGS_USER8'
+        stride = w if is_alpha else w*4
         lines.append('static const lv_image_dsc_t '+name+' = { .header={.magic=LV_IMAGE_HEADER_MAGIC,.cf='+color_format+',.flags='+flags+',.w='+str(w)+',.h='+str(h)+',.stride='+str(stride)+',.reserved_2=0},.data_size=sizeof('+name+'_pixels),.data='+name+'_pixels,.reserved=nullptr,.reserved_2=nullptr };')
-        entries.append((name,'A:'+name+'.spng',is_pixel))
+        entries.append((name,'A:'+name+'.spng',is_alpha))
     lines.extend(['}', 'const void* HomeIconSource(const char* path) {','if(!path)return nullptr;',
                   ])
-    for name,path,is_pixel in entries:
+    for name,path,is_alpha in entries:
         result = 'static_cast<const void*>(&'+name+')'
-        if not is_pixel:
+        if not is_alpha:
             result = 'HomeIconDecoderReady() ? '+result+' : path'
         lines.append('if(std::strcmp(path,"'+path+'")==0)return '+result+';')
     lines.extend(['return path;','}'])

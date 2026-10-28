@@ -1,4 +1,4 @@
-﻿#include "cloudzao_endpoints.h"
+#include "cloudzao_endpoints.h"
 
 // Open-source build: leave blank; fill in for a private backend.
 const char cloudzao_host[] = "";
@@ -25,3 +25,12 @@ const char cloudzao_path_vision_upload[] = "";
 
 const char cloudzao_log_upload_host[] = "";
 const char cloudzao_path_device_logs[] = "";
+
+const char cloudzao_workbuddy_host[] = "";
+const char cloudzao_path_workbuddy_authorization[] = "";
+const char cloudzao_path_workbuddy_authorization_sessions[] = "";
+const char cloudzao_path_workbuddy_text_turn[] = "";
+const char cloudzao_path_workbuddy_asr_stream[] = "";
+const char cloudzao_path_workbuddy_local_messages[] = "";
+const char cloudzao_path_workbuddy_local_status[] = "";
+const char cloudzao_path_workbuddy_local_reply[] = "";

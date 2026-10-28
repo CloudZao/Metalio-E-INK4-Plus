@@ -5,6 +5,7 @@
 #include "page_text_raster.h"
 
 #include "reader_page_render.h"
+#include "vertical_text.h"
 
 #include <algorithm>
 #include <cstring>
@@ -69,16 +70,20 @@ void PlotInk(RasterImage& img, int x, int y) {
 }
 
 void BlitGlyphA8(RasterImage& img, int dst_x, int dst_y, const uint8_t* a8, uint16_t box_w,
-                 uint16_t box_h, uint32_t stride, bool antialias) {
+                 uint16_t box_h, uint32_t stride, bool antialias, bool rotate = false,
+                 int rotated_height = 0) {
+    const int output_w = rotate && rotated_height > 0 ? rotated_height : box_w;
     for (uint16_t gy = 0; gy < box_h; ++gy) {
         const uint8_t* row = a8 + static_cast<size_t>(gy) * stride;
-        for (uint16_t gx = 0; gx < box_w; ++gx) {
+        for (int gx = 0; gx < output_w; ++gx) {
+            const uint8_t coverage = row[rotate && rotated_height > 0 ? gx * box_w / output_w : gx];
             // Preserve coverage in the actual pre-rasterized reading path.
-            if (row[gx] != 0) {
-                const int x = dst_x + gx, y = dst_y + gy;
+            if (coverage != 0) {
+                const int x = dst_x + (rotate ? box_h - 1 - gy : gx);
+                const int y = dst_y + (rotate ? gx : gy);
                 if (x < 0 || y < 0 || x >= img.width || y >= img.height) continue;
                 auto& pixel = img.pixels[static_cast<size_t>(y) * img.width + x];
-                pixel = antialias ? (unsigned(pixel) * (255 - row[gx]) + 127) / 255 : 0;
+                pixel = antialias ? (unsigned(pixel) * (255 - coverage) + 127) / 255 : 0;
             }
         }
     }
@@ -150,9 +155,11 @@ bool DrawUtf8Line(RasterImage& img, const lv_font_t* font, int x, int line_top, 
             continue;
         }
 
+        const uint32_t glyph_cp = vertical ? VerticalGlyph(cp) : cp;
         lv_font_glyph_dsc_t gdsc;
-        if (!lv_font_get_glyph_dsc(font, &gdsc, cp, 0)) {
-            pen_x += vertical ? font->line_height : std::max(1, static_cast<int>(font->line_height / 3));
+        if (!lv_font_get_glyph_dsc(font, &gdsc, glyph_cp, 0)) {
+            pen_x += vertical ? VerticalAdvance(cp, font->line_height)
+                              : std::max(1, static_cast<int>(font->line_height / 3));
             continue;
         }
         if (gdsc.resolved_font == nullptr) {
@@ -175,20 +182,40 @@ bool DrawUtf8Line(RasterImage& img, const lv_font_t* font, int x, int line_top, 
                                     : scratch;
             // Font callbacks may reshape the output buffer (including built-in fonts).
             const uint32_t stride = db->header.stride;
-            const int gx = vertical ? x + (font->line_height - gdsc.box_w) / 2 : pen_x + gdsc.ofs_x;
+            const bool rotate = vertical && VerticalRotate(glyph_cp);
+            // 破折号沿列填满字格，保证相邻两段连接，复用原字形的线宽与覆盖度。
+            const int rotated_height = vertical && cp == 0x2014 ? font->line_height : 0;
+            const int box_w = rotate ? gdsc.box_h : gdsc.box_w;
+            const int box_h = rotated_height > 0 ? rotated_height : rotate ? gdsc.box_w : gdsc.box_h;
+            int gx = vertical ? x + (font->line_height - box_w) / 2 : pen_x + gdsc.ofs_x;
             // 与 lv_draw_label：y1 = line_top + (lh - base) - box_h - ofs_y
-            const int gy = vertical ? line_top + pen_x - x + (font->line_height - gdsc.box_h) / 2
+            int gy = vertical ? line_top + pen_x - x + (font->line_height - box_h) / 2
                                     : line_top + static_cast<int>(font->line_height - font->base_line) -
                                           static_cast<int>(gdsc.box_h) - gdsc.ofs_y;
-            BlitGlyphA8(img, gx, gy, a8, gdsc.box_w, gdsc.box_h, stride, antialias);
+            if (vertical) {
+                const int cell = font->line_height;
+                const int top = line_top + pen_x - x;
+                switch (cp) {
+                    case ',': case '.': case 0xFF0C: case 0x3001: case 0x3002:
+                        gx = x + cell - box_w;
+                        gy = top;
+                        break;
+                    case ':': case ';': case '!': case '?':
+                    case 0xFF1A: case 0xFF1B: case 0xFF01: case 0xFF1F:
+                        gx = x + cell - box_w;
+                        break;
+                    default: break;
+                }
+            }
+            BlitGlyphA8(img, gx, gy, a8, gdsc.box_w, gdsc.box_h, stride, antialias, rotate, rotated_height);
             if (faux_bold) {
-                BlitGlyphA8(img, gx + 1, gy, a8, gdsc.box_w, gdsc.box_h, stride, antialias);
+                BlitGlyphA8(img, gx + 1, gy, a8, gdsc.box_w, gdsc.box_h, stride, antialias, rotate, rotated_height);
             }
             if (font->release_glyph != nullptr) {
                 font->release_glyph(font, &gdsc);
             }
         }
-        pen_x += vertical ? font->line_height : static_cast<int>(gdsc.adv_w);
+        pen_x += vertical ? VerticalAdvance(cp, font->line_height) : static_cast<int>(gdsc.adv_w);
     }
     if (out_end_x != nullptr) {
         *out_end_x = pen_x;

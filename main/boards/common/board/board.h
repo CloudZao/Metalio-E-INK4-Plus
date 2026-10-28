@@ -94,6 +94,8 @@ public:
      * @brief 网络是否已就绪（WiFi：已关联且拿到 IP），不触发重连
      */
     virtual bool IsNetworkReady() { return true; }
+    /** @brief 返回当前网络不可用的操作提示，无特定原因时返回默认文案 */
+    virtual const char* GetNetworkErrorText(const char* fallback) { return fallback; }
     /**
      * @brief SoftAP 配网中（无互联网）；业务应立即失败，勿 EnsureNetworkReady 空等
      */

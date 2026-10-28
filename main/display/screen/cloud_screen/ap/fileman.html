@@ -270,7 +270,7 @@ const ICO = {
 };
 function enc(s) { return encodeURIComponent(s); }
 function nameError(name, dir) {
-  if (!name || /[\\/:*?"<>|\x00-\x1f]/.test(name) || name === "." || name === ".." || /[. ]$/.test(name)) return "文件名含无效字符";
+  if (!name || /[\\/:*?"<>|\x00-\x1f\x7f]/.test(name) || name === "." || name === ".." || /[. ]$/.test(name)) return "文件名含无效字符";
   if (new TextEncoder().encode(name).length > 246) return "文件名超过 246 字节，请缩短名称（中文通常占 3 字节）";
   if (new TextEncoder().encode(childPath(dir,name)).length > 511) return "保存路径过长，请选择更浅的目录";
   return "";
@@ -796,9 +796,18 @@ function paintUploads() {
   document.getElementById("up-controls").hidden = document.getElementById("up-all").hidden && clear.hidden;
 }
 async function requireSpace(bytes, exclude) {
-  const r = await fetch("/api/storage");
-  if (!r.ok) throw Error(await r.text());
-  const d = await r.json();
+  const controller = new AbortController();
+  const timer = setTimeout(function () { controller.abort(); }, 15000);
+  let d;
+  try {
+    const r = await fetch("/api/storage", {signal:controller.signal, cache:"no-store"});
+    if (!r.ok) throw Error(await r.text());
+    d = await r.json();
+  } catch (e) {
+    if (controller.signal.aborted) throw Error("容量检查超时，请确认已连接设备热点或传输页所示 WIFI 后重试");
+    if (e instanceof TypeError) throw Error("无法连接设备，请确认已连接设备热点或传输页所示 WIFI 后重试");
+    throw e;
+  } finally { clearTimeout(timer); }
   if (!d.mounted) throw Error("未检测到 SD 卡，请插卡后重试");
   if (!Number.isFinite(d.free) || d.free < 0) throw Error("剩余容量读取失败，请重试");
   const reserved = queue.filter(j => j !== exclude && (j.status === "wait" || j.status === "up" || j.status === "saving")).reduce((n,j) => n + j.file.size, 0);
@@ -952,31 +961,34 @@ function websocketUpload(job) {
 async function pump() {
   if (pumping) return;
   pumping = true;
-  for (;;) {
-    const job = queue.filter(function (j) { return j.status === "wait"; })[0];
-    if (!job || (conflicts.length && job.id > conflictBatchStart)) break;
-    job.status = "up";
-    job.loaded = 0;
-    job.speed = 0;
-    job.noProgress = false;
-    job.stop = null;
-    paintUploads();
-    try {
-      await requireSpace(job.file.size, job);
-      if (job.status === "cancel") continue;
-      await websocketUpload(job);
-      if (job.status === "up" || job.status === "saving") job.status = "done";
-      if (job.dest === path) load();
-    } catch (e) {
-      if (job.status !== "cancel") {
-        job.status = "fail";
-        job.err = (e && e.message) || "上传失败";
+  try {
+    for (;;) {
+      const job = queue.filter(function (j) { return j.status === "wait"; })[0];
+      if (!job || (conflicts.length && job.id > conflictBatchStart)) break;
+      job.status = "up";
+      job.loaded = 0;
+      job.speed = 0;
+      job.noProgress = false;
+      job.stop = null;
+      paintUploads();
+      try {
+        await requireSpace(job.file.size, job);
+        if (job.status === "cancel") continue;
+        await websocketUpload(job);
+        if (job.status === "up" || job.status === "saving") job.status = "done";
+        if (job.dest === path) load();
+      } catch (e) {
+        if (job.status !== "cancel") {
+          job.status = "fail";
+          job.err = (e && e.message) || "上传失败";
+        }
       }
+      paintUploads();
     }
+  } finally {
+    pumping = false;
     paintUploads();
   }
-  pumping = false;
-  paintUploads();
 }
 function splitName(name) {
   const i = name.lastIndexOf(".");

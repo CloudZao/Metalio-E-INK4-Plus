@@ -103,7 +103,7 @@ void epd_board_metalio_eink4_plus_tps_enter_sleep(void);
 void epd_board_metalio_eink4_plus_bus_hold_low(void);
 
 /**
- * @brief 启动/深睡醒后：解除屏总线 gpio_hold（深睡 latch 会跨复位残留）
+ * @brief 启动时清理一次握手 DMA 与 GPIO 中断残留，并解除屏总线保持状态
  */
 void epd_board_metalio_eink4_plus_boot_release_holds(void);
 

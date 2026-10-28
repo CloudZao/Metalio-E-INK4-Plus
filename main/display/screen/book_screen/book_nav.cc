@@ -1,5 +1,6 @@
 #include "book_screen/book_nav.h"
 #include "book_screen/reader/book_auto_turn.h"
+#include "book_screen/reader/book_reader_orient.h"
 #include "book_screen/reader/book_reader_prefs.h"
 #include "epd_refresh.h"
 #include "book_screen/book_screen_priv.h"
@@ -101,7 +102,9 @@ void ApplyReaderPageDelta() {
     }
     if (moved) {
         ReaderAutoTurnPageMoved();
-        EpdSetReaderEffect(BookReaderPrefsPageTurn() == kBookReaderPageTurnRipple ? EpdEffect::Ripple : EpdEffect::None);
+        const int page_turn = BookReaderPrefsPageTurn();
+        EpdSetReaderEffect(page_turn == kBookReaderPageTurnWipe ? EpdEffect::Wipe :
+                          page_turn == kBookReaderPageTurnRipple ? EpdEffect::Ripple : EpdEffect::None);
         EpdRequestPageTurn(moved > 0 ? 1 : -1);
     }
 }
@@ -183,6 +186,7 @@ void ReleaseReaderForSystemHome() {
 }
 
 void ReleaseReaderSessionForLeave() {
+    StopReaderAutoOrient();
     CancelReadFontScan();
     CloseBookmarkMessage();
     auto& st = Book_State();
@@ -200,8 +204,6 @@ void ReleaseReaderSessionForLeave() {
     st.reader.status_label = nullptr;
     st.reader.status_h = 0;
     st.settings.settings_sheet = nullptr;
-    st.settings.reader_light_panel = nullptr;
-    st.settings.reader_light_page = false;
     ClearSettingsSheetWidgetRefs();
     StopTtfPollTimer();
     st.ttf.ttf_mode = BookUiState::TtfMode::kNone;

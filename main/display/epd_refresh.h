@@ -9,7 +9,12 @@ enum class EpdBlackDepth : int { Default = 0, Medium = 1, Strong = 2 };
 EpdBlackDepth EpdGetBlackDepth();
 bool EpdSetBlackDepth(EpdBlackDepth depth);
 
-enum class EpdEffect : int { None, Page, Ripple };
+enum class EpdEffect : int {
+    None, // 无附加动画
+    Page, // 分步翻页
+    Ripple, // 水波纹
+    Wipe, // 按翻页方向推白
+};
 enum class EpdPattern : int { White, Black, Checker, Gray, Lines, Text, Dither };
 struct EpdRefreshStats {
     uint32_t submitted, completed, coalesced, updates, errors, last_ms;
@@ -31,8 +36,6 @@ void EpdRequestScreenChange();
 /** @brief 下一次 EpdSubmit 完成投递后调用一次。用于等进页帧提交后再启动解码。 */
 void EpdAfterNextSubmit(void (*fn)());
 void EpdSetTestActive(bool active);
-// Stop test overlays; standby's full GC16 replaces native gray without a separate clear.
-void EpdSuspendTestsForStandby();
 bool EpdTestRequest(EpdPattern pattern, int mode, bool clean = false, int repeats = 1);
 void EpdTestStop();
 

@@ -32,6 +32,7 @@ std::atomic<unsigned> s_completed_epoch{~0U}; // 本轮重试已结束的电源�
 std::atomic<int64_t> s_power_restored_us{0}; // 最近一次恢复供电时间
 std::atomic<bool> s_requested{false}; // 初始化任务已排队或正在执行
 std::atomic<TaskHandle_t> s_worker{nullptr}; // 模式初始化后台任务
+void (*s_boot_reset_done)() = nullptr; // 启动复位结束后通知板级调度
 bool s_codec_started = false; // 初始输出音量已设置
 std::mutex s_reply_mutex; // 保护跨任务应答状态
 char s_reply_line[128]{}; // 当前串口应答行
@@ -125,6 +126,12 @@ bool ApplyMode(unsigned epoch) {
     return false;
 }
 
+void NotifyBootResetDone() {
+    const auto callback = s_boot_reset_done;
+    s_boot_reset_done = nullptr;
+    if (callback) callback();
+}
+
 void ModeWorker(void*) {
     bool boot_reset = true;
     for (;;) {
@@ -140,6 +147,7 @@ void ModeWorker(void*) {
                 epoch = s_power_epoch.load();
                 if (reset_ok) {
                     boot_reset = false;
+                    NotifyBootResetDone();
                 }
             }
             if (reset_ok) {
@@ -167,6 +175,7 @@ void ModeWorker(void*) {
             // 同一电源周期失败后不因轮询重新启动一轮重试。
             s_completed_epoch.store(epoch);
         }
+        NotifyBootResetDone();
         s_requested.store(false);
         if (!success) {
             ESP_LOGE(TAG, "Audio mode unavailable after initialization");
@@ -190,18 +199,23 @@ void MetalioAudio_RequestModeInit() {
     }
 }
 
-void MetalioAudio_Init() {
+void MetalioAudio_Init(void (*on_boot_reset_done)()) {
+    s_boot_reset_done = on_boot_reset_done;
     epd_board_metalio_eink4_plus_pa_set(false);
     auto& uart = SimpleUart::getInstance();
     if (!uart.begin(BT_AUDIO_TX_PIN, BT_AUDIO_RX_PIN, 115200, UART_NUM_1)) {
+        s_completed_epoch.store(s_power_epoch.load());
         ESP_LOGE(TAG, "BT UART initialization failed");
+        NotifyBootResetDone();
         return;
     }
     uart.registerObserver(OnUartData);
     TaskHandle_t worker = nullptr;
     if (xTaskCreatePinnedToCoreWithCaps(ModeWorker, "bt_mode_init", 4096, nullptr, 5, &worker, 0,
                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        s_completed_epoch.store(s_power_epoch.load());
         ESP_LOGE(TAG, "Audio mode worker creation failed");
+        NotifyBootResetDone();
         return;
     }
     s_worker.store(worker);
@@ -220,17 +234,19 @@ void MetalioAudio_OnPowerRestored() {
     s_powered.store(true);
 }
 
-bool MetalioAudio_WaitModeReady(int timeout_ms) {
+bool MetalioAudio_WaitModeReady(int timeout_ms, std::function<bool()> still_needed) {
+    if (still_needed && !still_needed()) return false;
     MetalioAudio_RequestModeInit();
     const int64_t deadline = esp_timer_get_time() + int64_t(timeout_ms > 0 ? timeout_ms : 0) * 1000;
     while (!MetalioAudio_ModeReady()) {
+        if (still_needed && !still_needed()) return false;
         if (!s_worker.load() || s_completed_epoch.load() == s_power_epoch.load() || esp_timer_get_time() >= deadline) {
             return false;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
         MetalioAudio_RequestModeInit();
     }
-    return true;
+    return !still_needed || still_needed();
 }
 
 bool MetalioAudio_EnsureStarted() {
@@ -252,6 +268,14 @@ bool MetalioAudio_EnsureStarted() {
 
 bool MetalioAudio_ModeReady() {
     return s_powered.load() && s_ready_epoch.load() == s_power_epoch.load();
+}
+
+MetalioAudioState MetalioAudio_GetState() {
+    if (!s_powered.load()) return MetalioAudioState::NotReady;
+    const unsigned epoch = s_power_epoch.load();
+    if (s_ready_epoch.load() == epoch) return MetalioAudioState::Ready;
+    if (s_completed_epoch.load() == epoch) return MetalioAudioState::Failed;
+    return s_requested.load() ? MetalioAudioState::Initializing : MetalioAudioState::NotReady;
 }
 
 void MetalioAudio_SetPa(bool on) {

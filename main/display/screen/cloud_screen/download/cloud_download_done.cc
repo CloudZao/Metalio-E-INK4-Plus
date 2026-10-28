@@ -12,7 +12,6 @@
 
 #include "assets/lang_config.h"
 #include "reader/reader.h"
-#include "application.h"
 
 int FindItemIndexByTaskId(const char* key) {
     if (key == nullptr || key[0] == '\0') {
@@ -60,7 +59,8 @@ void EraseItemAt(int idx) {
 void ScheduleBatchContinueSoon(const char* why) {
     ESP_LOGI(TAG, "batch continue scheduled (%s)", why != nullptr ? why : "");
     const uint32_t gen = Cloud_State().xfer.op_generation;
-    Application::GetInstance().Schedule([gen]() {
+    if (!ScreenLvAsync([](void* context) {
+        const auto gen = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(context));
         if (!OpStillValid(gen)) return;
         lv_timer_t* t = lv_timer_create(
             [](lv_timer_t* timer) {
@@ -80,7 +80,10 @@ void ScheduleBatchContinueSoon(const char* why) {
             return;
         }
         lv_timer_set_repeat_count(t, 1);
-    });
+    }, reinterpret_cast<void*>(static_cast<uintptr_t>(gen)))) {
+        ESP_LOGW(TAG, "batch continue UI queue full");
+        ContinueBatchSaveIfNeeded();
+    }
 }
 
 void AsyncDownloadDone(void* user_data) {

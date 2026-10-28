@@ -70,6 +70,7 @@ void AsyncLayoutDone(void* user_data) {
         st.reader.layout_hint_done_until_us = 0;
         StopLayoutHintTimer();
         UpdateReadFooter();
+        RequestRenderReaderPage();
         return;
     }
 

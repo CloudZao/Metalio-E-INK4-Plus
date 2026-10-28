@@ -48,7 +48,7 @@ extern bool touch_asleep;                    // 触摸芯片是否已写深睡
 extern int idle_cpu_mhz;                     // AppIdle 目标 CPU MHz
 extern int queued_cpu_mhz;                   // 最近投递/应用的目标 MHz；0=未知
 extern int idle_to_standby_sec;              // 无操作满此时长（秒）→ 待机页
-extern int net_grace_sec;                    // 断网前暂留（秒）
+extern int net_grace_sec;                    // 断网前暂留（秒）；0=永不因空闲断网
 extern int standby_to_shutdown_sec;          // 待机浅睡累计满此时长（秒）→ 关机；0=永不
 extern int64_t last_user_activity_us;        // 最近用户活动时间戳
 extern int64_t standby_elapsed_us;           // 已闭合的待机时长（清醒段+已完成浅睡段）
@@ -88,6 +88,8 @@ const char* ModeName(Mode m);
 void ReevaluateLocked();
 /** @brief 释放锁后投递/执行待改 CPU 频，并执行待 Pause/Resume WiFi */
 void FlushCpuFreqOutsideLock();
+/** @brief 查询是否仍有网络或共享电源操作等待执行或正在收尾 */
+bool HasPendingHardwareWork();
 /** @brief 持锁登记目标 CPU MHz（同值跳过） */
 void QueueCpuMhzLocked(int mhz);
 /** @brief 持锁发起硬关机（幂等） */

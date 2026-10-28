@@ -5,8 +5,6 @@
 #include "network_keyboard.h"
 #include "network_wifi.h"
 #include "network_list.h"
-#include "network_screen/network_screen_priv.h"
-
 #include "application.h"
 #include "assets/lang_config.h"
 #include "fontpack_lvgl.h"
@@ -31,6 +29,10 @@ NetworkUiState& Network_State() {
 }
 
 void Network_CloseStatusOverlay() {
+    if (Network_State().fail_close_timer != nullptr) {
+        lv_timer_delete(Network_State().fail_close_timer);
+        Network_State().fail_close_timer = nullptr;
+    }
     if (Network_State().ui.status_overlay != nullptr && lv_obj_is_valid(Network_State().ui.status_overlay)) {
         lv_obj_delete(Network_State().ui.status_overlay);
     }
@@ -45,7 +47,9 @@ void Network_OpenStatusOverlay(const char* msg) {
     Network_CloseStatusOverlay();
     lv_obj_t* mask = lv_obj_create(Network_State().ui.screen);
     Network_Strip(mask);
-    lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_size(mask, Network_State().transfer_mode ? LV_PCT(100) : LV_HOR_RES,
+                    Network_State().transfer_mode ? LV_PCT(100) : LV_VER_RES);
+    lv_obj_add_flag(mask, LV_OBJ_FLAG_FLOATING);
     lv_obj_set_pos(mask, 0, 0);
     ScreenApplyDotBackdrop(mask);
     lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
@@ -53,7 +57,9 @@ void Network_OpenStatusOverlay(const char* msg) {
 
     lv_obj_t* card = lv_obj_create(mask);
     Network_Strip(card);
-    lv_obj_set_size(card, LV_HOR_RES - kOverlayCardMargin, LV_SIZE_CONTENT);
+    const lv_coord_t width = Network_State().transfer_mode ?
+        lv_obj_get_content_width(Network_State().ui.screen) : LV_HOR_RES;
+    lv_obj_set_size(card, width - kOverlayCardMargin, LV_SIZE_CONTENT);
     lv_obj_set_style_min_height(card, kOverlayCardMinH, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -119,17 +125,20 @@ void Network_OpenRestartCountdown(const std::string& headline) {
 void Network_OnScreenUnload(lv_event_t* /*e*/) {
     ESP_LOGI(TAG, "unload");
     Network_State().screen_active = false;
+    Network_State().generation.fetch_add(1);
+    if (Network_State().transfer_scan_timer) {
+        lv_timer_delete(Network_State().transfer_scan_timer);
+        Network_State().transfer_scan_timer = nullptr;
+    }
+    Network_State().transfer_scan_pending = false;
+    Network_State().transfer_scan_message.clear();
     if (Network_State().restart_timer != nullptr) {
         lv_timer_delete(Network_State().restart_timer);
         Network_State().restart_timer = nullptr;
     }
-    if (Network_State().fail_close_timer != nullptr) {
-        lv_timer_delete(Network_State().fail_close_timer);
-        Network_State().fail_close_timer = nullptr;
-    }
     Network_ClosePasswordPage();
     Network_CloseStatusOverlay();
-    Network_WifiTeardownForScreen();
+    Network_StopForScreen();
     Network_ReleaseUiKeepNet();
     for (int i = 0; i < kKbKeysCap; ++i) {
         Network_State().kb_keys[i] = nullptr;
@@ -307,6 +316,11 @@ void Network_StyleScanBtn(bool enabled) {
 }
 
 lv_obj_t* NetworkScreen::Create() {
+    CloseTransfer();
+    Network_State().generation.fetch_add(1);
+    Network_State().transfer_mode = false;
+    Network_State().retry_ssid.clear();
+    Network_State().transfer_info = {};
     Network_State().screen_active = true;
     Network_State().scan_in_progress = false;
     Network_State().connect_in_progress = false;
@@ -411,6 +425,62 @@ lv_obj_t* NetworkScreen::Create() {
     return scr;
 }
 
+void NetworkScreen::BuildTransfer(lv_obj_t* parent) {
+    auto& st = Network_State();
+    if (st.screen_active || parent == nullptr) return;
+    st.generation.fetch_add(1);
+    st.transfer_mode = true;
+    st.transfer_info = {};
+    st.transfer_scan_pending = false;
+    st.transfer_scan_message.clear();
+    st.retry_ssid.clear();
+    st.scan_results.clear();
+    st.nearby_page = 0;
+    st.saved_page = 0;
+    st.tab = Tab::kNearby;
+    st.scan_in_progress = false;
+    st.connect_in_progress = false;
+    st.ui = {};
+    st.ui.screen = parent;
+    st.screen_active = true;
+
+    lv_obj_t* body = lv_obj_create(parent);
+    Network_Strip(body);
+    st.ui.list_panel = body;
+    lv_obj_set_size(body, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_pad_all(body, kBodyPad, 0);
+    lv_obj_set_style_pad_bottom(body, kBodyPad / 4, 0);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(body, kBodyRowGap, 0);
+    st.ui.status_lbl = lv_label_create(body);
+    lv_obj_set_width(st.ui.status_lbl, LV_PCT(100));
+    lv_label_set_long_mode(st.ui.status_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(st.ui.status_lbl, Network_UiFont(), 0);
+    lv_label_set_text(st.ui.status_lbl, "");
+    lv_obj_add_flag(st.ui.status_lbl, LV_OBJ_FLAG_HIDDEN);
+
+    st.ui.list = lv_obj_create(body);
+    Network_Strip(st.ui.list);
+    lv_obj_set_width(st.ui.list, LV_PCT(100));
+    lv_obj_set_height(st.ui.list, 0);
+    lv_obj_set_flex_grow(st.ui.list, 1);
+    lv_obj_set_flex_flow(st.ui.list, LV_FLEX_FLOW_COLUMN);
+    Network_BuildPasswordPage(parent, 0);
+    lv_obj_set_size(st.ui.pwd_page, LV_PCT(100), LV_PCT(100));
+    lv_obj_add_flag(st.ui.pwd_page, LV_OBJ_FLAG_FLOATING);
+    Network_ScheduleScan();
+    Network_RebuildListPage();
+}
+
+void NetworkScreen::CloseTransfer() {
+    auto& st = Network_State();
+    if (!st.transfer_mode || !st.screen_active) return;
+    lv_obj_t* parent = st.ui.screen;
+    Network_OnScreenUnload(nullptr);
+    st.transfer_mode = false;
+    if (parent != nullptr && lv_obj_is_valid(parent)) lv_obj_clean(parent);
+}
+
 bool NetworkScreen::OnVkKey(const char* key_name) {
     if (key_name == nullptr || !Network_ScreenAlive()) {
         return false;
@@ -440,6 +510,9 @@ bool NetworkScreen::OnVkKey(const char* key_name) {
             return true;
         }
         return true;  // 密码页吞掉翻页键
+    }
+    if (Network_State().transfer_mode) {
+        return std::strcmp(key_name, "vk_next") == 0;
     }
     if (std::strcmp(key_name, "vk_prev") == 0) {
         if (Network_State().tab == Tab::kNearby) {

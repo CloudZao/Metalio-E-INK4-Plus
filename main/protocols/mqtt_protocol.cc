@@ -22,9 +22,11 @@ MqttProtocol::MqttProtocol() {
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateIdle) {
                 ESP_LOGI(TAG, "Reconnecting to MQTT server");
-                app.Schedule([protocol, alive = protocol->alive_]() {
+                if (!app.Schedule([protocol, alive = protocol->alive_]() {
                     if (alive->load()) protocol->StartMqttClient(false);
-                });
+                }) && esp_timer_start_once(protocol->reconnect_timer_, MQTT_RECONNECT_INTERVAL_MS * 1000) != ESP_OK) {
+                    ESP_LOGW(TAG, "MQTT reconnect retry failed");
+                }
             }
         },
         .arg = this,

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <atomic>
 
 #include <esp_event.h>
 #include <esp_timer.h>
@@ -29,6 +30,10 @@ public:
     void AddAuth(const std::string &&ssid, const std::string &&password);
     void Start();
     void Stop();
+    /** @brief 设置并保存 Wi-Fi 用户开关；关闭后禁止后台自动恢复，保存失败时不切换 */
+    esp_err_t SetUserEnabled(bool enabled);
+    /** @brief 查询用户是否允许启用 Wi-Fi，重启后恢复上次设置，未设置时允许 */
+    bool IsUserEnabled() const { return user_enabled_.load(); }
     /**
      * @brief 待机浅睡：只停射频，保留 netif/事件，避免反复 destroy/create
      */
@@ -78,7 +83,8 @@ private:
     esp_event_handler_instance_t instance_any_id_ = nullptr;
     esp_event_handler_instance_t instance_got_ip_ = nullptr;
     esp_netif_t* station_netif_ = nullptr;
-    bool lp_paused_ = false;
+    std::atomic<bool> lp_paused_{false}; // 跨任务阻止暂停或停止后的后台连接
+    std::atomic<bool> user_enabled_{true}; // 用户手动关闭优先于自动联网及待机恢复
     bool fast_reconnect_on_start_ = false; // LP resume：STA_START 直 connect，跳过扫网
     bool scanning_ = false; // 扫网中（未连上时相对关联/重连）
     std::string ssid_;

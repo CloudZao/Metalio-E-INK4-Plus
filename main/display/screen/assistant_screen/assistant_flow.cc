@@ -219,7 +219,7 @@ bool Assistant_ReplaceYunxinSpeech(FlowList&& chunk) {
 }
 
 void CoalesceTimerCb(void* /*arg*/) {
-    Application::GetInstance().Schedule([]() {
+    if (!Application::GetInstance().Schedule([]() {
         FlowList chunk;
         {
             if (!Assistant_State().stream.coalesce_pending) {
@@ -233,7 +233,14 @@ void CoalesceTimerCb(void* /*arg*/) {
             return;
         }
         Assistant_AppendFlowAndShow(std::move(chunk), false);
-    });
+    })) {
+        // 保留合并缓存，队列暂满时重试最后一段回复的显示。
+        auto* timer = Assistant_State().stream.coalesce_timer;
+        if (timer != nullptr && AssistantScreen::IsActive() &&
+            esp_timer_start_once(timer, kStreamCoalesceUs) != ESP_OK) {
+            ESP_LOGW(TAG, "coalesced text retry failed");
+        }
+    }
 }
 
 bool EnsureCoalesceTimer() {

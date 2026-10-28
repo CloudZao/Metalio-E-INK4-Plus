@@ -1,4 +1,5 @@
 #include "book_library.h"
+#include "sd_paths.h"
 
 #include <algorithm>
 #include <cctype>
@@ -72,7 +73,7 @@ bool AppendBooksFromDir(const char* dir, int depth, std::vector<BookInfo>& out) 
         if (ent == nullptr) {
             break;
         }
-        if (ent->d_name[0] == '.') {
+        if (ent->d_name[0] == '.' || !SdIsValidFileName(ent->d_name)) {
             continue;
         }
 
@@ -259,7 +260,7 @@ bool ScanBookDirListing(const char* dir, std::vector<BookDirEntry>& out) {
         if (ent == nullptr) {
             break;
         }
-        if (ent->d_name[0] == '.') {
+        if (ent->d_name[0] == '.' || !SdIsValidFileName(ent->d_name)) {
             continue;
         }
         if ((++entries_seen & 15u) == 0u) {

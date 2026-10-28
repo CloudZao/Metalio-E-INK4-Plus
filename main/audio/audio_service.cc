@@ -215,6 +215,7 @@ void AudioService::Start() {
 }
 
 void AudioService::Stop() {
+    StopPcmCapture();
     if (service_stopped_ && !audio_input_task_handle_ && !audio_output_task_handle_ && !opus_codec_task_handle_) {
         if (codec_) codec_->ReleaseHardware();
         return;
@@ -265,6 +266,8 @@ void AudioService::Stop() {
         vTaskDelete(opus_codec_task_handle_);
     }
     audio_input_task_handle_ = audio_output_task_handle_ = opus_codec_task_handle_ = nullptr;
+    // 编解码可能在首次清队列后完成最后一帧，线程退出后统一归还尾包。
+    FlushQueues();
     if (codec_) codec_->ReleaseHardware();
 
     // input 已停后再拆 AFE，避免 Feed 撞已释放实例
@@ -352,7 +355,7 @@ void AudioService::ParkStoppedTask(EventBits_t bit) {
 void AudioService::AudioInputTask() {
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
-            AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING,
+            AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING | AS_EVENT_PCM_CAPTURE_RUNNING,
             pdFALSE, pdFALSE, portMAX_DELAY);
 
         if (service_stopped_) {
@@ -361,6 +364,29 @@ void AudioService::AudioInputTask() {
         if (audio_input_need_warmup_) {
             audio_input_need_warmup_ = false;
             vTaskDelay(pdMS_TO_TICKS(120));
+            continue;
+        }
+
+        if (bits & AS_EVENT_PCM_CAPTURE_RUNNING) {
+            uint32_t generation;
+            int samples;
+            {
+                std::lock_guard<std::mutex> feed_lock(pcm_feed_mutex_);
+                if (service_stopped_ || !(xEventGroupGetBits(event_group_) & AS_EVENT_PCM_CAPTURE_RUNNING)) continue;
+                generation = pcm_capture_generation_.load();
+                samples = capture_processor_->GetFeedSize();
+            }
+            std::vector<int16_t> data;
+            if (samples <= 0 || !ReadAudioData(data, 16000, samples)) {
+                FailPcmCapture(generation);
+                continue;
+            }
+            // 复用直通处理器提取麦克风通道，不经过原有 Opus 发送路径。
+            std::lock_guard<std::mutex> feed_lock(pcm_feed_mutex_);
+            if (!service_stopped_ && generation == pcm_capture_generation_.load() &&
+                (xEventGroupGetBits(event_group_) & AS_EVENT_PCM_CAPTURE_RUNNING)) {
+                capture_processor_->Feed(std::move(data));
+            }
             continue;
         }
 
@@ -602,13 +628,17 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
 
 bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    if (!packet || service_stopped_) return false;
     if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
         if (wait) {
-            audio_queue_cv_.wait(lock, [this]() { return audio_decode_queue_.size() < MAX_DECODE_PACKETS_IN_QUEUE; });
+            audio_queue_cv_.wait(lock, [this]() {
+                return service_stopped_ || audio_decode_queue_.size() < MAX_DECODE_PACKETS_IN_QUEUE;
+            });
         } else {
             return false;
         }
     }
+    if (service_stopped_) return false;
     audio_decode_queue_.push_back(std::move(packet));
     audio_queue_cv_.notify_all();
     return true;
@@ -804,7 +834,7 @@ void AudioService::PlaySound(const std::string_view& ogg) {
             packet->frame_duration = 60;
             packet->payload.resize(pkt_len);
             std::memcpy(packet->payload.data(), pkt_ptr, pkt_len);
-            PushPacketToDecodeQueue(std::move(packet), true);
+            if (!PushPacketToDecodeQueue(std::move(packet), true)) return;
         }
 
         offset = body_off + body_size;

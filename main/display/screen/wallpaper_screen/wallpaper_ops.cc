@@ -25,8 +25,8 @@ struct EnableWork {
     uint32_t epoch = 0;
     bool for_standby = false;
     bool clear = false;
-    char path[192] = {};
-    char name[96] = {};
+    char path[SD_FILE_PATH_CAPACITY] = {};
+    char name[SD_FILE_NAME_CAPACITY] = {};
 };
 
 struct EnableResultMsg {
@@ -34,7 +34,7 @@ struct EnableResultMsg {
     bool ok = false;
     bool for_standby = false;
     char err[80] = {};
-    char name[96] = {};
+    char name[SD_FILE_NAME_CAPACITY] = {};
 };
 
 void ApplyEnableAsync(void* p) {
@@ -168,8 +168,8 @@ void OnEnableStandbyClicked(lv_event_t* /*e*/) {
 
 struct DeleteWork {
     uint32_t epoch = 0;
-    char path[192] = {};
-    char name[96] = {};
+    char path[SD_FILE_PATH_CAPACITY] = {};
+    char name[SD_FILE_NAME_CAPACITY] = {};
 };
 
 struct DeleteResultMsg {

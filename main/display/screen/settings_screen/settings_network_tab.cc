@@ -13,9 +13,11 @@
 #include "network_screen/network_screen.h"
 
 
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 
 #include <esp_log.h>
@@ -51,8 +53,7 @@ struct NetworkUi {
 NetworkUi s_ui;
 bool s_sim_switch_pending = false;
 // LVGL worker 栈在 PSRAM：UI 路径只碰 RAM 缓存；NVS 在 Schedule / FreeRTOS 任务里做。
-int s_cached_sim_slot = kSimSlotExternal;
-bool s_sim_slot_ready = false;
+std::atomic<int> s_cached_sim_slot{kSimSlotExternal}; // UI、存储和 SIM 切换任务共享的槽位快照
 bool s_tab_alive = false;
 
 DualNetworkBoard* GetDualBoard() {
@@ -90,7 +91,6 @@ int GetCachedSimSlot() {
 
 void SetCachedSimSlot(int slot) {
     s_cached_sim_slot = (slot == kSimSlotInternal) ? kSimSlotInternal : kSimSlotExternal;
-    s_sim_slot_ready = true;
 }
 
 void PersistSimSlotToNvs(int slot) {
@@ -100,7 +100,7 @@ void PersistSimSlotToNvs(int slot) {
 }
 
 void SchedulePersistSimSlot(int slot) {
-    Application::GetInstance().Schedule([slot]() { PersistSimSlotToNvs(slot); });
+    Application::GetInstance().Schedule([slot]() { PersistSimSlotToNvs(slot); }, Application::TaskDomain::Storage);
 }
 
 const char* SimSlotName(int slot) {
@@ -455,61 +455,54 @@ struct SimSwitchCtx {
 };
 
 void SimSwitchTask(void* arg) {
-    auto* ctx = static_cast<SimSwitchCtx*>(arg);
-    auto* result = new SimSwitchResultMsg{};
-    result->target_slot = ctx->target_slot;
-    result->success = false;
+    {
+        std::unique_ptr<SimSwitchCtx> ctx(static_cast<SimSwitchCtx*>(arg));
+        auto* result = new SimSwitchResultMsg{};
+        result->target_slot = ctx->target_slot;
+        result->success = false;
+        auto* nt26 = GetNt26Board();
+        std::string resp;
+        const auto run_at = [nt26](const std::string& cmd, std::string& response, uint32_t timeout_ms) {
+            response.clear();
+            return nt26->SendAtCommand(cmd, response, timeout_ms, true);
+        };
+        do {
+            if (nt26 == nullptr) {
+                result->detail = Lang::Strings::SETTINGS_NET_NO_4G;
+                break;
+            }
+            PostSimProgress(Lang::Strings::SETTINGS_NET_CFUN0);
+            if (run_at("AT+CFUN=0", resp, 8000) != ESP_OK || resp.find("OK") == std::string::npos) {
+                result->detail = Lang::Strings::SETTINGS_NET_CFUN0_FAIL;
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
 
-    Nt26Board* nt26 = GetNt26Board();
-    if (nt26 == nullptr) {
-        result->detail = Lang::Strings::SETTINGS_NET_NO_4G;
+            char cmd[64];
+            snprintf(cmd, sizeof(cmd), "AT+ECSIMCFG=SimSlot,%d", ctx->target_slot);
+            char prog[96];
+            snprintf(prog, sizeof(prog), Lang::Strings::SETTINGS_NET_SWITCH_SIM_FMT, SimSlotName(ctx->target_slot), cmd);
+            PostSimProgress(prog);
+            if (run_at(cmd, resp, 5000) != ESP_OK || resp.find("OK") == std::string::npos) {
+                std::string recovery;
+                run_at("AT+CFUN=1", recovery, 10000);
+                result->detail = Lang::Strings::SETTINGS_NET_ECSIMCFG_FAIL;
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+
+            PostSimProgress(Lang::Strings::SETTINGS_NET_CFUN1);
+            if (run_at("AT+CFUN=1", resp, 15000) != ESP_OK || resp.find("OK") == std::string::npos) {
+                result->detail = Lang::Strings::SETTINGS_NET_CFUN1_FAIL;
+                break;
+            }
+            SetCachedSimSlot(ctx->target_slot);
+            PersistSimSlotToNvs(ctx->target_slot);
+            result->success = true;
+        } while (false);
         PostSimSwitchDone(result);
-        delete ctx;
-        vTaskDelete(nullptr);
-        return;
     }
-
-    auto run_at = [&](const std::string& cmd, std::string& resp, uint32_t timeout_ms) {
-        resp.clear();
-        esp_err_t e = nt26->SendAtCommand(cmd, resp, timeout_ms, true);
-        return e;
-    };
-
-    PostSimProgress(Lang::Strings::SETTINGS_NET_CFUN0);
-    std::string resp;
-    if (run_at("AT+CFUN=0", resp, 8000) != ESP_OK || resp.find("OK") == std::string::npos) {
-        result->detail = Lang::Strings::SETTINGS_NET_CFUN0_FAIL;
-        PostSimSwitchDone(result);
-        delete ctx;
-        vTaskDelete(nullptr);
-        return;
-    }
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    char cmd[64];
-    snprintf(cmd, sizeof(cmd), "AT+ECSIMCFG=SimSlot,%d", ctx->target_slot);
-    char prog[96];
-    snprintf(prog, sizeof(prog), Lang::Strings::SETTINGS_NET_SWITCH_SIM_FMT, SimSlotName(ctx->target_slot), cmd);
-    PostSimProgress(prog);
-    if (run_at(cmd, resp, 5000) != ESP_OK || resp.find("OK") == std::string::npos) {
-        std::string tmp;
-        run_at("AT+CFUN=1", tmp, 10000);
-        result->detail = Lang::Strings::SETTINGS_NET_ECSIMCFG_FAIL;
-        PostSimSwitchDone(result);
-        delete ctx;
-        vTaskDelete(nullptr);
-        return;
-    }
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    PostSimProgress(Lang::Strings::SETTINGS_NET_CFUN1);
-    run_at("AT+CFUN=1", resp, 15000);
-
-    SetCachedSimSlot(ctx->target_slot);
-    PersistSimSlotToNvs(ctx->target_slot);
-    result->success = true;
-    PostSimSwitchDone(result);
-    delete ctx;
+    // FreeRTOS 删除任务不展开 C++ 栈，先归还参数及命令字符串。
     vTaskDelete(nullptr);
 }
 
@@ -574,7 +567,7 @@ void ScheduleLoadSimSlotFromNvs() {
         ESP_LOGI(TAG, "sim_slot loaded from NVS: %d", GetCachedSimSlot());
         // Application 任务非 LVGL：须 ScreenLvAsync，否则与删屏竞态会搞坏 async 链表
         ScreenLvAsync(AsyncRefreshSimUi);
-    });
+    }, Application::TaskDomain::Storage);
 }
 
 void BuildWifiConfigSection(lv_obj_t* page) {

@@ -116,13 +116,12 @@ void McpServer::AddUserOnlyTools() {
         PropertyList(),
         [this](const PropertyList& properties) -> ReturnValue {
             auto& app = Application::GetInstance();
-            app.Schedule([&app]() {
+            return app.Schedule([&app]() {
                 ESP_LOGW(TAG, "User requested reboot");
                 vTaskDelay(pdMS_TO_TICKS(1000));
 
                 app.Reboot();
             });
-            return true;
         });
 
     // Firmware upgrade
@@ -134,7 +133,7 @@ void McpServer::AddUserOnlyTools() {
             auto url = properties["url"].value<std::string>();
             
             auto& app = Application::GetInstance();
-            app.Schedule([url, &app]() {
+            return app.Schedule([url, &app]() {
                 auto ota = std::make_unique<Ota>();
                 
                 bool success = app.UpgradeFirmware(*ota, url);
@@ -143,7 +142,6 @@ void McpServer::AddUserOnlyTools() {
                 }
             });
             
-            return true;
         });
 
     // Display control
@@ -529,14 +527,16 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
         return;
     }
 
-    // Use main thread to call the tool
+    // 工具调用在语音工作任务中串行执行。
     auto& app = Application::GetInstance();
-    app.Schedule([this, id, tool_iter, arguments = std::move(arguments)]() {
+    if (!app.Schedule([this, id, tool_iter, arguments = std::move(arguments)]() {
         try {
             ReplyResult(id, (*tool_iter)->Call(arguments));
         } catch (const std::exception& e) {
             ESP_LOGE(TAG, "tools/call: %s", e.what());
             ReplyError(id, e.what());
         }
-    });
+    })) {
+        ReplyError(id, "Device is busy. Please retry.");
+    }
 }

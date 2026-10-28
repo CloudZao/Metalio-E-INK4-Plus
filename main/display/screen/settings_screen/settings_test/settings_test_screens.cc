@@ -133,7 +133,11 @@ lv_obj_t* SettingsTestAutoScreen::Create() {
         bool discharging = false;
         const bool ok = Bq27220Gauge::GetInstance().GetBatteryLevel(level, charging, discharging);
         char d[32];
-        std::snprintf(d, sizeof(d), "%d%%", level);
+        if (ok) {
+            std::snprintf(d, sizeof(d), "%d%%", level);
+        } else {
+            std::snprintf(d, sizeof(d), "--");
+        }
         set_row("BQ27220", ok, d);
     }
 

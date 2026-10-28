@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <new>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <freertos/task.h>
@@ -211,15 +212,9 @@ void OnWpMultiSelectAll(lv_event_t* /*e*/) {
     RequestWpCheckMarksPaint();
 }
 
-struct BatchDeleteItem {
-    char path[192] = {};
-    char name[96] = {};
-};
-
 struct BatchDeleteWork {
     uint32_t epoch = 0;
-    int n = 0;
-    BatchDeleteItem items[kMaxItems]{};
+    std::vector<std::string> names; // 本次选中的完整文件名，不限制数量
 };
 
 struct BatchDeleteResultMsg {
@@ -249,15 +244,24 @@ void ApplyBatchDeleteAsync(void* p) {
 
 void BatchDeleteTask(void* arg) {
     auto* work = static_cast<BatchDeleteWork*>(arg);
-    auto* msg = new BatchDeleteResultMsg{};
+    auto* msg = new (std::nothrow) BatchDeleteResultMsg{};
+    if (msg == nullptr) {
+        delete work;
+        Wallpaper_State().workers.delete_busy.store(false);
+        Wallpaper_State().workers.delete_task = nullptr;
+        vTaskDelete(nullptr);
+        return;
+    }
     if (work != nullptr) {
         msg->epoch = work->epoch;
-        for (int i = 0; i < work->n; ++i) {
+        for (const auto& name : work->names) {
             std::string err;
-            if (DeleteWallpaperFileOnSd(work->items[i].path, work->items[i].name, err)) {
+            char path[sizeof(FileEntry::path)];
+            std::snprintf(path, sizeof(path), "%s/%s", kPosixDir, name.c_str());
+            if (DeleteWallpaperFileOnSd(path, name.c_str(), err)) {
                 ++msg->deleted;
             } else {
-                ESP_LOGW(TAG, "batch delete fail %s: %s", work->items[i].name, err.c_str());
+                ESP_LOGW(TAG, "batch delete fail %s: %s", name.c_str(), err.c_str());
             }
         }
         delete work;
@@ -281,17 +285,27 @@ void OnWpMultiRemove(lv_event_t* /*e*/) {
     if (Wallpaper_State().workers.delete_busy.exchange(true)) {
         return;
     }
-    auto* work = new BatchDeleteWork{};
-    work->epoch = Wallpaper_State().epoch;
-    for (int i = 0; i < static_cast<int>(Wallpaper_State().list.files.size()) && work->n < kMaxItems; ++i) {
-        if (i >= static_cast<int>(Wallpaper_State().list.selected.size()) || Wallpaper_State().list.selected[static_cast<size_t>(i)] == 0) {
-            continue;
-        }
-        auto& it = work->items[work->n++];
-        std::snprintf(it.path, sizeof(it.path), "%s", Wallpaper_State().list.files[static_cast<size_t>(i)].path);
-        std::snprintf(it.name, sizeof(it.name), "%s", Wallpaper_State().list.files[static_cast<size_t>(i)].name);
+    auto* work = new (std::nothrow) BatchDeleteWork{};
+    if (work == nullptr) {
+        Wallpaper_State().workers.delete_busy.store(false);
+        return;
     }
-    if (work->n <= 0) {
+    work->epoch = Wallpaper_State().epoch;
+    try {
+        work->names.reserve(static_cast<size_t>(WpSelectedCount()));
+        for (int i = 0; i < static_cast<int>(Wallpaper_State().list.files.size()); ++i) {
+            if (i >= static_cast<int>(Wallpaper_State().list.selected.size()) || Wallpaper_State().list.selected[static_cast<size_t>(i)] == 0) {
+                continue;
+            }
+            work->names.emplace_back(Wallpaper_State().list.files[static_cast<size_t>(i)].name);
+        }
+    } catch (const std::bad_alloc&) {
+        delete work;
+        Wallpaper_State().workers.delete_busy.store(false);
+        ESP_LOGW(TAG, "batch delete allocation failed");
+        return;
+    }
+    if (work->names.empty()) {
         delete work;
         Wallpaper_State().workers.delete_busy.store(false);
         return;

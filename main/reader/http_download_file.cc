@@ -1,3 +1,4 @@
+#include "assets/lang_screen.h"
 #include "http_download_file.h"
 
 // xtensa-g++：本文件在 -Os 下曾 ICE

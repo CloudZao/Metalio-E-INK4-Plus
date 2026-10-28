@@ -187,8 +187,6 @@ struct BookUiState {
         bool bookmark_multi=false;
         std::vector<uint32_t> bookmark_selected;
         std::string bookmark_ui_path;
-        bool reader_light_page = false; // independent top frontlight panel
-        lv_obj_t* reader_light_panel = nullptr;
         bool reader_sheet_scrolling = false;
         bool reader_eye_mode = false;
         int reader_eye_previous_cct = 3; // FrontlightCct::kOff
@@ -236,7 +234,7 @@ struct BookUiState {
         std::vector<std::string> ttf_files;
         int ttf_page = 0;
         std::string ttf_pick;      // 选中的字体文件名（fonts_ttf 内）
-        int ttf_size_px = 25;      // 确认页步进器：20–40，默认 25；只输出一档
+        int ttf_size_px = 40;      // 确认页步进器：20–80，默认 40；只输出一档
         bool ttf_result_ok = false;
         lv_obj_t* sheet_font_import = nullptr; // 字体标题行右侧「导入 TTF」
         lv_obj_t* ttf_sheet = nullptr;
@@ -252,6 +250,7 @@ struct BookUiState {
         lv_obj_t* ttf_size_dec = nullptr;
         lv_obj_t* ttf_size_inc = nullptr;
         lv_timer_t* ttf_poll_timer = nullptr;
+        int64_t ttf_progress_ui_us = 0; // 上次转换进度界面更新时间
     } ttf;
 
     struct Tap {

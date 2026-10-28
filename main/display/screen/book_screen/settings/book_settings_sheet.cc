@@ -15,6 +15,7 @@
 #include "book_screen/reader/book_layout_worker.h"
 #include "book_screen/reader/book_reader_prefs.h"
 #include "book_screen/reader/book_auto_turn.h"
+#include "book_screen/reader/book_reader_orient.h"
 #include "book_screen/book_text_util.h"
 #include "book_screen/reader/book_toc_footer.h"
 #include "book_screen/book_nav.h"
@@ -266,21 +267,19 @@ void OnSheetOrientMode(lv_event_t* e) {
         return;
     }
     const int mode = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if (mode < 0 || mode >= kBookReaderOrientCount) {
+    if (mode < kBookReaderOrientAuto || mode >= kBookReaderOrientCount) {
         return;
     }
     if (BookReaderPrefsOrient() == mode) {
         return;
     }
-    HideReadLightPanel();
     BookReaderPrefsSetOrient(mode);
-    DisplayUiSetOrient(mode);
-    ApplyReaderChromeSize();
-    if (auto* disp = LVAdapterDisplay::Instance()) {
-        disp->RequestFullOnNextCommit();
+    SyncReaderAutoOrient();
+    if (mode == kBookReaderOrientAuto || mode == DisplayUiGetOrient()) {
+        RequestSettingsSheetPaint();
+    } else {
+        ApplyReaderOrient(mode);
     }
-    RebuildSettingsSheet();
-    ApplyReaderLayoutLive(false);
 }
 
 void OnSheetUnderlineMode(lv_event_t* e) {
@@ -338,8 +337,7 @@ static std::vector<SheetBinding> s_sheet_bindings;
 static lv_obj_t* s_auto_turn_value = nullptr;
 static int s_auto_turn_seconds = 10;
 static bool s_auto_turn_adjusting = false;
-static lv_obj_t *s_live_body=nullptr,*s_brightness_slider=nullptr;
-static lv_obj_t* s_light_brightness_value = nullptr;
+static lv_obj_t* s_live_body=nullptr;
 static lv_obj_t *s_bookmark_button=nullptr,*s_bookmark_icon=nullptr,*s_duration_value=nullptr,*s_progress_value=nullptr,*s_progress_slider=nullptr,*s_chapter_prev=nullptr,*s_chapter_next=nullptr;
 static int s_live_tab=-1,s_live_width=0,s_live_height=0;
 static lv_coord_t SheetNavHeight() {
@@ -431,48 +429,6 @@ static void SheetPreset(lv_event_t* e) {
     else BookReaderPrefsSetSpacingPreset(encoded - 10);
     RequestSettingsSheetPaint();
     ScheduleLayoutApply(false);
-}
-static void SheetLightOpen(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    HideReadLightPanel();
-    RebuildSettingsSheet();
-}
-static void PersistSheetBrightness(void* data) {
-    Settings settings(kFlNvsNs, true);
-    settings.SetInt("brightness", static_cast<int>(reinterpret_cast<intptr_t>(data)));
-    vTaskDelete(nullptr);
-}
-static void SheetBrightness(lv_event_t* e) {
-    auto& fl = Frontlight::GetInstance();
-    if (!fl.initialized()) return;
-    const int value = lv_slider_get_value(static_cast<lv_obj_t*>(lv_event_get_target(e)));
-    fl.SetBrightness(static_cast<uint8_t>(value), false);
-    if (s_light_brightness_value) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%d", value);
-        lv_label_set_text(s_light_brightness_value, buf);
-    }
-    if (lv_event_get_code(e) == LV_EVENT_RELEASED &&
-        xTaskCreate(PersistSheetBrightness, "book_fl_bri", 4096,
-            reinterpret_cast<void*>(static_cast<intptr_t>(value)), 5, nullptr) != pdPASS) {
-        ESP_LOGW(kFlTag, "brightness persist task failed");
-    }
-}
-static void SheetBrightnessStep(lv_event_t* e) {
-    lv_event_stop_bubbling(e);
-    auto& fl = Frontlight::GetInstance();
-    if (!fl.initialized()) return;
-    const auto code = lv_event_get_code(e);
-    if (code == LV_EVENT_PRESSED || code == LV_EVENT_LONG_PRESSED_REPEAT) {
-        const int delta = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-        const int value = std::clamp<int>(fl.target_brightness() + delta, 0, 100);
-        lv_slider_set_value(s_brightness_slider, value, LV_ANIM_OFF);
-        lv_obj_send_event(s_brightness_slider, LV_EVENT_VALUE_CHANGED, nullptr);
-    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-        if (xTaskCreate(PersistSheetBrightness, "book_fl_bri", 4096,
-            reinterpret_cast<void*>(static_cast<intptr_t>(fl.target_brightness())), 5, nullptr) != pdPASS)
-            ESP_LOGW(kFlTag, "brightness persist task failed");
-    }
 }
 static bool SheetNavigationReady() {
     const auto& st = Book_State();
@@ -613,7 +569,8 @@ static void SheetPageTurn(lv_event_t* e) {
     const int mode = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
     if (mode == BookReaderPrefsPageTurn()) return;
     BookReaderPrefsSetPageTurn(mode);
-    EpdSetReaderEffect(mode == kBookReaderPageTurnRipple ? EpdEffect::Ripple : EpdEffect::None);
+    EpdSetReaderEffect(mode == kBookReaderPageTurnWipe ? EpdEffect::Wipe :
+                      mode == kBookReaderPageTurnRipple ? EpdEffect::Ripple : EpdEffect::None);
     RequestSettingsSheetPaint();
 }
 static void SheetBackground(lv_event_t* e) {
@@ -630,7 +587,6 @@ static void SheetAntialias(lv_event_t* e) {
     BookReaderPrefsSetAntialias(enabled);
     RequestSettingsSheetPaint();
 }
-static void BuildSheetLight(lv_obj_t* body);
 static void BuildSheetSettings(lv_obj_t* body) {
     lv_obj_update_layout(body);
     const bool landscape=LV_HOR_RES>LV_VER_RES;
@@ -645,16 +601,15 @@ static void BuildSheetSettings(lv_obj_t* body) {
         lv_obj_set_style_bg_color(divider,lv_color_black(),0);lv_obj_set_style_bg_opa(divider,LV_OPA_COVER,0);
     }
     const char* directions[] = {"竖屏", "左横", "右横", "自动"};
-    const int orientation[] = {0, 1, 2, -1};
-    auto* direction_row = SettingsRow(left, "阅读方向", 4, directions, OnSheetOrientMode, orientation, BookReaderPrefsOrient());
-    // There is currently no board pose provider; keep automatic orientation visibly unavailable.
-    SetSheetBtnEnabled(lv_obj_get_child(direction_row, 4), false);
+    const int orientation[] = {kBookReaderOrientPortrait, kBookReaderOrientLandLeft,
+                               kBookReaderOrientLandRight, kBookReaderOrientAuto};
+    SettingsRow(left, "阅读方向", 4, directions, OnSheetOrientMode, orientation, BookReaderPrefsOrient());
     const char* writing[] = {"横排", "竖排"};
     const int writing_values[] = {0, 1};
     auto* writing_row = SettingsRow(left, "文字排版", 2, writing, SheetWritingMode, writing_values, BookReaderPrefsWritingMode());
     SetSheetBtnEnabled(lv_obj_get_child(writing_row, 2), !ReaderPageImagesHint());
-    const char* page_turns[] = {"左右滑动", "水波纹"};
-    const int page_turn_values[] = {kBookReaderPageTurnSlide, kBookReaderPageTurnRipple};
+    const char* page_turns[] = {"左右滑动", "推白翻页"};
+    const int page_turn_values[] = {kBookReaderPageTurnSlide, kBookReaderPageTurnWipe};
     SettingsRow(left, "翻页方式", 2, page_turns, SheetPageTurn, page_turn_values, BookReaderPrefsPageTurn());
     lv_obj_update_layout(left);
     const int auto_w = lv_obj_get_content_width(left);
@@ -709,48 +664,6 @@ static void BuildSheetSettings(lv_obj_t* body) {
     const char* custom[] = {"自定义"};
     SettingsRow(right, "触摸分区", 1, custom, OnSheetTapZonesClicked, one, -1, false, 2);
 }
-static void BuildSheetLight(lv_obj_t* body) {
-    auto& fl = Frontlight::GetInstance();
-    lv_obj_update_layout(body);
-    const int w = lv_obj_get_content_width(body);
-    const int row_h = std::max<int>(Book_ItemFont()->line_height + 18, UiSy(44));
-    auto* controls = SheetBox(body, w, Book_ItemFont()->line_height + UiSy(4));
-    auto* row = SheetBox(body, w, row_h);
-    const int start = kSettingsBorderW + kSettingsBrightnessButtonW + kSettingsBrightnessSliderGap;
-    auto* slider = SheetSlider(row, fl.target_brightness(), 100, w - 2 * start);
-    s_brightness_slider = slider;
-    lv_obj_align(slider, LV_ALIGN_LEFT_MID, start, 0);
-    lv_obj_add_event_cb(slider, SheetBrightness, LV_EVENT_VALUE_CHANGED, nullptr);
-    lv_obj_add_event_cb(slider, SheetBrightness, LV_EVENT_RELEASED, nullptr);
-    auto make_step = [&](const char* text, intptr_t delta, lv_align_t alignment) {
-        auto* button = SheetButton(row, text, kSettingsBrightnessButtonW,
-                                   kSettingsBrightnessButtonH, SheetBrightnessStep, delta);
-        lv_obj_align(button, alignment, delta < 0 ? kSettingsBorderW : -kSettingsBorderW, 0);
-        for (auto code : {LV_EVENT_PRESSED, LV_EVENT_LONG_PRESSED_REPEAT, LV_EVENT_RELEASED, LV_EVENT_PRESS_LOST})
-            lv_obj_add_event_cb(button, SheetBrightnessStep, code, reinterpret_cast<void*>(delta));
-    };
-    make_step("-", -1, LV_ALIGN_LEFT_MID);
-    s_light_brightness_value = SheetLabel(controls, "");
-    char brightness[32];
-    std::snprintf(brightness, sizeof(brightness), "%d", static_cast<int>(fl.target_brightness()));
-    lv_label_set_text(s_light_brightness_value, brightness);
-    lv_obj_center(s_light_brightness_value);
-    make_step("+", 1, LV_ALIGN_RIGHT_MID);
-    auto* modes_row = SheetBox(body, w, row_h);
-    auto* modes_label = SheetLabel(modes_row, "前光选择");
-    lv_obj_align(modes_label, LV_ALIGN_LEFT_MID, 0, 0);
-    const char* modes[] = {"冷光", "暖光", "冷暖光"};
-    const int values[] = {static_cast<int>(FrontlightCct::kCool), static_cast<int>(FrontlightCct::kWarm), static_cast<int>(FrontlightCct::kBoth)};
-    const int mode_start = std::max<int>(UiSx(150), w * 38 / 100);
-    const int gap = UiSx(16), width = (w - mode_start - 2 * gap) / 3;
-    for (int i = 0; i < 3; ++i) {
-        auto* button = SheetButton(modes_row, modes[i], width, row_h - 16,
-                                  OnSheetFlCct, values[i], values[i] == static_cast<int>(fl.cct()));
-        lv_obj_set_pos(button, mode_start + i * (width + gap), 8);
-        s_sheet_bindings.push_back({button, OnSheetFlCct, values[i], false});
-    }
-}
-
 // Only viewport rows exist; a one-pixel extent preserves the full scroll range.
 static lv_obj_t* s_toc_list = nullptr;
 static std::vector<lv_obj_t*> s_toc_rows;
@@ -1338,8 +1251,6 @@ void ResetReadingSheetLiveRefs() {
     s_sheet_bindings.clear();s_live_body=nullptr;s_live_tab=-1;
     if (s_auto_turn_adjusting) BookReaderPrefsSetAutoTurnSeconds(s_auto_turn_seconds);
     s_auto_turn_adjusting=false;s_auto_turn_value=nullptr;
-    s_brightness_slider=nullptr;
-    s_light_brightness_value=nullptr;
     s_bookmark_button=s_bookmark_icon=s_duration_value=s_progress_value=s_progress_slider=s_chapter_prev=s_chapter_next=nullptr;
 }
 static void SetLiveSheetButton(lv_obj_t* button,bool active) {
@@ -1353,7 +1264,6 @@ bool RefreshReadingSheetInPlace() {
        s_live_tab!=st.settings.reader_tab ||
        s_live_width!=LV_HOR_RES || s_live_height!=LV_VER_RES ||
        (s_live_tab!=3 && s_live_tab!=kDurationTab))return false;
-    auto& fl=Frontlight::GetInstance();
     for(const auto& binding:s_sheet_bindings) {
         int selected=-1;
         if(binding.event==SheetPreset)selected=binding.value<10?BookReaderPrefsMarginPreset():10+BookReaderPrefsSpacingPreset();
@@ -1365,15 +1275,8 @@ bool RefreshReadingSheetInPlace() {
         else if(binding.event==SheetAntialias)selected=BookReaderPrefsAntialias();
         else if(binding.event==OnSheetFooterBitToggle)selected=BookReaderPrefsFooterMask();
         else if(binding.event==OnSheetUnderlineMode)selected=BookReaderPrefsUnderlineMode();
-        else if(binding.event==OnSheetFlCct)selected=static_cast<int>(fl.cct());
         else continue;
         SetLiveSheetButton(binding.button,binding.mask?(selected&binding.value)!=0:selected==binding.value);
-    }
-    if(s_brightness_slider)lv_slider_set_value(s_brightness_slider,fl.target_brightness(),LV_ANIM_OFF);
-    if(s_light_brightness_value) {
-        char brightness[16];
-        std::snprintf(brightness,sizeof(brightness),"%u",static_cast<unsigned>(fl.target_brightness()));
-        lv_label_set_text(s_light_brightness_value,brightness);
     }
     if(st.reader.session && s_bookmark_button) {
         const bool ready=!ReaderWorkersBusy() && !st.reader.prefs_reopen_pending && !st.reader.session->LiveRelayoutPending();
@@ -1476,51 +1379,8 @@ void SelectReadingSheetTab(int tab) {
     if (tab == 1) StartReadFontScan();
     else CancelReadFontScan();
     if (tab == 0 || tab == 1) Book_State().settings.reader_scroll[tab] = -1;
-    if (LV_HOR_RES > LV_VER_RES || tab == 0 || tab == 2) HideReadLightPanel();
     RebuildSettingsSheet();
 }
-static void BuildReadingLightPanel() {
-    auto& st = Book_State();
-    if (!st.settings.reader_light_page || !st.reader.read_scr) return;
-    const int header_h = Book_ListFont()->line_height + 22;
-    const int row_h = std::max<int>(Book_ItemFont()->line_height + 18, UiSy(44));
-    const int body_h = 2 * row_h + Book_ItemFont()->line_height + UiSy(4);
-    const int height = header_h + body_h + 12;
-    auto* panel = SheetBox(st.reader.read_scr, LV_HOR_RES, height);
-    st.settings.reader_light_panel = panel;
-    lv_obj_set_style_bg_color(panel, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_side(panel, LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_border_width(panel, 1, 0);
-    lv_obj_set_pos(panel, 0, st.reader.status_h > 0 ? st.reader.status_h : 40);
-    lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
-    auto* header = SheetBox(panel, LV_HOR_RES, header_h);
-    auto* title = SheetLabel(header, "前光设置", Book_ListFont()); lv_obj_center(title);
-    auto* close = SheetButton(header, "", UiSx(52), header_h - 8, SheetLightOpen);
-    lv_obj_set_style_border_width(close, 0, 0);
-    lv_obj_align(close, LV_ALIGN_LEFT_MID, UiSx(12), 0);
-    static const lv_point_precise_t points[] = {{0,10},{12,0},{24,10}};
-    auto* chevron = lv_line_create(close); lv_line_set_points(chevron, points, 3);
-    lv_obj_set_style_line_width(chevron, 3, 0);
-    lv_obj_set_style_line_color(chevron, lv_color_black(), 0); lv_obj_center(chevron);
-    lv_obj_clear_flag(chevron, LV_OBJ_FLAG_CLICKABLE);
-    auto* body = SheetBox(panel, LV_HOR_RES, body_h);
-    lv_obj_set_pos(body, 0, header_h);
-    lv_obj_set_style_pad_hor(body, UiSx(24), 0);
-    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(body, 0, 0);
-    BuildSheetLight(body);
-    SetReadStatusVisible(true);
-    lv_obj_move_foreground(panel);
-}
-
-void HideReadLightPanel() {
-    auto& st = Book_State();
-    st.settings.reader_light_page = false;
-    if (st.settings.reader_light_panel && lv_obj_is_valid(st.settings.reader_light_panel))
-        lv_obj_add_flag(st.settings.reader_light_panel, LV_OBJ_FLAG_HIDDEN);
-}
-
 void BuildReadingBottomSheet() {
     auto& st = Book_State();auto* sheet = st.settings.settings_sheet;
     if (!sheet || !lv_obj_is_valid(sheet) || !st.reader.session) return;
@@ -1530,8 +1390,6 @@ void BuildReadingBottomSheet() {
         st.settings.bookmark_ui_path=st.reader.session->Info().path;
     }
     CancelListCoverFill();
-    if (st.settings.reader_light_panel && lv_obj_is_valid(st.settings.reader_light_panel)) lv_obj_delete(st.settings.reader_light_panel);
-    st.settings.reader_light_panel = nullptr;
     ClearSettingsSheetWidgetRefs();lv_obj_clean(sheet);
     s_sheet_bindings.reserve(40);
     st.settings.reader_sheet_cover.Reset();
@@ -1577,7 +1435,8 @@ void BuildReadingBottomSheet() {
         lv_obj_center(down);
         if (st.settings.reader_tab == 1 && !st.settings.font_multi) {
             auto* action = SheetButton(header,"导入TTF",
-                UiSx(100),std::min<int>(UiSy(26),header_h-12),OnFontImportClick);
+                UiSx(112),std::min<int>(UiSy(34),header_h-8),OnFontImportClick);
+            lv_obj_set_ext_click_area(action, UiSx(6));
             lv_obj_align(action, LV_ALIGN_RIGHT_MID, -UiSx(12), 0);
             SetSheetBtnEnabled(action, !st.settings.font_scan_loading);
         }
@@ -1672,7 +1531,6 @@ void BuildReadingBottomSheet() {
     if (st.tap.tap_zone_ui != BookUiState::TapZoneUi::kClosed) TapZonesEnsurePanel();
     lv_obj_move_foreground(sheet);
     if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings) SetReadStatusVisible(true);
-    BuildReadingLightPanel();
 }
 
 

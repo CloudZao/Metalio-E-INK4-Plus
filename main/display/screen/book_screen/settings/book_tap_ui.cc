@@ -1,6 +1,7 @@
 #pragma GCC optimize("O1")
 
 #include "book_screen/settings/book_tap_ui.h"
+#include "screen_common.h"
 #include "book_screen/book_screen_priv.h"
 #include "book_screen/shelf/book_bookshelf.h"
 #include "book_screen/book_font_runtime.h"
@@ -125,7 +126,7 @@ void TapZonesRebuildContent() {
     lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
     if (!picking) {
         auto* reset = make_action(head, "恢复默认", OnTapZoneReset, 0);
-        // Put the outline on the fixed-height button, rather than a taller child that gets clipped.
+        // 边框设在固定高度按钮上，避免子对象超高时被裁剪。
         lv_obj_set_height(reset, 42);
         lv_obj_set_style_border_width(reset, 1, 0);
         lv_obj_set_style_border_color(reset, lv_color_black(), 0);
@@ -320,7 +321,6 @@ void OnSheetTapZonesClicked(lv_event_t* e) {
     if (ttf_convert::Busy() || st.ttf.ttf_mode == BookUiState::TtfMode::kProgress) {
         return;
     }
-    HideReadLightPanel();
     TtfPanelClose();
     st.tap.tap_zone_ui = BookUiState::TapZoneUi::kGrid;
     st.tap.tap_zone_pick_cell = -1;
@@ -360,7 +360,10 @@ void OnTapZoneActionPicked(lv_event_t* e) {
     if (static_cast<uint8_t>(action) >= static_cast<uint8_t>(BookTapZoneAction::kCount)) {
         return;
     }
-    BookTapZonesSetAction(cell, action);
+    if (!BookTapZonesSetAction(cell, action)) {
+        ScreenShowToast("至少保留一个菜单唤醒区域");
+        return;
+    }
     st.tap.tap_zone_ui = BookUiState::TapZoneUi::kGrid;
     st.tap.tap_zone_pick_cell = -1;
     TapZonesRebuildContent();

@@ -192,6 +192,7 @@ LogUploadResult RunUpload(LogUploadSession& session) {
     while (!Abandoned(session, wait_deadline)) {
         if (Board::GetInstance().IsWifiConfigMode()) break;
         if (Board::GetInstance().EnsureNetworkReady(200)) { ready = true; break; }
+        if (Board::GetInstance().GetNetworkErrorText(nullptr)) break;
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     if (session.cancel.load()) return LogUploadResult::Cancelled;

@@ -71,6 +71,8 @@ void MetalioSd_ReleaseHold(void) {
 }
 
 bool MetalioSd_Init(void) {
+    sd_access::Transition transition;
+    if (!transition) return false;
     sd_access::Permit permit;
     MetalioSd_ReleaseHold();
     const bool mounted = SdCardManager::GetInstance().Mount();
@@ -83,6 +85,8 @@ bool MetalioSd_Ok(void) {
 }
 
 bool MetalioSd_HoldPinsLow(void) {
+    sd_access::Transition transition;
+    if (!transition) return false;
     MetalioSd_ReleaseHold();
     if (!SdCardManager::GetInstance().Unmount()) return false;
 #if CONFIG_IDF_TARGET_ESP32S31

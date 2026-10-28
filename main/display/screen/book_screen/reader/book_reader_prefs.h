@@ -16,7 +16,7 @@ extern "C" {
 // - underline：正文下划线 0关 / 1实线 / 2虚线
 // - shelf_view：书架封面网格 / 文件夹列表
 // - shelf_pct：书架/首页封面与列表是否显示进度角标（默认关）
-// - orient：正文方向 0竖屏 / 1左横 / 2右横（仅阅读页；离开后恢复竖屏）
+// - orient：正文方向 -1自动 / 0竖屏 / 1左横 / 2右横 / 3倒置竖屏（仅阅读页；离开后恢复竖屏）
 // 读走 RAM 缓存；首次 Ensure 须在 DRAM 栈；落盘在内部 RAM 栈任务。
 
 enum {
@@ -41,11 +41,12 @@ enum {
 };
 
 enum {
+    kBookReaderOrientAuto = -1, // 根据重力方向自动旋转
     kBookReaderOrientPortrait = 0,  // 竖屏
     kBookReaderOrientLandLeft = 1,  // 左横
     kBookReaderOrientLandRight = 2, // 右横
     kBookReaderOrientPortraitDown = 3, // 倒置竖屏
-    kBookReaderOrientCount = 4, // 方向档位数
+    kBookReaderOrientCount = 4, // 手动方向档位数
 };
 
 /** @brief 确保阅读偏好已从 NVS 加载 */
@@ -118,7 +119,7 @@ int BookReaderPrefsShelfView(void);
 /** @brief 设置书架视图模式 */
 void BookReaderPrefsSetShelfView(int view);
 
-/** @brief 正文方向：kBookReaderOrientPortrait / LandLeft / LandRight */
+/** @brief 正文方向模式，包含自动及手动方向 */
 int BookReaderPrefsOrient(void);
 /** @brief 设置正文方向 */
 void BookReaderPrefsSetOrient(int orient);
@@ -136,8 +137,12 @@ void BookReaderPrefsSetShowShelfProgress(int enabled);
 int BookReaderPrefsBackground();
 void BookReaderPrefsSetBackground(int mode);
 
-// Page presentation: keep existing behavior by default; optional ripple from the right edge.
-enum { kBookReaderPageTurnSlide = 0, kBookReaderPageTurnRipple = 1 };
+// 翻页方式沿用已保存的数值，默认保持原有行为。
+enum {
+    kBookReaderPageTurnSlide = 0, // 左右滑动
+    kBookReaderPageTurnRipple = 1, // 水波纹
+    kBookReaderPageTurnWipe = 2, // 按翻页方向推白
+};
 int BookReaderPrefsPageTurn();
 void BookReaderPrefsSetPageTurn(int mode);
 

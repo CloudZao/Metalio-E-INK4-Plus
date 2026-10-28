@@ -17,6 +17,7 @@
 #include "metalio_power.h"
 #include "metalio_rtc.h"
 #include "metalio_sd.h"
+#include "wifi_config_storage.h"
 #include "metalio_sys_mon.h"
 #include "metalio_touch.h"
 #include "metalio_touch_upgrade.h"
@@ -63,9 +64,10 @@ public:
             ESP_LOGE(TAG, "touch upgrade failed; continuing with touch probe");
         }
         MetalioPower_Init();
-        // 前光尽早：勿等 SD/音频；否则首帧已出仍一片暗
+        // 先恢复逻辑设置，首次物理输出等待蓝牙共享电源复位结束。
         auto& fl = Frontlight::GetInstance();
         fl.Init(FL_COOL_PIN, FL_WARM_PIN);
+        fl.SetOutputDeferred(true);
         ApplySavedFrontlight();
 
         MetalioRtc_Init();
@@ -75,6 +77,7 @@ public:
 
         MetalioVibe_Init();
         MetalioSd_Init();
+        WifiConfigStorage_Init();
         // SD 挂载后补齐本地壁纸缓存，必须早于电源键开放待机入口。
         Wallpaper_HydrateFromNvsNow();
         MetalioKeys_Init();
@@ -85,7 +88,10 @@ public:
         if (display_ != nullptr) {
             MetalioDisplay_SetSystemReady(display_);
         }
-        MetalioAudio_Init();
+        MetalioAudio_Init([] {
+            Frontlight::GetInstance().SetOutputDeferred(false);
+            ESP_LOGI(TAG, "frontlight startup output released after audio reset sequence");
+        });
         ESP_LOGI(TAG, "board ready display=%s sd=%s gauge=%s",
                  display_ ? "ok" : "FAIL", MetalioSd_Ok() ? "ok" : "FAIL",
                  Bq27220Gauge::GetInstance().IsReady() ? "ok" : "N/A");

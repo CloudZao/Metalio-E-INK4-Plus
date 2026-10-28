@@ -75,5 +75,3 @@ void ApplyReadingPanelRules(lv_obj_t* panel, int bottom_gap = 0);
 // Returns false when tab/layout structure changed and a rebuild is required.
 bool RefreshReadingSheetInPlace();
 void ResetReadingSheetLiveRefs();
-
-void HideReadLightPanel();

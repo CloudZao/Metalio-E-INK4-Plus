@@ -22,6 +22,8 @@ lv_obj_t* CreateReaderScreen(const reader::BookInfo& info);
 lv_obj_t* ResumeReaderScreen();
 /** @brief 渲染当前正文页 */
 void RenderReaderPage();
+/** @brief 清除旧正文，在阅读内容区显示加载提示，不遮挡阅读菜单 */
+void ShowReaderPageLoading();
 /** @brief 上屏经 ScreenPaintCoalesce：有 pending 则等交完，连点跳到最终页再画 */
 void RequestRenderReaderPage();
 /** @brief 挂上正文触控（九宫格） */

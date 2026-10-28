@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,8 @@ struct BtDevice {
 struct BluetoothUiState {
     lv_obj_t* root = nullptr; // 根容器
     lv_obj_t* status_label = nullptr; // 状态文案
+    lv_obj_t* version_label = nullptr; // 蓝牙固件版本
+    lv_obj_t* check_version_btn = nullptr; // 版本检测按钮
     lv_obj_t* mode_btns[3] = {}; // 模式按钮
     lv_obj_t* mode1_panel = nullptr; // 模式 1 面板
     lv_obj_t* mode2_panel = nullptr; // 模式 2 面板
@@ -46,11 +49,12 @@ struct BluetoothUiState {
 extern std::atomic<bool> Bluetooth_mode_cmd_busy; // 模式命令忙
 /** @brief 取蓝牙页 UI 状态 */
 BluetoothUiState& Bluetooth_State();
-extern BtMode Bluetooth_active_mode; // 当前模式
-extern ConnState Bluetooth_conn_state; // 连接状态
+extern std::atomic<BtMode> Bluetooth_active_mode; // 当前模式
+extern std::atomic<ConnState> Bluetooth_conn_state; // 连接状态
+extern std::mutex Bluetooth_rx_mutex; // 保护接收缓冲和扫描结果，不覆盖 UART 发送或硬件操作
 extern std::string Bluetooth_rx_buffer; // UART 收缓冲
 extern std::vector<BtDevice> Bluetooth_devices; // 已发现设备
-extern bool Bluetooth_screen_active; // 页是否激活
+extern std::atomic<bool> Bluetooth_screen_active; // UI 与 UART 任务共享的页面激活状态
 
 struct AsyncStatusMsg {
     char text[128]; // 状态文案
@@ -69,6 +73,8 @@ struct ModeCmdArgs {
 void Bluetooth_update_status_label(const char* text);
 /** @brief 投递状态栏文案 */
 void Bluetooth_post_status(const char* text);
+/** @brief 将蓝牙版本号投递到界面线程 */
+void Bluetooth_post_version(const char* version);
 /** @brief 刷新模式按钮选中态 */
 void Bluetooth_refresh_mode_buttons();
 /** @brief 显示/隐藏模式 2 面板 */

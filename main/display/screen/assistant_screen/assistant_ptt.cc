@@ -50,6 +50,7 @@ void Assistant_CancelTouchPttArmTimer() {
 
 void Assistant_ResetTouchPttState() {
     Assistant_CancelTouchPttArmTimer();
+    Assistant_State().ptt.ptt_connecting_hint_shown = false;
     Assistant_State().ptt.touch_ptt_finger_down = false;
     Assistant_State().ptt.touch_suppress_click = false;
     Assistant_State().ptt.touch_ptt_held.store(false, std::memory_order_release);
@@ -333,6 +334,12 @@ void Assistant_ApplyPttWave(bool show) {
 }
 
 void AsyncSyncPttOverlay(void* /*arg*/) {
+    const bool connecting = AssistantScreen::IsActive() && Assistant_IsAnyPttHeld() &&
+        Application::GetInstance().GetDeviceState() == kDeviceStateConnecting;
+    if (connecting && !Assistant_State().ptt.ptt_connecting_hint_shown) {
+        ScreenShowToast("正在连接语音服务，请继续按住");
+    }
+    Assistant_State().ptt.ptt_connecting_hint_shown = connecting;
     Assistant_ApplyPttWave(Assistant_IsPttWaveWanted());
 }
 

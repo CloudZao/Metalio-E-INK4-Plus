@@ -129,7 +129,7 @@ bool BookCoverSidecarPath(const char* book_path, char* out, size_t out_sz) {
 }
 
 bool BookCoverSidecarAdequate(const char* book_path, int need_w, int need_h) {
-    char sidecar[192];
+    char sidecar[SD_FILE_PATH_CAPACITY];
     if (!BookCoverSidecarPath(book_path, sidecar, sizeof(sidecar))) {
         return false;
     }
@@ -143,7 +143,7 @@ bool BookCoverSidecarAdequate(const char* book_path, int need_w, int need_h) {
 }
 
 void DeleteBookCoverSidecar(const char* book_path) {
-    char sidecar[192];
+    char sidecar[SD_FILE_PATH_CAPACITY];
     if (!BookCoverSidecarPath(book_path, sidecar, sizeof(sidecar))) {
         return;
     }
@@ -158,7 +158,7 @@ bool SaveBookCoverSidecarFromL8(const char* book_path, const RasterImage& l8) {
     if (!IsUnderBooksDir(book_path)) {
         return false;
     }
-    char sidecar[192];
+    char sidecar[SD_FILE_PATH_CAPACITY];
     if (!BuildSidecarPath(book_path, sidecar, sizeof(sidecar))) {
         return false;
     }
@@ -188,7 +188,7 @@ bool SaveBookCoverSidecarFromBytes(const char* book_path, const uint8_t* data, s
         ESP_LOGW(TAG, "sidecar skip: path outside books dir %s", book_path);
         return false;
     }
-    char sidecar[192];
+    char sidecar[SD_FILE_PATH_CAPACITY];
     if (!EncodeCoverBytesToSidecar(book_path, data, len, sidecar, sizeof(sidecar))) {
         return false;
     }
@@ -222,7 +222,7 @@ bool SaveBookCoverSidecar(const char* book_path) {
         return true;
     }
 
-    char sidecar[192];
+    char sidecar[SD_FILE_PATH_CAPACITY];
     std::vector<uint8_t> cover_bytes;
 
     if (fmt == BookFormat::kEbook) {

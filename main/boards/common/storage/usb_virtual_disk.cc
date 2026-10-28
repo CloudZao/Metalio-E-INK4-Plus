@@ -1,5 +1,6 @@
 #include "sd_log_writer.h"
 #include "usb_virtual_disk.h"
+#include "sd_access.h"
 
 #include "assets/lang_config.h"
 #include "esp_log.h"
@@ -712,10 +713,21 @@ void UsbWorkerTask(void* /*arg*/) {
             }
         }
         if (!received) {
+            if (!s_gadget_active.load() && !sd_access::IsQuiescing() &&
+                SdCardManager::GetInstance().IsMounted()) {
+                SdLogWriter_OnSdMounted();
+            }
             vTaskDelete(nullptr);
             return;
         }
         SdLogWriter_OnSdUnmounting(); // drain logger/snapshot before any MSC transition
+        sd_access::Transition transition;
+        if (!transition) {
+            s_want_active.store(s_gadget_active.load());
+            SetHint(UsbVirtualDisk::UiHint::HostBusy);
+            NotifyUi();
+            continue;
+        }
         SetHint(UsbVirtualDisk::UiHint::Switching);
         NotifyUi();
 
@@ -784,9 +796,6 @@ void UsbWorkerTask(void* /*arg*/) {
                 break;
         }
 
-        if (!s_gadget_active.load() && SdCardManager::GetInstance().IsMounted()) {
-            SdLogWriter_OnSdMounted();
-        }
     }
 }
 

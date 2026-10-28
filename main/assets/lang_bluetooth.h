@@ -6,4 +6,8 @@ extern const char* AUDIO_INIT_FAILED;
 extern const char* BT_PWR_RESETTING;
 extern const char* BT_PWR_RESET_RECONNECT;
 extern const char* BT_PWR_RESET_FAILED;
+extern const char* BT_VERSION_FMT;
+extern const char* BT_CHECK_VERSION;
+extern const char* BT_CHECKING_VERSION;
+extern const char* BT_MODE_TITLE;
 }

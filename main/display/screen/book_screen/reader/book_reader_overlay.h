@@ -35,8 +35,8 @@ constexpr lv_coord_t kFontPageBtnW = UiSx(40);
 constexpr lv_coord_t kFontPageBtnH = UiSy(32);
 constexpr lv_coord_t kTapZoneRowH = UiSy(40);
 constexpr int kTtfConvertSizeMin = 20;
-constexpr int kTtfConvertSizeMax = 40;
-constexpr int kTtfConvertSizeDefault = 25;
+constexpr int kTtfConvertSizeMax = 80;
+constexpr int kTtfConvertSizeDefault = 40;
 
 /** @brief 沉浸阅读：默认藏顶栏，正文占满状态栏区域 */
 void SetReadStatusVisible(bool visible);

@@ -7,6 +7,7 @@
 #include "haptic_feedback.h"
 #include "power_policy.h"
 #include "settings_common.h"
+#include "screen_common.h"
 #include "simple_uart.hpp"
 
 #include <atomic>
@@ -86,6 +87,21 @@ bool Bluetooth_parse_bt_device_line(const std::string& line, char* address, size
     return true;
 }
 
+bool Bluetooth_query_version() {
+    auto& uart = SimpleUart::getInstance();
+    if (!uart.isInitialized()) {
+        ESP_LOGE(TAG, "version query: UART not initialized");
+        Bluetooth_post_status(Lang::Strings::BT_UART_NOT_INIT);
+        return false;
+    }
+    if (!uart.sendString("AT+GVER=1\r\n")) {
+        ESP_LOGW(TAG, "TX failed: AT+GVER=1");
+        return false;
+    }
+    ESP_LOGI(TAG, "TX: AT+GVER=1");
+    return true;
+}
+
 void Bluetooth_handle_response_line(const std::string& raw_line) {
     std::string line = raw_line;
     Bluetooth_trim_line(line);
@@ -95,25 +111,37 @@ void Bluetooth_handle_response_line(const std::string& raw_line) {
 
     ESP_LOGI(TAG, "RX: %s", line.c_str());
 
+    constexpr const char* kVersionPrefix = "AT+GVER=";
+    if (line.rfind(kVersionPrefix, 0) == 0) {
+        std::string version = line.substr(strlen(kVersionPrefix));
+        Bluetooth_trim_line(version);
+        if (version.size() > 1 && version.size() < 64 && version[0] == 'V' &&
+            version.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-_+") ==
+                std::string::npos) {
+            Bluetooth_post_version(version.c_str());
+        }
+        return;
+    }
+
     if (line.find("SET MODE 1") != std::string::npos) {
         Bluetooth_active_mode = BtMode::kMode1;
         Bluetooth_conn_state = ConnState::kIdle;
         Bluetooth_post_status(Lang::Strings::BT_MODE1_SET);
-        lv_async_call(Bluetooth_async_on_mode1_set, nullptr);
+        ScreenLvAsync(Bluetooth_async_on_mode1_set);
         return;
     }
     if (line.find("SET MODE 2") != std::string::npos) {
         Bluetooth_active_mode = BtMode::kMode2;
         Bluetooth_conn_state = ConnState::kIdle;
         Bluetooth_post_status(Lang::Strings::BT_MODE2_SET);
-        lv_async_call(Bluetooth_async_on_mode2_set, nullptr);
+        ScreenLvAsync(Bluetooth_async_on_mode2_set);
         return;
     }
     if (line.find("SET MODE 3") != std::string::npos) {
         Bluetooth_active_mode = BtMode::kMode3;
         Bluetooth_conn_state = ConnState::kIdle;
         Bluetooth_post_status(Lang::Strings::BT_MODE3_SET);
-        lv_async_call(Bluetooth_async_on_mode3_set, nullptr);
+        ScreenLvAsync(Bluetooth_async_on_mode3_set);
         return;
     }
 
@@ -185,6 +213,8 @@ void Bluetooth_handle_response_line(const std::string& raw_line) {
 }
 
 void Bluetooth_on_uart_data(const std::vector<uint8_t>& data) {
+    if (data.empty() || !Bluetooth_screen_active.load()) return;
+    std::lock_guard<std::mutex> lock(Bluetooth_rx_mutex);
     Bluetooth_rx_buffer.append(data.begin(), data.end());
 
     size_t pos = 0;

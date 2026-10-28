@@ -18,7 +18,6 @@
 #include "board.h"
 #include "fontpack_lvgl.h"
 #include "settings.h"
-#include "wifi_station.h"
 
 StandbyClassicUiState& StandbyClassic_State() {
     static StandbyClassicUiState s;

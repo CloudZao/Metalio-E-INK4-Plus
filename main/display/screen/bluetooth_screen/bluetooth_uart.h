@@ -13,6 +13,8 @@ void Bluetooth_apply_mode_commands(BtMode mode);
 void Bluetooth_set_mode_audio_power(BtMode mode);
 /** @brief 离开页面仅释放非模式3的音频需求 */
 void Bluetooth_release_page_audio_power();
+/** @brief 查询蓝牙固件版本，命令发送成功返回 true */
+bool Bluetooth_query_version();
 /** @brief UART 收包回调 */
 void Bluetooth_on_uart_data(const std::vector<uint8_t>& data);
 /** @brief 复位蓝牙页 UI 状态 */

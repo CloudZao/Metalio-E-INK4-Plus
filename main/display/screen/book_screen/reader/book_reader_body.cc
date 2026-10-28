@@ -1,8 +1,10 @@
+#include "assets/lang_reader.h"
 #include "epd_content_policy.h"
 #pragma GCC optimize("O1")
 
 #include "book_screen/reader/book_reader_body.h"
 #include "book_screen/reader/book_auto_turn.h"
+#include "book_screen/reader/book_reader_orient.h"
 #include "book_screen/book_screen_priv.h"
 #include "book_screen/shelf/book_detail.h"
 #include "book_screen/settings/book_font_multi.h"
@@ -144,6 +146,25 @@ static uint8_t ReadingBackgroundPixel(int mode, int x, int y, int left, int widt
     }
     return 255;
 }
+void ShowReaderPageLoading() {
+    auto& st = Book_State();
+    if (!st.reader.content || st.reader.standby_paused) {
+        return;
+    }
+    CancelPageImageLoad();
+    if (st.reader.background_layer && lv_obj_is_valid(st.reader.background_layer)) {
+        lv_obj_delete(st.reader.background_layer);
+    }
+    st.reader.background_layer = nullptr;
+    if (st.reader.footer_host) {
+        lv_obj_set_style_bg_opa(st.reader.footer_host, LV_OPA_COVER, 0);
+    }
+    SyncReaderAaForImmersion(false);
+    EpdSetContentRole(st.reader.content, EpdContentRole::Monochrome);
+    ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
+    Book_ShowMessage(st.reader.content, Lang::Strings::BOOK_LOADING);
+}
+
 void RenderReaderPage() {
     if (Book_State().reader.standby_paused) return;
     // Start a fresh interval after every render, including manual turns and layout changes.
@@ -179,12 +200,13 @@ void RenderReaderPage() {
     lv_obj_set_style_layout(st.reader.content, LV_LAYOUT_NONE, 0);
 
     const bool page_images = st.reader.session->IsPageImagesMode();
+    const lv_coord_t vw = st.reader.session->ViewportWidth();
+    const lv_coord_t vh = st.reader.session->ViewportHeight();
+    const bool viewport_changed = vw != st.reader.viewport_w || vh != st.reader.viewport_h;
     // 分页视口与当前几何不一致：重排（宽或高任一过期都会让末行挤进底栏 / 行宽偏短）
     if (!page_images) {
-        const lv_coord_t vw = st.reader.session->ViewportWidth();
-        const lv_coord_t vh = st.reader.session->ViewportHeight();
         if (st.reader.viewport_w > 40 && st.reader.viewport_h > 40 && vw > 40 && vh > 40 &&
-            (vw != st.reader.viewport_w || vh != st.reader.viewport_h) && !st.reader.opening.load() &&
+            viewport_changed && !st.reader.opening.load() &&
             !st.reader.layout_busy.load() && !st.reader.session->LiveRelayoutPending()) {
             ESP_LOGW(TAG, "viewport mismatch session=%dx%d ui=%dx%d → relayout",
                      static_cast<int>(vw), static_cast<int>(vh),
@@ -192,6 +214,18 @@ void RenderReaderPage() {
             ApplyReaderLayoutLive(false);
             return;
         }
+    }
+
+    // 视口尚未生效或章节仍在重排时，不能把旧页按新方向重新绘制。
+    if (st.reader.layout_again || viewport_changed ||
+        (st.reader.session->Info().format != reader::BookFormat::kTxt &&
+         st.reader.session->LiveRelayoutPending())) {
+        if (!ReaderWorkersBusy() && st.reader.session->Error() != reader::BookReadError::kNone) {
+            Book_ShowMessage(st.reader.content, Lang::Strings::BOOK_PAGE_LOAD_FAILED);
+        } else {
+            ShowReaderPageLoading();
+        }
+        return;
     }
 
     CancelPageImageLoad();
@@ -224,7 +258,7 @@ void RenderReaderPage() {
     const int background = page_images ? 0 : BookReaderPrefsBackground();
     const int background_width = ReadContentWidth();
     const int background_left = st.reader.session->VerticalWriting()
-        ? kReaderVerticalLeftInset : (LV_HOR_RES - background_width) / 2;
+        ? BookReaderPrefsMarginLeft() + kReaderVerticalLeftInset : (LV_HOR_RES - background_width) / 2;
     const int background_height = std::max<int>(0, std::min<int>(content_h,
         LV_VER_RES - BookReaderPrefsMarginTop() - BookReaderPrefsMarginBottom()));
     if (st.reader.background_layer && lv_obj_is_valid(st.reader.background_layer)) lv_obj_delete(st.reader.background_layer);
@@ -275,8 +309,8 @@ void RenderReaderPage() {
         if (!vertical && block_w > 40 && block_w < max_w) {
             col_w = block_w;
         }
-        // Vertical text starts after the fixed drawable-area left gutter.
-        const lv_coord_t col_x = vertical ? kReaderVerticalLeftInset
+        // 竖排额外左留白与分页宽度同步，保留页边距设置。
+        const lv_coord_t col_x = vertical ? BookReaderPrefsMarginLeft() + kReaderVerticalLeftInset
             : static_cast<lv_coord_t>((LV_HOR_RES - col_w) / 2);
         int ink_h = vertical ? content_h : reader::EstimatePageTextHeight(*page, book_font, line_gap, para_gap, content_h);
         if (ink_h < 8) {
@@ -463,7 +497,8 @@ lv_obj_t* CreateReaderScreen(const reader::BookInfo& info) {
         FinishDeferredCleanup();
     }
     s_reader_first_paint = true;
-    DisplayUiSetOrient(BookReaderPrefsOrient());
+    StopReaderAutoOrient();
+    DisplayUiSetOrient(ReaderDisplayOrient());
     // 仅打开正文时加载 SD 字体；界面控件用固件字
     EnsureBookFont();
     CancelReadFontScan();
@@ -556,8 +591,10 @@ lv_obj_t* CreateReaderScreen(const reader::BookInfo& info) {
 
     ShowOpenProgress(0);
     st.reader.read_scr = scr;
-    st.settings.reader_light_panel = nullptr;
-    st.settings.reader_light_page = false;
+    lv_obj_add_event_cb(scr, [](lv_event_t* e) {
+        if (lv_event_get_target(e) == Book_State().reader.read_scr) StopReaderAutoOrient();
+    }, LV_EVENT_DELETE, nullptr);
+    SyncReaderAutoOrient();
     ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
     ApplyReaderChromeSize();
     SyncFooterClockTimer();

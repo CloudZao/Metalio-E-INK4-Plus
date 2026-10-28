@@ -4,9 +4,10 @@
 #include "power_i2c.h"
 
 #include <cstdint>
+#include <mutex>
 
 // BQ27220 电量计：单例封装，板级初始化后直接通过 GetInstance() 使用。
-// Begin() 做地址 ACK；设备未挂上只返回 false。GetBatteryLevel() 用电压线性 SOC + 单向步进。
+// Begin() 做地址 ACK；设备未挂上只返回 false。GetBatteryLevel() 用电压曲线估算 + 单向步进。
 class Bq27220Gauge {
 public:
     static constexpr uint8_t kDefaultAddr = 0x55;
@@ -25,19 +26,25 @@ public:
     /** @brief 是否已探测成功 */
     bool IsReady() const { return ready_; }
 
+    /** @brief 读取电池电压，单位 mV */
     bool ReadVoltageMv(uint16_t& mv);
+    /** @brief 读取电池电流，单位 mA，正值为充电 */
     bool ReadCurrentMa(int16_t& current_ma);
     bool GetVoltageMv(uint16_t& mv) { return ReadVoltageMv(mv); }
 
     /**
      * @brief 电量与充放电状态（对齐 Board::GetBatteryLevel）
-     * @param level 0..100；≥4.33V 连续 30s 才允许 100%
+     * @param level 0..100，步长 5%；≥4.33V 连续 30s 才允许 100%
      * @param charging 电流 > +5mA 且 level < 100
      * @param discharging 电流 < -5mA
+     * @return 开机或重置后未满 3s，或读取失败时返回 false
      */
     bool GetBatteryLevel(int& level, bool& charging, bool& discharging);
 
-    /** @brief 重置滑动平均与步进显示 */
+    /** @brief 按充放电状态换算瞬时电量，未做滤波、阶梯和满电确认 */
+    static float VoltageToPercent(uint16_t mv, bool charging);
+
+    /** @brief 清除显示电量，等待 3s 后重新采样、校准并恢复步进 */
     void ResetFilter();
 
 private:
@@ -50,6 +57,9 @@ private:
     int ApplyMonoStep(int target_pct, bool charging);
 
     static constexpr int kFilterSize = 60;
+    static constexpr int kSocStepPct = 5;
+    static constexpr int64_t kStartupDelayUs = 3LL * 1000 * 1000;
+    static constexpr int64_t kSamplePeriodUs = 1000LL * 1000;
     static constexpr int64_t kSocStepUs = 30LL * 1000 * 1000;
     static constexpr int64_t kFullHoldUs = 30LL * 1000 * 1000;
     static constexpr uint16_t kFullConfirmMv = 4330;
@@ -70,8 +80,13 @@ private:
     bool  filter_primed_ = false;
 
     int     displayed_soc_ = -1;
+    std::mutex soc_mutex_; // 串行化显示采样与待机重置
+    int64_t last_sample_us_ = 0;
+    int64_t last_filter_us_ = 0;
+    int64_t sample_ready_at_us_ = kStartupDelayUs;
     int64_t last_soc_step_us_ = 0;
     int64_t full_above_since_us_ = 0;
+    bool full_confirmed_ = false; // 满电滞回状态，唤醒后以新电压校验
     int     last_charge_dir_ = 0;
 };
 

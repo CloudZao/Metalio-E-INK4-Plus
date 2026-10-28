@@ -4,6 +4,7 @@
  */
 
 #include "lv_adapter_epdiy.h"
+#include "sd_paths.h"
 #include "epd_refresh.h"
 #include "epd_prepare.h"
 #include "epd_content_policy.h"
@@ -12,7 +13,9 @@
 
 #include "application.h"
 #include "assets/lang_config.h"
+#include "assets/lang_screen.h"
 #include "assistant_screen/assistant_screen.h"
+#include "screen/workbuddy_screen/workbuddy_screen.h"
 #include "audio_codec.h"
 #include "board.h"
 #include "boot_key_handler.h"
@@ -37,6 +40,7 @@ extern "C" {
 #include "power_hw.h"
 #include "power_policy.h"
 #include "screen_common.h"
+#include "sd_access.h"
 #include "standby_screen/standby_screen.h"
 #include "standby_screen/standby_wallpaper.h"
 
@@ -60,6 +64,7 @@ bool BlitL8ToEpdFullScreen(const reader::RasterImage& img);
 #include <esp_mmap_assets.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/idf_additions.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <lvgl.h>
@@ -88,7 +93,10 @@ static constexpr int kEpdTempC = 25;
 static std::atomic<bool> s_force_full{false};
 static std::atomic<bool> s_stream_paint{false};
 static std::atomic<bool> s_freeze_updates{false};
-static std::atomic<bool> s_defer_standby_commit{false}; // 进待机先攒 FB，Park 再一次全刷上屏
+static std::atomic<bool> s_defer_standby_commit{false}; // 进待机先攒 FB，Park 再推白上屏
+static bool s_standby_loading_notice_shown = false; // 每次进入待机最多显示一次加载提示
+static const lv_area_t* s_wallpaper_notice_clip = nullptr; // 同步刷新提示时仅写入提示矩形
+static void ShowWallpaperLoading();
 static std::atomic<bool> s_restore_frontlight_after_commit{false}; // 退出待机：底层上墨后再开前光
 static SemaphoreHandle_t s_lvgl_mux = nullptr;
 
@@ -137,10 +145,9 @@ static inline void FbPutNative(uint8_t* fb, int px, int py, uint8_t color, int f
     }
 }
 
-// 统一落墨闸门：busy 供 WiFi 等 defer；硬冲突在此 pause；刷前锁满频
+// 统一落墨闸门：busy 供 WiFi 等 defer；硬冲突在此 pause
 static void epd_panel_enter() {
     Display::SetPanelBusy(true);
-    power_hw_cpu_freq_set(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
     // tip/add76573：落墨期间勿并发采触摸（I2C1 与 TCA/TPS 争用会出假点）
     metalio_touch_set_feed_paused(true);
 }
@@ -150,7 +157,7 @@ static void epd_panel_exit() {
     Display::SetPanelBusy(false);
 }
 
-static void epd_commit_update(EpdiyHighlevelState*, bool force_full) {
+static void epd_commit_update(bool force_full) {
     EpdSubmit(force_full, s_stream_paint.load(),
               s_restore_frontlight_after_commit.exchange(false));
 }
@@ -192,8 +199,14 @@ static void drawable_bounds_cb(lv_event_t* event) {
 static void blit_l8_area_to_epdiy(const uint8_t* pixels, const lv_area_t* area, uint8_t* fb,
                                  int disp_w, int disp_h) {
     if (!pixels || !area || !fb || disp_w <= 0 || disp_h <= 0) return;
-    const int x1 = std::max<int>(area->x1, 0), y1 = std::max<int>(area->y1, 0);
-    const int x2 = std::min<int>(area->x2, disp_w - 1), y2 = std::min<int>(area->y2, disp_h - 1);
+    int x1 = std::max<int>(area->x1, 0), y1 = std::max<int>(area->y1, 0);
+    int x2 = std::min<int>(area->x2, disp_w - 1), y2 = std::min<int>(area->y2, disp_h - 1);
+    if (s_wallpaper_notice_clip != nullptr) {
+        x1 = std::max<int>(x1, s_wallpaper_notice_clip->x1);
+        y1 = std::max<int>(y1, s_wallpaper_notice_clip->y1);
+        x2 = std::min<int>(x2, s_wallpaper_notice_clip->x2);
+        y2 = std::min<int>(y2, s_wallpaper_notice_clip->y2);
+    }
     if (x1 > x2 || y1 > y2) return;
     const int stride = lv_draw_buf_width_to_stride(lv_area_get_width(area), LV_COLOR_FORMAT_L8);
     int px0, py0, px1, py1, px2, py2;
@@ -224,6 +237,12 @@ static void blit_i1_area_to_epdiy(const uint8_t* px_map, const lv_area_t* area, 
     }
     if (y2 >= disp_h) {
         y2 = disp_h - 1;
+    }
+    if (s_wallpaper_notice_clip != nullptr) {
+        x1 = std::max<int>(x1, s_wallpaper_notice_clip->x1);
+        y1 = std::max<int>(y1, s_wallpaper_notice_clip->y1);
+        x2 = std::min<int>(x2, s_wallpaper_notice_clip->x2);
+        y2 = std::min<int>(y2, s_wallpaper_notice_clip->y2);
     }
     if (x2 < x1 || y2 < y1) {
         return;
@@ -260,7 +279,6 @@ static void flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map)
         lv_display_flush_ready(disp);
         return;
     }
-    EpdiyHighlevelState* hl = MetalioEpd_Hl();
     uint8_t* fb = EpdRenderBuffer();
     if (fb == nullptr || px_map == nullptr || area == nullptr) {
         lv_display_flush_ready(disp);
@@ -280,9 +298,9 @@ static void flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map)
         const bool force = s_force_full.exchange(false);
         ESP_LOGD(TAG, "flush last area=%d,%d-%d,%d force=%d defer=%d", area->x1, area->y1, area->x2,
                  area->y2, force ? 1 : 0, s_defer_standby_commit.load() ? 1 : 0);
-        // 进待机：只把 LVGL 叠进 FB，不上墨；由 Park 一次 GC16 带出待机画面
+        // 待机或关机：只收集完整画面，由定格路径统一提交推白
         if (!s_defer_standby_commit.load(std::memory_order_relaxed)) {
-            epd_commit_update(hl, force);
+            epd_commit_update(force);
         }
         StandbyScreen::NotifyFlushCompleted();
         ESP_LOGD(TAG, "commit cost=%lldms", (long long)((esp_timer_get_time() - t0) / 1000));
@@ -312,14 +330,18 @@ bool LvAdapterEpdiy::Init() {
     width_ = DISPLAY_CONTENT_W;
     height_ = DISPLAY_CONTENT_H;
 
-    epd_panel_enter();
-    epd_poweron();
-    assert(epd_lcd_white_border_pixels()==DISPLAY_WHITE_BORDER_PIXELS);
-    epd_lcd_prime_white_border(true);
-    const auto clear_result = epd_clear_checked();
-    epd_lcd_prime_white_border(false);
-    epd_poweroff();
-    epd_panel_exit();
+    EpdDrawError clear_result;
+    {
+        PowerHwCpuFreqHold cpu_freq_hold;
+        epd_panel_enter();
+        epd_poweron();
+        assert(epd_lcd_white_border_pixels()==DISPLAY_WHITE_BORDER_PIXELS);
+        epd_lcd_prime_white_border(true);
+        clear_result = epd_clear_checked();
+        epd_lcd_prime_white_border(false);
+        epd_poweroff();
+        epd_panel_exit();
+    }
     if (clear_result != EPD_DRAW_SUCCESS) {
         ESP_LOGE(TAG, "startup panel clear failed: 0x%x", (unsigned)clear_result);
         return false;
@@ -435,7 +457,7 @@ bool LvAdapterEpdiy::Init() {
                     if (display->notification_label_ != nullptr) {
                         lv_obj_add_flag(display->notification_label_, LV_OBJ_FLAG_HIDDEN);
                     }
-                    if (display->status_label_ != nullptr && !AssistantScreen::IsPttWaveVisible()) {
+                    if (display->status_label_ != nullptr && !AssistantScreen::IsPttWaveVisible() && !WorkBuddyScreen::IsPttWaveVisible()) {
                         lv_obj_remove_flag(display->status_label_, LV_OBJ_FLAG_HIDDEN);
                     }
                 },
@@ -626,7 +648,7 @@ static void PollSideKeys() {
     PollOneSideKey(1, TOUCH_VK_LONG_MS, OnVolUpClick, OnVolUpLong, OnVolUpUp);
     PollOneSideKey(2, TOUCH_VK_LONG_MS, OnVolDownClick, OnVolDownLong, OnVolDownUp);
     // POWER clicks are latched by the sampling task. During standby the LP
-    // task is the sole consumer, including the interval blocked by Park FULL.
+    // task is the sole consumer, including the interval blocked by Park.
     if (!StandbyScreen::IsActive() && MetalioKeys_TakePowerClick()) {
         OnPowerClick();
     }
@@ -637,9 +659,16 @@ void LvAdapterEpdiy::Tick() {
         return;
     }
     if (Lock(50)) {
+        ScreenLvAsyncDrain();
         // OpenDone 无锁投递：先于 timer_handler，避免整屏绘制占锁时回调永远进不来
         BookDrainPendingOpenDone();
         BookScreen::PollStandbyWork();
+        StandbyWallpaper_Poll();
+        if (StandbyScreen::IsActive() && !s_standby_loading_notice_shown &&
+            StandbyWallpaper_IsLoadingSlow()) {
+            s_standby_loading_notice_shown = true;
+            ShowWallpaperLoading();
+        }
         const int64_t t0 = esp_timer_get_time();
         lv_timer_handler();
         const int64_t dt = esp_timer_get_time() - t0;
@@ -685,45 +714,76 @@ void LvAdapterEpdiy::FreezeFlush(bool on) {
     s_freeze_updates.store(on, std::memory_order_relaxed);
 }
 
-void LvAdapterEpdiy::BeginStandbyEnterPaint() {
-    EpdSuspendTestsForStandby();
-    s_stream_paint.store(false);
-    s_defer_standby_commit.store(true, std::memory_order_relaxed);
-    RequestFullOnNextCommit();
-    ESP_LOGI(TAG, "standby enter: defer panel commit until Park FULL");
+static void ShowWallpaperLoading() {
+    lv_obj_t* notice = lv_label_create(lv_layer_top());
+    lv_obj_remove_style_all(notice);
+    lv_label_set_text(notice, Lang::Strings::WALLPAPER_ENTER_LOADING);
+    lv_label_set_long_mode(notice, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_max_width(notice, LV_HOR_RES - 32, 0);
+    lv_obj_set_style_text_font(notice, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(notice, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(notice, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(notice, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(notice, 8, 0);
+    lv_obj_set_style_pad_hor(notice, 12, 0);
+    lv_obj_set_style_pad_ver(notice, 8, 0);
+    lv_obj_clear_flag(notice, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(notice, LV_ALIGN_TOP_MID, 0, ScreenStatusBarHeight() + 8);
+    lv_obj_update_layout(notice);
+    lv_area_t clip;
+    lv_obj_get_coords(notice, &clip);
+    // 仅将提示区域叠加到原有帧缓冲，保留已定格壁纸等未挂入 LVGL 的画面。
+    const bool was_frozen = s_freeze_updates.exchange(false);
+    s_wallpaper_notice_clip = &clip;
+    lv_refr_now(s_disp);
+    s_wallpaper_notice_clip = nullptr;
+    s_freeze_updates.store(was_frozen);
+    if (!EpdWait(EpdSubmit(false))) {
+        ESP_LOGW(TAG, "wallpaper loading notice failed");
+    }
+    lv_obj_delete(notice);
 }
 
-void LvAdapterEpdiy::ParkEpdForStandby() {
+void LvAdapterEpdiy::BeginStandbyEnterPaint() {
+    EpdSetTestActive(false);
+    EpdCancelPageTurn();
+    s_restore_frontlight_after_commit.store(false);
+    s_stream_paint.store(false);
+    s_defer_standby_commit.store(true, std::memory_order_relaxed);
+    s_force_full.store(false);
+    s_standby_loading_notice_shown = false;
+    FreezeFlush(Wallpaper_HasStandbySelection());
+    ESP_LOGI(TAG, "standby enter: defer panel commit until Park");
+}
+
+bool LvAdapterEpdiy::ParkEpdForStandby() {
+    DisplayLockGuard lock(this);
+    if (Wallpaper_HasStandbySelection() && StandbyWallpaper_DecodedImage() == nullptr) {
+        // 解码失败时恢复底层页面，移除已落墨的加载提示。
+        s_defer_standby_commit.store(true, std::memory_order_relaxed);
+        FreezeFlush(false);
+        if (lv_screen_active() != nullptr) lv_obj_invalidate(lv_screen_active());
+        lv_refr_now(s_disp);
+    }
+    // 经典页已完成 flush；壁纸直接写入同一缓冲，均只提交一次。
+    FreezeFlush(true);
     s_defer_standby_commit.store(false, std::memory_order_relaxed);
-    SetStreamPaintMode(false);
+    s_stream_paint.store(false);
+    s_force_full.store(false);
     if (const auto* wallpaper = StandbyWallpaper_DecodedImage()) {
-        // No LVGL redraw may overwrite the direct framebuffer before Park.
-        FreezeFlush(true);
-        BlitL8ToEpdFullScreen(*wallpaper);
-    } else {
-        FullRefresh();
+        DisplayUiSetFullScreen(true);
+        DisplayUiSetOrient(kDisplayUiPortrait);
+        if (!BlitL8ToEpdFullScreen(*wallpaper)) return false;
     }
-    // Stop further UI submissions before waiting: otherwise status updates may
-    // start another waveform between the wait completing and hardware shutdown.
-    FreezeFlush(true);
-    uint32_t sequence = EpdGetStats().submitted;
-    bool painted = EpdWait(sequence);
-    for (int attempt = 0; !painted && attempt < 2; ++attempt) {
-        ESP_LOGW(TAG, "standby FULL recovery %d (err=0x%x)", attempt + 1,
-                 EpdGetStats().last_error);
-        // Driver marks the physical baseline unknown on failure and clears it
-        // before retrying this complete framebuffer. LVGL remains frozen.
-        sequence = EpdSubmit(true);
-        painted = EpdWait(sequence);
+    EpdRequestScreenChange();
+    const uint32_t sequence = EpdSubmit(false);
+    if (!EpdWait(sequence)) {
+        ESP_LOGE(TAG, "standby frame failed; stay awake");
+        return false;
     }
-    if (!painted) {
-        ESP_LOGE(TAG, "standby FULL recovery failed");
-        return;
-    }
-    // 待机画面已上墨后再关前光，避免关得过早还看得见底层页
     Frontlight::GetInstance().ForceAllLow();
-    FreezeFlush(true);
-    ESP_LOGI(TAG, "standby: FULL parked, flush frozen");
+    ESP_LOGI(TAG, "standby: frame parked, flush frozen");
+    return true;
 }
 
 void LvAdapterEpdiy::WakeEpdFromStandby() {
@@ -733,7 +793,8 @@ void LvAdapterEpdiy::WakeEpdFromStandby() {
     s_defer_standby_commit.store(false, std::memory_order_relaxed);
     FreezeFlush(false);
     SetStreamPaintMode(false);
-    RequestFullOnNextCommit();
+    s_force_full.store(false);
+    EpdRequestScreenChange();
     if (lv_screen_active() != nullptr) {
         lv_obj_invalidate(lv_screen_active());
     }
@@ -755,7 +816,6 @@ namespace {
 
 // L8 背景在完整面板区域等比居中，不使用普通 UI 内缩。
 bool BlitL8ToEpdFullScreen(const reader::RasterImage& img) {
-    EpdiyHighlevelState* hl = MetalioEpd_Hl();
     uint8_t* fb = EpdRenderBuffer();
     if (fb == nullptr || img.empty()) {
         return false;
@@ -790,12 +850,13 @@ bool BlitL8ToEpdFullScreen(const reader::RasterImage& img) {
             taskYIELD();
         }
     }
-    epd_commit_update(hl, true);
     return true;
 }
 
 bool TryDecodeShutdownFromSd(reader::RasterImage& out) {
-    char path[192] = {};
+    // 待机保持 SD 访问暂停，仅允许当前任务读取关机壁纸。
+    sd_access::Permit permit;
+    char path[SD_FILE_PATH_CAPACITY] = {};
     if (!Wallpaper_TryResolveActiveWallpaperPath(path, sizeof(path))) {
         ESP_LOGI(TAG, "shutdown img: no NVS shutdown file");
         return false;
@@ -878,38 +939,75 @@ void ShowPoweredOffTextFallback() {
     lv_refr_now(nullptr);
 }
 
+struct ShutdownWallpaperWork {
+    reader::RasterImage img; // 当前关机流程持有的解码像素
+    bool have_img = false; // 解码成功后由 done 发布
+    std::atomic<bool> done{false}; // 解码任务完成标记
+};
+
+void DecodeShutdownWallpaperTask(void* arg) {
+    auto* work = static_cast<ShutdownWallpaperWork*>(arg);
+    work->have_img = TryDecodeShutdownFromSd(work->img);
+    if (!work->have_img) {
+        work->have_img = TryDecodeShutdownBuiltin(work->img);
+    }
+    work->done.store(true, std::memory_order_release);
+    vTaskDeleteWithCaps(nullptr);
+}
+
 }  // namespace
 
-void LvAdapterEpdiy::ShowPoweredOffScreen() {
-    // 解冻以便本帧能刷；关机画面只走这一次全刷上墨
-    FreezeFlush(false);
-    s_defer_standby_commit.store(false, std::memory_order_relaxed);
+bool LvAdapterEpdiy::ShowPoweredOffScreen() {
+    DisplayLockGuard lock(this);
+    // 加载期间保留原帧，提示局部叠加；解码完成后再生成完整关机画面。
+    FreezeFlush(true);
+    s_defer_standby_commit.store(true, std::memory_order_relaxed);
     s_stream_paint.store(false);
 
-    DisplayLockGuard lock(this);
+    s_force_full.store(false);
+    s_restore_frontlight_after_commit.store(false);
+    EpdSetTestActive(false);
+    EpdCancelPageTurn();
+    ShutdownWallpaperWork work;
+    const int64_t started = esp_timer_get_time();
+    if (xTaskCreatePinnedToCoreWithCaps(DecodeShutdownWallpaperTask, "off_wp_load", 12 * 1024,
+                                      &work, 5, nullptr, 0,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS) {
+        bool notice_shown = false;
+        while (!work.done.load(std::memory_order_acquire)) {
+            if (!notice_shown && esp_timer_get_time() - started >= 1000000) {
+                notice_shown = true;
+                ShowWallpaperLoading();
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    } else {
+        ESP_LOGW(TAG, "shutdown wallpaper task create failed; use built-in image");
+        work.have_img = TryDecodeShutdownBuiltin(work.img);
+    }
+    bool have_img = work.have_img;
+
     DisplayUiSetFullScreen(true);
     DisplayUiSetOrient(kDisplayUiPortrait);
     BindStatusWidgets(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 
-    reader::RasterImage img;
-    bool have_img = TryDecodeShutdownFromSd(img);
-    if (!have_img) {
-        have_img = TryDecodeShutdownBuiltin(img);
-    }
-
-    if (have_img) {
-        if (!BlitL8ToEpdFullScreen(img)) {
-            have_img = false;
-        }
-    }
+    if (have_img) have_img = BlitL8ToEpdFullScreen(work.img);
 
     if (!have_img) {
+        FreezeFlush(false);
         ShowPoweredOffTextFallback();
     }
 
-    if (!EpdWait(EpdGetStats().submitted)) ESP_LOGE(TAG, "shutdown frame failed");
     FreezeFlush(true);
+    s_defer_standby_commit.store(false, std::memory_order_relaxed);
+    s_force_full.store(false);
+    EpdRequestScreenChange();
+    if (!EpdWait(EpdSubmit(false))) {
+        ESP_LOGE(TAG, "shutdown frame failed; keep power on");
+        return false;
+    }
     ESP_LOGI(TAG, "powered-off screen shown (a2i1=%d)", have_img ? 1 : 0);
+    return true;
 }
 
 void LvAdapterEpdiy::SetStatusTitlePrefix(const char* prefix) {
@@ -993,10 +1091,21 @@ void LvAdapterEpdiy::RestoreStatusWidgetsLocked() {
     if (status_label_ != nullptr) {
         const char* body = status_body_cache_[0] != '\0' ? status_body_cache_ : "--:--";
         ApplyStatusTextLocked(body);
-        if (!AssistantScreen::IsPttWaveVisible()) {
+        if (!AssistantScreen::IsPttWaveVisible() && !WorkBuddyScreen::IsPttWaveVisible()) {
             lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
         }
     }
+}
+
+EpdStatusBar LvAdapterEpdiy::GetBoundStatusBar() const {
+    EpdStatusBar status;
+    status.status_label = status_label_;
+    status.notification_label = notification_label_;
+    status.network_label = network_label_;
+    status.battery_label = battery_label_;
+    status.battery_pct_label = battery_pct_label_;
+    status.mute_label = mute_label_;
+    return status;
 }
 
 void LvAdapterEpdiy::BindStatusBar(lv_obj_t* status_label, lv_obj_t* notification_label,
@@ -1133,7 +1242,7 @@ void LvAdapterEpdiy::UpdateStatusBar(bool update_all) {
             network_busy_status_ = true;
         }
         ApplyStatusTextLocked(wifi_busy);
-        if (!AssistantScreen::IsPttWaveVisible()) {
+        if (!AssistantScreen::IsPttWaveVisible() && !WorkBuddyScreen::IsPttWaveVisible()) {
             if (lv_obj_has_flag(status_label_, LV_OBJ_FLAG_HIDDEN)) {
                 lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
             }
@@ -1144,7 +1253,7 @@ void LvAdapterEpdiy::UpdateStatusBar(bool update_all) {
         }
     } else if (set_time && status_label_ != nullptr) {
         ApplyStatusTextLocked(time_str);
-        if (!AssistantScreen::IsPttWaveVisible()) {
+        if (!AssistantScreen::IsPttWaveVisible() && !WorkBuddyScreen::IsPttWaveVisible()) {
             const bool notif_on = notification_label_ != nullptr &&
                                   !lv_obj_has_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
             if (!notif_on) {
@@ -1171,13 +1280,6 @@ void LvAdapterEpdiy::UpdateStatusBar(bool update_all) {
     bool charging = false;
     bool discharging = false;
     if (board.GetBatteryLevel(level, charging, discharging)) {
-        const int64_t tick = esp_timer_get_time();
-        if (level != battery_candidate_) {
-            battery_candidate_ = level;
-            battery_candidate_since_ = tick;
-        }
-        if (battery_level_cache_ >= 0 && std::abs(level-battery_level_cache_) < 2 &&
-            tick-battery_candidate_since_ < 30000000) level = battery_level_cache_;
         const char* icon = FONT_AWESOME_BATTERY_FULL;
         if (charging) {
             icon = FONT_AWESOME_BATTERY_BOLT;
@@ -1202,6 +1304,16 @@ void LvAdapterEpdiy::UpdateStatusBar(bool update_all) {
             if (battery_pct_label_ != nullptr) {
                 lv_label_set_text(battery_pct_label_, battery_pct_cache_);
             }
+        }
+    } else {
+        battery_level_cache_ = -1;
+        battery_icon_ = nullptr;
+        battery_pct_cache_[0] = '\0';
+        if (battery_label_ != nullptr) {
+            lv_label_set_text(battery_label_, "");
+        }
+        if (battery_pct_label_ != nullptr) {
+            lv_label_set_text(battery_pct_label_, "");
         }
     }
     if (mute_label_ != nullptr) {

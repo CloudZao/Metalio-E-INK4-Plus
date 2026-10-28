@@ -5,10 +5,12 @@
 #include "assets/lang_config.h"
 #include "assets/lang_cellular.h"
 #include "board.h"
+#include "dual_network_board.h"
 
 #include <esp_log.h>
 #include <esp_network.h>
 #include <esp_timer.h>
+#include <esp_system.h>
 #include <chrono>
 #include <algorithm>
 #include <freertos/FreeRTOS.h>
@@ -28,10 +30,17 @@ constexpr uint32_t kNetworkWaitTimeoutMs = 60 * 1000;
 constexpr uint32_t kCellularBootSettleMs = 1000;
 constexpr uint32_t kCellularRecoverStack = 6144;
 constexpr int kRecoverWaitMs = 45000;
+
+void StopCellularBeforeRestart() {
+    auto* board = &Board::GetInstance();
+    if (auto* dual = dynamic_cast<DualNetworkBoard*>(board)) board = &dual->GetCurrentBoard();
+    if (auto* cellular = dynamic_cast<Nt26Board*>(board)) cellular->PreparePowerOff();
+}
 }  // namespace
 
 Nt26Board::Nt26Board(gpio_num_t tx_pin, gpio_num_t rx_pin, gpio_num_t dtr_pin, gpio_num_t ri_pin)
     : tx_pin_(tx_pin), rx_pin_(rx_pin), dtr_pin_(dtr_pin), ri_pin_(ri_pin) {
+    ESP_ERROR_CHECK(esp_register_shutdown_handler(StopCellularBeforeRestart));
     // 勿用 ESP_INTR_FLAG_IRAM：OTA/NVS 写 Flash 时 Cache 关闭，若 GPIO ISR 仍跑
     // 会踩 Flash 映射区（Cache error）。无 IRAM 标志时驱动会在 Cache off 窗口屏蔽本 ISR。
     gpio_install_isr_service(0);
@@ -40,6 +49,7 @@ Nt26Board::Nt26Board(gpio_num_t tx_pin, gpio_num_t rx_pin, gpio_num_t dtr_pin, g
 }
 
 Nt26Board::~Nt26Board() {
+    esp_unregister_shutdown_handler(StopCellularBeforeRestart);
     powered_.store(false);
     TearDownModem();
     while (signal_busy_.load()) vTaskDelay(pdMS_TO_TICKS(10));

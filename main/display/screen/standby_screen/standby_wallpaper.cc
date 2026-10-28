@@ -1,4 +1,5 @@
 #include "standby_screen/standby_wallpaper.h"
+#include "sd_paths.h"
 
 #include "wallpaper_screen/wallpaper_active.h"
 
@@ -11,6 +12,7 @@
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/idf_additions.h>
 #include <freertos/task.h>
@@ -27,18 +29,17 @@ static bool s_alive = false;
 static uint32_t s_epoch = 0;
 static reader::RasterImage* s_raster = nullptr;
 static std::atomic<bool> s_load_busy{false};
+static std::atomic<int64_t> s_decode_started_us{0}; // 解码开始时间，完成后清零
 static std::atomic<StandbyWpLoadState> s_load_state{StandbyWpLoadState::Idle};
 
-struct StandbyWpLoadWork {
-    uint32_t epoch = 0;
+struct StandbyWpLoadResult {
+    uint32_t epoch = 0; // 对应的界面版本
+    bool ok = false; // 解码是否成功
+    char err[64] = {}; // 失败原因
+    reader::RasterImage* img = nullptr; // 接收前由结果持有的像素
 };
 
-struct StandbyWpLoadResult {
-    uint32_t epoch = 0;
-    bool ok = false;
-    char err[64] = {};
-    reader::RasterImage* img = nullptr;
-};
+static std::atomic<StandbyWpLoadResult*> s_pending_result{nullptr}; // 后台发布、显示任务接收的结果
 
 static void MarkLoadDone(StandbyWpLoadState st) {
     s_load_state.store(st, std::memory_order_release);
@@ -50,15 +51,14 @@ static void FreeDecodedImage() {
     }
 }
 
-static void ApplyLoadAsync(void* p) {
-    auto* msg = static_cast<StandbyWpLoadResult*>(p);
+static void ApplyLoadResult(StandbyWpLoadResult* msg) {
     s_load_busy.store(false, std::memory_order_release);
-    if (msg == nullptr) {
-        return;
-    }
     if (!s_alive || msg->epoch != s_epoch) {
         delete msg->img;
         delete msg;
+        if (s_alive) {
+            StandbyWallpaper_StartLoad();
+        }
         return;
     }
     if (!msg->ok || msg->img == nullptr || msg->img->empty()) {
@@ -78,14 +78,11 @@ static void ApplyLoadAsync(void* p) {
 }
 
 static void LoadTask(void* arg) {
-    auto* work = static_cast<StandbyWpLoadWork*>(arg);
-    auto* msg = new StandbyWpLoadResult{};
-    msg->epoch = work != nullptr ? work->epoch : 0;
-    delete work;
+    auto* msg = static_cast<StandbyWpLoadResult*>(arg);
 
     {
         sd_access::Permit permit;
-        char path[192] = {};
+        char path[SD_FILE_PATH_CAPACITY] = {};
         if (!Wallpaper_TryResolveStandbyWallpaperPath(path, sizeof(path))) {
             std::snprintf(msg->err, sizeof(msg->err), "%s", Lang::Strings::STANDBY_WP_NOT_FOUND);
         } else {
@@ -101,12 +98,8 @@ static void LoadTask(void* arg) {
             }
         }
     }
-    if (lv_async_call(ApplyLoadAsync, msg) != LV_RESULT_OK) {
-        delete msg->img;
-        delete msg;
-        s_load_busy.store(false, std::memory_order_release);
-        MarkLoadDone(StandbyWpLoadState::Failed);
-    }
+    s_decode_started_us.store(0, std::memory_order_release);
+    s_pending_result.store(msg, std::memory_order_release);
     vTaskDeleteWithCaps(nullptr);
 }
 
@@ -119,8 +112,8 @@ void StandbyWallpaper_Build(lv_obj_t* root) {
     s_alive = true;
     MarkLoadDone(StandbyWpLoadState::Idle);
 
-    lv_obj_set_style_bg_color(root, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    // 解码期间保留底层页面，完整壁纸由 Park 直接写入帧缓冲。
+    lv_obj_set_style_bg_opa(root, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_all(root, 0, 0);
     lv_obj_set_style_border_width(root, 0, 0);
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
@@ -135,11 +128,14 @@ void StandbyWallpaper_StartLoad() {
         return;
     }
     MarkLoadDone(StandbyWpLoadState::Loading);
-    auto* work = new StandbyWpLoadWork{s_epoch};
+    s_decode_started_us.store(esp_timer_get_time(), std::memory_order_release);
+    auto* msg = new StandbyWpLoadResult{};
+    msg->epoch = s_epoch;
     // 栈放 SPIRAM：解码峰值与壁纸缩略图任务同级
-    if (xTaskCreatePinnedToCoreWithCaps(LoadTask, "stb_wp_load", kLoadStack, work, 5, nullptr, 0,
+    if (xTaskCreatePinnedToCoreWithCaps(LoadTask, "stb_wp_load", kLoadStack, msg, 5, nullptr, 0,
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-        delete work;
+        delete msg;
+        s_decode_started_us.store(0, std::memory_order_release);
         s_load_busy.store(false, std::memory_order_release);
         MarkLoadDone(StandbyWpLoadState::Failed);
         ESP_LOGW(TAG, "load task create failed");
@@ -149,6 +145,18 @@ void StandbyWallpaper_StartLoad() {
 bool StandbyWallpaper_IsContentReady() {
     const StandbyWpLoadState st = s_load_state.load(std::memory_order_acquire);
     return st == StandbyWpLoadState::Ready || st == StandbyWpLoadState::Failed;
+}
+
+void StandbyWallpaper_Poll() {
+    if (auto* msg = s_pending_result.exchange(nullptr, std::memory_order_acquire)) {
+        ApplyLoadResult(msg);
+    }
+}
+
+bool StandbyWallpaper_IsLoadingSlow() {
+    const int64_t started = s_decode_started_us.load(std::memory_order_acquire);
+    return s_alive && s_load_state.load(std::memory_order_acquire) == StandbyWpLoadState::Loading &&
+           started != 0 && esp_timer_get_time() - started >= 1000000;
 }
 
 const reader::RasterImage* StandbyWallpaper_DecodedImage() {
@@ -161,8 +169,7 @@ void StandbyWallpaper_Teardown() {
     s_alive = false;
     FreeDecodedImage();
     MarkLoadDone(StandbyWpLoadState::Idle);
-    // 不强制清 s_load_busy：任务结束时 ApplyLoadAsync / 失败路径会清；
-    // 若任务仍跑，epoch 不匹配会释放像素且清 busy。
+    // 在途结果由显示任务接收后释放；此前保持 busy，避免重叠解码。
 }
 
 void StandbyWallpaper_InvalidateDecoded() {

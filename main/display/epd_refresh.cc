@@ -67,7 +67,6 @@ void (*after_submit)() = nullptr; // 下一次提交后的单次回调
 bool pending_screen_change=false;
 int64_t pending_at=0;
 std::atomic<bool> busy{false}, test_active{false}, stop_test{false};
-std::atomic<bool> standby_test_reset{false};
 std::atomic<uint32_t> cancel_generation{0};
 std::atomic<uint32_t> tests_submitted{0}, tests_completed{0}, test_ms{0}, test_frames{0};
 std::atomic<int> test_mode{0};
@@ -192,7 +191,8 @@ EpdDrawError Draw(EpdiyHighlevelState* hl, int mode, bool full, bool clean, bool
     // The existing 30-phase optical 8-gray table is sufficient for A2 text edges.
     // Reuse it unchanged for reading (including intermediate frames); cleaning stays GC16.
     const bool ota_progress = OtaUpgradeScreen::IsActive() && !cleanup && page==PageDraw::None;
-    const EpdWaveform* ordinary = (profile>=2 || ota_progress) && mode==MODE_DU ? my_waveform_short_du()
+    const EpdWaveform* ordinary = (profile>=2 || ota_progress) && mode==MODE_DU
+        ? (profile==2 && !ota_progress ? my_waveform_fast_du() : my_waveform_short_du())
         : ProfileWaveform(profile,mode,gray.reader_aa && !cleanup);
     epd_hl_waveform(hl,complete_waveform ? &MY_WAVEFORM : (spatial ? spatial : ordinary));
     KeepWhiteBorder(hl->front_fb);
@@ -207,7 +207,7 @@ EpdDrawError Draw(EpdiyHighlevelState* hl, int mode, bool full, bool clean, bool
     } log_storage_guard;
     const int64_t start = esp_timer_get_time();
     Display::SetPanelBusy(true);
-    power_hw_cpu_freq_set(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+    PowerHwCpuFreqHold cpu_freq_hold;
     metalio_touch_set_feed_paused(true);
     if (!panel_powered) {
         epd_poweron();
@@ -388,12 +388,7 @@ void Worker(void*) {
             Settings settings("screen",true);
             settings.SetInt("black_depth",selected_depth);
         }
-        // Worker owns the panel baseline. Standby's forced GC16 uses the real
-        // old frame and needs no additional native-gray test conditioning.
-        if (standby_test_reset.exchange(false)) {
-            pattern=-1;
-            gray_on_panel=false;
-        }
+        // 退出测试时保留物理灰阶状态，由下一次推白或必要清屏更新基线。
         if (!test_active.load()) { pattern=-1; test=false; if (job.sequence) tests_completed.store(job.sequence); }
         if (frame || test) busy.store(true);
         if (test) {
@@ -432,18 +427,20 @@ void Worker(void*) {
             // 小范围状态更新同样累计局刷次数，避免长期刷新却无法触发清屏。
             bool promote=profile_full || full || state_unknown || (pattern<0 && !stream && !scrolling && !scroll_settle && changed>0 &&
                 partials.load()>=24 && esp_timer_get_time()-last_full>=60000000);
+            const auto page_effect=static_cast<EpdEffect>(pattern<0 ? reader_effect.load() : effect.load());
+            const bool wipe_turn=turn && page_effect==EpdEffect::Wipe;
+            const int wipe_orient=screen_change ? orient : EpdWipeOrient(orient,turn);
             bool combined=false;
-            if (screen_change && !promote) {
+            if ((screen_change || wipe_turn) && !promote) {
                 if (pattern<0 && !gray_on_panel && binary_pages && effect_fb) {
-                    combined=Draw(hl,MODE_DU,false,false,false,PageDraw::Binary,orient)==EPD_DRAW_SUCCESS;
+                    combined=Draw(hl,MODE_DU,false,false,false,PageDraw::Binary,wipe_orient)==EPD_DRAW_SUCCESS;
                     if (!combined) promote=true;
                 } else if (pattern<0 && !gray_on_panel && effect_fb) {
-                    combined=Draw(hl,MODE_GL16,false,false,false,PageDraw::Gray,orient)==EPD_DRAW_SUCCESS;
+                    combined=Draw(hl,MODE_GL16,false,false,false,PageDraw::Gray,wipe_orient)==EPD_DRAW_SUCCESS;
                     if (!combined) promote=true;
                 } else promote=true;
             }
-            const auto page_effect=static_cast<EpdEffect>(pattern<0 ? reader_effect.load() : effect.load());
-            if (!promote && !screen_change) Transition(hl,turn,page_effect,orient,gray_page_turn,reader_aa);
+            if (!promote && !screen_change && !wipe_turn) Transition(hl,turn,page_effect,orient,gray_page_turn,reader_aa);
             // A failed intermediate frame invalidates the physical baseline.
             promote |= state_unknown;
             // A status/button redraw must not recondition unchanged native gray bars.
@@ -561,10 +558,6 @@ void EpdCancelPageTurn() {
 }
 void EpdRequestScreenChange() { next_screen_change.store(true); }
 void EpdSetTestActive(bool active) { test_active.store(active); if (!active) EpdTestStop(); }
-void EpdSuspendTestsForStandby() {
-    EpdSetTestActive(false);
-    standby_test_reset.store(true);
-}
 bool EpdTestRequest(EpdPattern p,int mode,bool clean,int repeats) {
     if (!worker || !test_active.load() || repeats<1 || repeats>20 ||
         (p==EpdPattern::Gray && mode==MODE_DU) ||

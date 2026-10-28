@@ -10,6 +10,7 @@
 #include "settings_common.h"
 
 #include <wifi_scan_lease.h>
+#include <wifi_station.h>
 
 #include <algorithm>
 #include <atomic>
@@ -171,6 +172,7 @@ bool WifiTeardownLocked() {
 }
 
 bool WifiEnsureForScan() {
+    if (!WifiStation::GetInstance().IsUserEnabled()) return false;
     WifiLifecycleLock lock;
     // Teardown may have invalidated this worker while it waited for the lock.
     if (!SettingsTest_IsLive() || s_worker_generation != s_scan_generation.load()) return false;

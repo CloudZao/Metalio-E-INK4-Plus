@@ -13,6 +13,8 @@
 #include "settings_language_tab.h"
 #include "settings_network_tab.h"
 #include "settings_power_tab.h"
+#include "settings_charging_tab.h"
+#include "assets/lang_charging.h"
 #include "settings_test/settings_test_tab.h"
 #include "settings_theme_tab.h"
 #include "settings_log_tab.h"
@@ -37,6 +39,7 @@ enum class SettingsTab : int {
     kBluetooth = 7,
     kTest = 8,
     kLog = 9,
+    kCharging = 11, // 充电电流配置
     kAbout = 10, // 关于始终放最后
 };
 
@@ -57,6 +60,7 @@ static const char* TabNameLanguage() {
 static const char* TabNameHaptic() {
     return Lang::Strings::SETTINGS_TAB_HAPTIC;
 }
+static const char* TabNameCharging() { return Lang::Strings::SETTINGS_TAB_CHARGING; }
 static const char* TabNamePower() {
     return Lang::Strings::SETTINGS_TAB_POWER;
 }
@@ -83,6 +87,7 @@ static constexpr SettingsTabEntry kTabs[] = {
     {SettingsTab::kLanguage, TabNameLanguage},
     {SettingsTab::kHaptic, TabNameHaptic},
     {SettingsTab::kPower, TabNamePower},
+    {SettingsTab::kCharging, TabNameCharging},
     {SettingsTab::kFrontlight, TabNameFrontlight},
     {SettingsTab::kConversation, TabNameConversation},
     {SettingsTab::kBluetooth, TabNameBluetooth},
@@ -134,6 +139,9 @@ static void ResetTab(SettingsTab id) {
         case SettingsTab::kHaptic:
             SettingsHapticTab_Reset();
             break;
+        case SettingsTab::kCharging:
+            SettingsChargingTab_Reset();
+            break;
         case SettingsTab::kPower:
             SettingsPowerTab_Reset();
             break;
@@ -174,6 +182,9 @@ static void BuildTab(SettingsTab id) {
             break;
         case SettingsTab::kHaptic:
             SettingsHapticTab_Build(page);
+            break;
+        case SettingsTab::kCharging:
+            SettingsChargingTab_Build(page);
             break;
         case SettingsTab::kPower:
             SettingsPowerTab_Build(page);
@@ -348,8 +359,8 @@ static lv_obj_t* CreateInternal() {
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(content, kSettingsOptionGap, 0);
-    lv_obj_add_flag(content, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(content, LV_DIR_VER);
+    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(content, LV_DIR_NONE);
     lv_obj_clear_flag(content, LV_OBJ_FLAG_CLICKABLE);
     s_ui.content_page = content;
 

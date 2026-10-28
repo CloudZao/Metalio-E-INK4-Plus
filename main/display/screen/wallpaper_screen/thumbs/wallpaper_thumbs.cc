@@ -20,7 +20,7 @@ namespace {
 
 struct ThumbWorkItem {
     int index = -1; // 文件列表索引
-    char path[192] = {}; // 图片文件路径
+    char path[SD_FILE_PATH_CAPACITY] = {}; // 图片文件路径
 };
 
 struct ThumbFillWork {
@@ -39,7 +39,7 @@ struct ThumbOneMsg {
     uint32_t epoch = 0;
     uint32_t generation = 0; // 页面生命周期代数
     int index = -1; // 文件列表索引
-    char path[192] = {}; // 图片文件路径
+    char path[SD_FILE_PATH_CAPACITY] = {}; // 图片文件路径
     reader::RasterImage* img = nullptr; // 交由 UI 接收的解码结果
 };
 
@@ -51,7 +51,10 @@ void ApplyThumbOne(void* p) {
     const bool alive = Wallpaper_State().screen_alive && msg->epoch == Wallpaper_State().epoch &&
         !Wallpaper_State().decode_paused.load() &&
         msg->generation == Wallpaper_State().decode_generation.load();
+    const int per_page = Wallpaper_State().list.list_per_page;
+    const int start = Wallpaper_State().list.list_page * per_page;
     const bool slot_ok = alive && msg->img != nullptr && msg->index >= 0 &&
+                         msg->index >= start - per_page && msg->index < start + 2 * per_page &&
                          msg->index < static_cast<int>(Wallpaper_State().list.thumbs.size()) &&
                          msg->index < static_cast<int>(Wallpaper_State().list.files.size()) &&
                          std::strcmp(Wallpaper_State().list.files[static_cast<size_t>(msg->index)].path, msg->path) == 0;
@@ -60,7 +63,7 @@ void ApplyThumbOne(void* p) {
         delete msg;
         return;
     }
-    // 保留已完成的解码结果，翻页仅取消尚未开始的任务。
+    // 在途结果也遵守当前页及相邻页的缓存范围。
     Wallpaper_State().list.thumbs[static_cast<size_t>(msg->index)].reset(msg->img);
     msg->img = nullptr;
     if (Wallpaper_State().mode == UiMode::kList) {

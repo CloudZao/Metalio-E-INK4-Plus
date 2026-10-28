@@ -114,4 +114,19 @@ inline std::string VisionUploadUrl() {
     return Url(kVisionUpload);
 }
 
+inline const char* const kWorkBuddyAuthorization = cloudzao_path_workbuddy_authorization;
+inline const char* const kWorkBuddyAuthorizationSessions = cloudzao_path_workbuddy_authorization_sessions;
+inline const char* const kWorkBuddyTextTurn = cloudzao_path_workbuddy_text_turn;
+inline const char* const kWorkBuddyAsrStream = cloudzao_path_workbuddy_asr_stream;
+inline const char* const kWorkBuddyLocalMessages = cloudzao_path_workbuddy_local_messages;
+inline const char* const kWorkBuddyLocalStatus = cloudzao_path_workbuddy_local_status;
+inline const char* const kWorkBuddyLocalReply = cloudzao_path_workbuddy_local_reply;
+inline const char* const kWorkBuddyHost = cloudzao_workbuddy_host;
+
+/** @brief 拼接 WorkBuddy 独立服务地址 */
+inline std::string WorkBuddyUrl(const char* path) {
+    if (kWorkBuddyHost[0] == '\0' || path == nullptr || path[0] == '\0') return {};
+    return std::string(kWorkBuddyHost) + path;
+}
+
 }  // namespace api

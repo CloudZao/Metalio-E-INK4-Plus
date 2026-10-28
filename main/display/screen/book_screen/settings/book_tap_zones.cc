@@ -10,7 +10,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-
 static constexpr const char* TAG = "BookTapZones";
 static constexpr const char* kNvsNs = "reader";
 static constexpr const char* kNvsKey = "tap_zones";
@@ -39,11 +38,13 @@ static bool s_ready = false;
 static bool ActionOk(uint8_t v) {
     return v < static_cast<uint8_t>(BookTapZoneAction::kCount);
 }
-bool ParsePacked(const std::string& packed, uint8_t* out) {
+
+static bool ParsePacked(const std::string& packed, uint8_t* out) {
     if (out == nullptr || packed.size() != static_cast<size_t>(kBookTapZoneCellCount)) {
         return false;
     }
     uint8_t tmp[kBookTapZoneCellCount];
+    bool has_menu = false;
     for (int i = 0; i < kBookTapZoneCellCount; ++i) {
         const char c = packed[static_cast<size_t>(i)];
         if (c < '0' || c > '9') {
@@ -54,6 +55,10 @@ bool ParsePacked(const std::string& packed, uint8_t* out) {
             return false;
         }
         tmp[i] = v;
+        has_menu |= v == static_cast<uint8_t>(BookTapZoneAction::kMenu);
+    }
+    if (!has_menu) {
+        return false;
     }
     std::memcpy(out, tmp, sizeof(tmp));
     return true;
@@ -69,14 +74,13 @@ static void LoadFromNvs() {
     const std::string packed = settings.GetString(kNvsKey, "");
     if (!packed.empty() && !ParsePacked(packed, s_cells)) {
         ESP_LOGW(TAG, "nvs tap_zones invalid, using defaults");
-        CopyDefault();
     }
     s_ready = true;
     ESP_LOGI(TAG, "nvs load tap_zones");
 }
 
 struct BookTapPersistArg {
-    uint8_t cells[kBookTapZoneCellCount] = {};
+    uint8_t cells[kBookTapZoneCellCount] = {}; // 待保存的分区配置快照
 };
 
 static void PersistTask(void* arg) {
@@ -97,17 +101,14 @@ static void PersistTask(void* arg) {
     vTaskDelete(nullptr);
 }
 
-static bool StartPersist() {
+static void StartPersist() {
     auto* arg = new BookTapPersistArg{};
     std::memcpy(arg->cells, s_cells, sizeof(s_cells));
     if (xTaskCreate(PersistTask, "tap_zones_nvs", 4096, arg, 5, nullptr) != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreate(tap_zones_nvs) failed");
         delete arg;
-        return false;
     }
-    return true;
 }
-
 
 void BookTapZonesEnsureLoaded() {
     if (!s_ready) {
@@ -130,23 +131,31 @@ BookTapZoneAction BookTapZonesActionAt(int cell) {
     return static_cast<BookTapZoneAction>(v);
 }
 
-void BookTapZonesSetAction(int cell, BookTapZoneAction action) {
+bool BookTapZonesSetAction(int cell, BookTapZoneAction action) {
     BookTapZonesEnsureLoaded();
     if (cell < 0 || cell >= kBookTapZoneCellCount) {
         ESP_LOGW(TAG, "reject bad cell=%d", cell);
-        return;
+        return false;
     }
     const uint8_t v = static_cast<uint8_t>(action);
     if (!ActionOk(v)) {
         ESP_LOGW(TAG, "reject bad action=%u", static_cast<unsigned>(v));
-        return;
+        return false;
     }
     if (s_cells[cell] == v) {
-        return;
+        return true;
+    }
+    bool has_menu = false;
+    for (int i = 0; i < kBookTapZoneCellCount; ++i) {
+        has_menu |= (i == cell ? v : s_cells[i]) ==
+                    static_cast<uint8_t>(BookTapZoneAction::kMenu);
+    }
+    if (!has_menu) {
+        return false;
     }
     s_cells[cell] = v;
-    s_ready = true;
-    (void)StartPersist();
+    StartPersist();
+    return true;
 }
 
 void BookTapZonesResetDefaults() {
@@ -155,8 +164,7 @@ void BookTapZonesResetDefaults() {
         return;
     }
     CopyDefault();
-    s_ready = true;
-    (void)StartPersist();
+    StartPersist();
 }
 
 int BookTapZonesHit(int x, int y, int w, int h) {

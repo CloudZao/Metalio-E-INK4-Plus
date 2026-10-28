@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <atomic>
 
 #include <driver/sdmmc_host.h>
 #include <sdmmc_cmd.h>
@@ -40,8 +41,13 @@ public:
     /** @brief USB 停用后尽量恢复本机 VFS */
     bool RemountVfsFromCard();
 
+    /** @brief 查询挂载状态快照，实际文件访问仍须经过统一访问许可 */
     bool IsMounted() const;
+    /** @brief 查询是否持有卡对象的状态快照 */
     bool HasCard() const;
+    /** @brief 本次启动是否发生过 SD 数据读写错误 */
+    bool HasIoError() const { return io_error_.load(std::memory_order_relaxed); }
+    /** @brief 获取借用的卡对象，仅在持有 sd_access::Transition 时使用 */
     sdmmc_card_t* GetCard() const;
     const char* GetMountPoint() const;
 
@@ -52,11 +58,13 @@ private:
     static sdmmc_slot_config_t MakeSlotConfig();
     static void PreparePinsForMount();
     static bool CheckDmaBuffer(int slot, const void* buffer, size_t size);
+    static esp_err_t DoTransaction(int slot, sdmmc_command_t* command);
     bool PrepareDmaBuffer(sdmmc_host_t& host);
     void ReleaseDmaBuffer();
 
-    sdmmc_card_t* card_ = nullptr;
-    bool mounted_ = false;
+    std::atomic<sdmmc_card_t*> card_{nullptr};
+    std::atomic<bool> mounted_{false};
+    std::atomic<bool> io_error_{false}; // 数据读写故障保持到重启，避免重复提示
     bool raw_owned_ = false;
     void* dma_buffer_ = nullptr; // 随卡生命周期复用的对齐传输缓冲
 };

@@ -63,6 +63,7 @@ Product data lives under SD `metalio/e-ink/`. Cloud APIs use **ink-screen** push
 - **Logical UI size**: 680x1212 with 2px insets on all sides; standby and shutdown use the full 684x1216 panel (`DISPLAY_CONTENT_*` in `config.h`).
 - **Library**: 3x3 cover grid -> detail -> body; `.ebook` / `.epub` / `.txt`
 - **Fonts**: UI fontpack on Flash `font_data`; reader `.ef` fonts on SD or via Transfer
+- **Text layout**: Paragraphs use first-line indentation without extra paragraph spacing. Full body-text pages have a fixed line count for the same font, line spacing, margins, orientation, and footer visibility; headings, images, and chapter endings may reduce it.
 - **Toolchain**: `tools/ebook/` converts PDF/EPUB/MOBI/TXT to device `.ebook` (with Web preview)
 
 ### 2.3 Local multimodal features
@@ -70,7 +71,7 @@ Product data lives under SD `metalio/e-ink/`. Cloud APIs use **ink-screen** push
 - **Daily checklist**: cloud sync + local cache (also shown on classic standby)
 - **Wallpaper**: SD gallery; can be standby fullscreen or shutdown image
 - **Transfer**: cloud push of books, wallpapers, fonts to SD
-- **Frontlight**: cool / warm / both / off (Settings -> Frontlight; GPIO6/7)
+- **Quick controls**: swipe down in non-scrolling areas on any page for Wi-Fi on the left and vertical brightness and warm-light ratio sliders on the right. Swipe up outside the sliders or tap outside the panel to close it. Disabled during OTA upgrades and standby (11.6).
 - **Sensors**: SC7A20H accel; PCF8563 RTC; BQ27220 gauge
 
 ### 2.4 Connectivity
@@ -88,7 +89,7 @@ Product data lives under SD `metalio/e-ink/`. Cloud APIs use **ink-screen** push
   - **Idle -> light-sleep standby**: default **3 min** (10 / 30 optional) -> standby overlay (classic clock / wallpaper)
   - **Standby cumulative power-off**: default **3 min** (10 / 30 optional)
   - **AppIdle CPU**: 80 / 160 / **240 MHz** (default 240); Wi-Fi may be turned off to save power
-  - **Network grace**: keep network **30 / 60 / 120 s** after needs clear
+  - **Network grace**: stay online for **30 / 60 / 120 s** after needs clear; **Never** disables idle disconnection (standby still disconnects)
 - **Buttons**:
   - **POWER short press**: enter / leave standby overlay
   - **POWER long press ~3 s**: hard power-off
@@ -100,7 +101,7 @@ PA enable is TCA9555 **P0.4** (`PA_EN`, NS4150 CTRL), policy-driven (phone/BT / 
 
 ## 3. Use cases
 
-Home enables these six apps (`home_screen.cc` -> `kApps[]`):
+The first home page enables these six apps (`home_screen.cc` -> `kApps[]`):
 
 | App | Typical use |
 |:---|:---|
@@ -109,7 +110,7 @@ Home enables these six apps (`home_screen.cc` -> `kApps[]`):
 | **Reader** | Local library browse and paged reading (volume keys P1.0 / P1.1) |
 | **Wallpaper** | Wallpaper gallery; standby / shutdown art |
 | **Transfer** | Cloud push of books, wallpapers, fonts |
-| **Settings** | Network, theme, language, haptics, power, frontlight, conversation, Bluetooth, test, about |
+| **Settings** | Network, theme, language, haptics, power, charging, screen, conversation, Bluetooth, test, about |
 
 ---
 
@@ -196,7 +197,11 @@ flowchart TB
 | **BT audio** | Codec / speaker / headset | UART AT + I2S | Three modes (12.1) |
 | **TPS65185** | Panel PMIC | I2C via TCA control pins | VCOM / power-up / PWR_GOOD |
 
-> Networking is Wi-Fi. Provision and connect under **Settings -> Network**.
+> Select Wi-Fi or 4G under **Settings -> Network**. In 4G mode, switching between the internal and external SIM takes effect after modem communication is restored and the device restarts.
+
+Before a software restart, the cellular modem stops its handshake, DMA and network tasks. Startup clears GPIO interrupt and UHCI state retained across CPU resets before peripheral initialization. A failed SIM switch does not start the success restart countdown.
+
+Wi-Fi settings are saved to NVS and `metalio/e-ink/settings/wificonfig.json` on the SD card. Boot imports the card configuration. See [Wi-Fi configuration and SD synchronization (Chinese)](docs/wifi-config.md) for the format, recovery rules, and plaintext password handling.
 
 ---
 
@@ -335,11 +340,19 @@ The display uses a 30-phase image waveform table while retaining the S31 / E0470
 
 ### 9.2 State machine
 
+Baiwen AI keeps networking available while in the foreground without using the idle network grace timer. Automatic standby still follows the system setting. Entering standby stops voice work and releases the page network hold; user wake restores the connection when the page remains open, without starting recording. Background waits do not reset user inactivity, and the manual Wi-Fi switch takes precedence.
+
+After startup, `app_main` returns so the SDK can reclaim its stack. At runtime, `MainEventLoop` only receives and dispatches events. `Application::Schedule` routes bounded messages to separate serial workers for voice sessions, networking, storage, local audio and cleanup. Workers use internal-RAM stacks and retire when idle; active audio sessions retain their control workers. Submission takes only the short queue lock and does not wait for business execution or queue space. A rejected submission returns `false` so the caller can recover or retain the context for retry. Voice callbacks do not drain their queue recursively; sending yields after at most eight audio packets. Stop intents and asynchronous audio releases survive queue pressure. Audio test initialization reuses the audio worker with cancellation checks, and reacquiring a client cancels its pending release. NetEase text and sentence-boundary transitions retry in receive order; at most 32 unacknowledged boundaries are retained, favoring newer boundaries during sustained congestion.
+
+`ScreenLvAsync` and `ScreenLvAsyncUrgent` use separate normal and priority UI queues consumed by the existing LVGL tick, independently of the application dispatcher. Accepted messages transfer context ownership to the callback; rejected messages remain the sender's responsibility. Existing page generations and cancellation flags protect late results. Network waits, HTTP shutdown and hardware teardown stay outside UI callbacks; NVS operations require internal-RAM stacks.
+
 `Application` states include starting -> configuring -> idle -> connecting -> listening <-> speaking, plus upgrading / activating / fatal_error, etc.
 
 - **idle**: Baiwen and similar pages declare network needs via `PowerNeed` / audio session
 - **listening / speaking**: streaming ASR / TTS
 - **OTA**: dual slots `ota_0` / `ota_1`; fullscreen `OtaUpgradeScreen`
+
+SD card upgrade: copy the application firmware `Metalio-E-Ink4-Plus.bin` for this device to the SD card root (do not use the full `merged-binary.bin` image). Insert the card, restart the device, and confirm the upgrade when prompted. Wait for completion and the automatic restart. Keep the device powered and the card inserted throughout the upgrade. Wi-Fi is not required.
 
 ### 9.3 Board init order
 
@@ -360,7 +373,7 @@ flowchart TD
 ```
 main/
 |-- application.cc                 # boot, state machine, protocol dispatch
-|-- cloudzao_endpoints.c           # private cloud host/paths (empty in OSS)
+|-- cloudzao_endpoints.c           # cloud hosts, paths and connection settings
 |-- api_endpoints.h                # URL helpers (no host literals)
 |-- boards/metalio-e-ink4-plus/    # board (config.h / EPDiy / FT6336 / FL)
 |-- boards/common/                 # Wi-Fi, SD, gauge, power, USB MSC
@@ -394,7 +407,7 @@ merge_firmware.sh                  # build + merge full bin
 
 ## 10. Cloud services and APIs
 
-Cloud hosts and HTTP paths live in `main/cloudzao_endpoints.c` / `main/cloudzao_endpoints.h`. Call sites only use `main/api_endpoints.h` to build URLs. In the current open-source build, cloud addresses and credentials are empty. Configure a compatible backend before using cloud-dependent features, keeping the symbol names unchanged. Local reading, wallpapers, AP transfer, and USB transfer do not require this configuration.
+Cloud hosts and HTTP paths live in `main/cloudzao_endpoints.c` / `main/cloudzao_endpoints.h`. Call sites only use `main/api_endpoints.h` to build URLs. Cloud-dependent features require compatible service addresses and credentials in the endpoint file and device configuration. Keep the symbol names unchanged when configuring a backend. Local reading, wallpapers, AP transfer, Wi-Fi transfer, and USB transfer do not require this configuration.
 
 Primary voice transport remains **WebSocket / MQTT+UDP**. Device tools can be exposed via **MCP**.
 
@@ -402,7 +415,7 @@ Primary voice transport remains **WebSocket / MQTT+UDP**. Device tools can be ex
 
 ## 11. Built-in apps
 
-Home list: `home_screen.cc` -> `kApps[]` (max 12 per page).
+Home list: `home_screen.cc` -> `kApps[]` (max 6 per page).
 
 ### 11.0 Home apps
 
@@ -413,7 +426,7 @@ Home list: `home_screen.cc` -> `kApps[]` (max 12 per page).
 | **Reader** | Library 3x3 -> detail -> body; volume keys (P1.0 / P1.1) paging (11.3) |
 | **Wallpaper** | SD gallery; shutdown / standby (11.4) |
 | **Transfer** | Unified push list for books / wallpapers / fonts (11.5) |
-| **Settings** | Network / theme / language / haptics / power / frontlight / conversation / BT / test / about (11.6) |
+| **Settings** | Network / theme / language / haptics / power / charging / screen / conversation / BT / test / about (11.6) |
 
 System pages (no home icon): **standby**, **OTA upgrade**, Settings-embedded **Bluetooth**.
 
@@ -442,13 +455,17 @@ See `main/display/screen/assistant_screen/README.md`.
 - Path: `/sdcard/metalio/e-ink/books` (user-facing `metalio/e-ink/books`)
 - Formats: `.ebook` / `.epub` / `.txt`; `.txt.idx` index; side-car cover `.a2i1`
 - Fonts: `.../fonts/*.ef`
+- Import TTF/OTF fonts from `.../fonts_ttf` in reading settings; sizes 20–80px, default 40px. See [font import and cancellation](docs/ap-file-transfer.md) for details.
 - Layout prefs in NVS; **no scroll** on list/body; VK / volume keys page
+- Reading settings → Orientation: portrait, left landscape, right landscape, or auto; the selection is saved. Auto works in the reading page, reading settings, fonts, bookmarks, and contents. It uses the SC7A20H gravity readings and rotates after the detected orientation remains stable for 0.8 seconds. Ambiguous readings keep the current orientation; upside-down portrait is excluded from auto mode. While the new page layout is pending, a loading message replaces only the reading content, leaving menus, navigation, and standby available. The current page replaces the message when ready. Leaving the reader restores portrait.
+- Reading settings → Page turn: slide or white wipe; the selection is saved. White wipe runs right to left for the next page and left to right for the previous page in either orientation. Required cleaning uses a full refresh.
 - Boot may sync progress via `library/sync`
 - PC conversion: `tools/ebook/README.md`
 
 ### 11.4 Wallpaper and standby
 
-- Gallery: `/sdcard/metalio/e-ink/wallpaper`, 3x3 browse / enable
+- Gallery: `/sdcard/metalio/e-ink/wallpaper`, paged 3x3 browsing / enable. Listing and batch deletion have no fixed item limit; capacity depends on SD storage and available memory. Thumbnails are cached for the current and adjacent pages only.
+- Filenames: reading, wallpapers, reader fonts and transfers share a 246-byte UTF-8 limit, including the extension. Scanning and file operations use the same limit. Wallpaper Save As reserves space for its timestamp and extension without splitting UTF-8 characters.
 - **Standby routing** (`standby_screen`):
   - Enabled standby wallpaper -> fullscreen A2I1
   - Else -> classic (date / lunar / weather / todos)
@@ -456,24 +473,32 @@ See `main/display/screen/assistant_screen/README.md`.
 
 ### 11.5 Transfer
 
-- Transfer modes: APP push / AP transfer / USB transfer. APP push filters: All / Wallpaper / Books / Fonts; **Refresh** retrieves pending files.
+- Transfer modes: APP push / AP transfer / Wi-Fi transfer / USB transfer. WIFI transfer stays within the Transfer screen and splits nearby networks into saved and unsaved lists, each sorted by signal strength. After connecting, devices on the same Wi-Fi can open the displayed local URL or scan its QR code to manage files. Leaving the page closes the service; use a trusted network without client isolation. APP push filters: All / Wallpaper / Books / Fonts; **Refresh** retrieves pending files.
 - Save directories: BOOK->`books`, BADGE->`wallpaper`, FONT->`fonts`
+- APP push uses the active Wi-Fi or 4G connection. AP and Wi-Fi transfer require Wi-Fi mode; in 4G mode, the page asks users to switch to Wi-Fi.
 - APP push supports replacing, skipping, or keeping both files when names conflict. The status bar displays the clock.
 
 ### 11.6 Settings
 
 | Tab | Content |
 |:---|:---|
-| **Network** | Wi-Fi provisioning and connection |
+| **Network** | Wi-Fi / 4G selection, Wi-Fi setup and SIM switching |
 | **Theme** | Home card style |
 | **Language** | UI language |
 | **Haptics** | Key vibration on / off |
+| **Charging** | 0.5A / 1A / 1.5A; default 1A; saved and restored after reboot |
 | **Power** | AppIdle CPU, standby delay, network grace, cumulative power-off |
-| **Frontlight** | Cool / warm / both / off + brightness |
+| **Screen** | Refresh mode and black depth; frontlight controls are in the global swipe-down panel |
 | **Conversation** | Baiwen TTS server preference |
 | **Bluetooth** | Modes 1/2/3, scan/pair (12.1) |
 | **Test** | Factory / aging entry |
 | **About** | Model, chip, FW version, MAC, Flash, PSRAM |
+
+Swiping down in a non-scrolling area opens the quick panel; vertical lists retain their own gestures. The panel includes the top status bar. Swipe up outside the sliders, tap outside the panel, or press Back or Home to close it while keeping the current page. OTA upgrades and standby dismiss and block the panel. Opening and closing it requests a GC16 full refresh, which produces a visible flash.
+
+The left side contains a Wi-Fi switch with a paw icon and a frontlight switch. The right side contains brightness and warm-light ratio sliders; moving up increases each value. Icons keep their native sizes and appear black over white areas and white over black fills. Slider titles, percentages and Bluetooth controls are omitted. Brightness 0 disables output. A warm-light ratio of 0 selects cool light, 50 drives both channels, and 100 selects warm light. PWM supports continuous blending; GPIO mode provides channel switching only. Turning the frontlight off retains its brightness and ratio. Adjusting either slider turns it on; adjusting the ratio or switching it on at brightness 0 uses brightness 40. The switch and values are saved; startup output waits until the Bluetooth shared-power reset finishes.
+
+In Wi-Fi mode, turning Wi-Fi off stops scanning, connections and wireless file transfer, and blocks automatic reconnection and standby restoration. Tap again to enable it. The switch state is saved across reboots without removing saved credentials. In 4G mode, the panel shows Wi-Fi as off and cannot enable it; Wi-Fi mode uses the saved switch state. Internet services over 4G do not depend on the saved Wi-Fi switch state, and missing weather data can also be fetched over 4G. Wi-Fi scans, connections and local transfers distinguish 4G mode and a disabled Wi-Fi switch from a driver initialization failure. When Wi-Fi is manually disabled, a toast also asks users to enable it before retrying.
 
 ### 11.7 SD layout
 
@@ -503,6 +528,8 @@ Product root: `/sdcard/metalio/e-ink/` (`sd_paths.h`)
 ### 12.1 Bluetooth audio three modes
 
 ESP32-S31 sends AT commands over **UART1** (115200, GPIO 39/38). Settings -> Bluetooth embeds `BluetoothScreen`. This is **not** the ESP Classic Bluetooth stack.
+
+Bluetooth settings has three sections: firmware version, Bluetooth reset, and mode selection. Opening the page sends `AT+GVER=1` and reads the firmware version from a reply such as `AT+GVER=V1.03`; `Unknown` is shown until a version is received. Click Check version to refresh it manually. The button shows Checking and stays disabled until a valid version arrives or the five-second wait ends.
 
 | Mode | AT sequence (each ends with `\r\n`) | Meaning | How to enter |
 |:---:|:---|:---|:---|
@@ -603,6 +630,8 @@ On ESP32-S31, USB Serial/JTAG and HS MSC use separate PHYs; still eject the virt
 
 USB strings example: `Metalio` / `Metalio Ink SD` (TinyUSB). Enabling MSC drives **ANA_SW** (GPIO36) low.
 
+SD unmount, USB ownership changes, and standby recovery block new accesses and wait for active operations, transactions, and file/directory handles to finish. A timeout cancels the change without forcing unmount; close files and retry. Remounting preserves standby access restrictions.
+
 ### 14.6 E-book conversion (PC)
 
 See `tools/ebook/README.md`. Copy outputs into SD `metalio/e-ink/books/` for the Reader app.
@@ -628,6 +657,7 @@ See `tools/ebook/README.md`. Copy outputs into SD `metalio/e-ink/books/` for the
 ### 15.2 Factory test entry
 
 Settings -> Test: factory / aging entry. End users can ignore.
+The aging test holds the audio service until the test page is closed; boot cleanup and background idle transitions preserve the test audio state.
 
 ### 15.3 FAQ
 
@@ -676,3 +706,11 @@ Plus is **S31 + parallel 4.7" + FT6336 + frontlight**. The 397 board is **S3 + S
 ---
 
 _This document tracks firmware changes. Prefer source for pins and behavior; open an Issue if docs disagree with hardware._
+
+### WorkBuddy
+
+The home screen shows six apps per page. Page two contains WorkBuddy; use the page keys to switch. The bottom dots only indicate the page and do not respond to taps; the active dot is larger. Page keys wrap between the first and last pages; holding a key cycles one page at a time. Page changes wipe the display to white before drawing the target page. The upper information area stays visible in each theme. Pressing Home on page two returns to the first home page; leaving WorkBuddy returns to the app page it was opened from. Pixel View labels the app buddy and uses the same icon display size as the other apps; other themes label it workbuddy.
+
+WorkBuddy supports QR binding to the desktop local assistant, rebinding, hold-to-talk commands, automatic reply polling and message synchronization. User and assistant messages use separate plain-text bubbles, with screen pagination and ten-page repeats when a page key is held. History evicts older messages according to actual PSRAM allocation. Standby stops recording and polling; wake restores the connection without resending accepted commands.
+
+The service requires WorkBuddy local-assistant mode, realtime ASR and WebSocket forwarding. The desktop assistant must remain online under the authorized account. Configure the dedicated service in `main/cloudzao_endpoints.c`. See the [WorkBuddy module guide](main/workbuddy/README.md) for operation, interfaces, history scope and memory budgets.

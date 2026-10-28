@@ -1,3 +1,4 @@
+#include "screen_frontlight.h"
 #include "book_screen/reader/book_auto_turn.h"
 #include "book_screen/reader/book_reader_prefs.h"
 #include "book_screen/book_screen_priv.h"
@@ -23,7 +24,7 @@ bool AutoTurnReadingVisible() {
     return st.reader.read_scr && lv_obj_is_valid(st.reader.read_scr) &&
         lv_screen_active() == st.reader.read_scr && !StandbyScreen::IsActive() &&
         st.reader.read_chrome == BookUiState::ReadChrome::kReading &&
-        !visible(st.settings.settings_sheet) && !visible(st.settings.reader_light_panel) &&
+        !visible(st.settings.settings_sheet) && !ScreenFrontlightIsVisible() &&
         st.reader.session && st.reader.session->IsOpen() && !st.reader.prefs_reopen_pending;
 }
 

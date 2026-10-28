@@ -1,12 +1,14 @@
 #include "ttf_convert.h"
 
 #include "epdfont.h"
+#include "sd_access.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <string>
 #include <sys/stat.h>
@@ -44,6 +46,8 @@ constexpr size_t kYieldEvery = 32;
 constexpr FT_Int32 kLoadFlags = FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL;
 
 std::atomic<int> s_state{kStateIdle};
+std::atomic<bool> s_worker_active{false};
+std::atomic<bool> s_cancel{false};
 std::atomic<int> s_percent{0};
 std::atomic<bool> s_io_failed{false};
 char s_error[64] = "";
@@ -66,6 +70,10 @@ struct Job {
     uint16_t sizes[3];
     int size_count;
 };
+
+bool Cancelled() {
+    return s_cancel.load(std::memory_order_acquire) || sd_access::IsQuiescing();
+}
 
 void Fail(const char* msg) {
     std::snprintf(s_error, sizeof(s_error), "%s", msg ? msg : "unknown");
@@ -254,7 +262,7 @@ std::string SanitizeFamily(const char* ttf_path) {
 }
 
 bool WriteEf(const char* out_path, int line_height, int base_line,
-             const std::vector<GlyphRec>& recs, const std::vector<uint8_t>& blob) {
+             const std::vector<GlyphRec>& recs, const uint8_t* blob, size_t blob_size) {
     if (recs.empty() || out_path == nullptr || out_path[0] == '\0') {
         return false;
     }
@@ -294,39 +302,63 @@ bool WriteEf(const char* out_path, int line_height, int base_line,
     h.glyphs_offset = h.intervals_offset + static_cast<uint32_t>(ivs.size() * sizeof(epdfont_interval_t));
     h.bitmaps_offset = h.glyphs_offset + static_cast<uint32_t>(recs.size() * sizeof(epdfont_glyph_t));
 
+    const std::string backup = std::string(out_path) + ".bak";
+    struct stat saved{};
+    if (stat(backup.c_str(), &saved) == 0) {
+        struct stat current{};
+        if (stat(out_path, &current) != 0) {
+            if (rename(backup.c_str(), out_path) != 0) return false;
+        } else if (unlink(backup.c_str()) != 0) {
+            return false;
+        }
+    }
     std::string tmp(out_path);
     tmp += ".tmp";
     FILE* f = fopen(tmp.c_str(), "wb");
     if (f == nullptr) {
         return false;
     }
-    bool ok = fwrite(&h, sizeof(h), 1, f) == 1;
+    bool ok = !Cancelled() && fwrite(&h, sizeof(h), 1, f) == 1;
     for (const auto& iv : ivs) {
         epdfont_interval_t r{iv.first, iv.last, iv.gidx};
-        ok = ok && fwrite(&r, sizeof(r), 1, f) == 1;
+        ok = ok && !Cancelled() && fwrite(&r, sizeof(r), 1, f) == 1;
     }
     for (const auto& g : recs) {
         epdfont_glyph_t r{g.w, g.h, g.adv, g.ox, g.oy, g.bmp_len, g.bmp_off, 0};
         ok = ok && fwrite(&r, sizeof(r), 1, f) == 1;
     }
-    if (!blob.empty()) {
-        ok = ok && fwrite(blob.data(), 1, blob.size(), f) == blob.size();
+    if (blob_size > 0) {
+        for (size_t offset = 0; ok && offset < blob_size;) {
+            const size_t count = std::min<size_t>(16 * 1024, blob_size - offset);
+            ok = !Cancelled() && fwrite(blob + offset, 1, count, f) == count;
+            offset += count;
+            vTaskDelay(1);
+        }
     }
     if (fflush(f) != 0) {
         ok = false;
     }
-    fsync(fileno(f));
-    fclose(f);
-    if (!ok) {
+    if (fsync(fileno(f)) != 0) ok = false;
+    if (fclose(f) != 0) ok = false;
+    if (!ok || Cancelled()) {
         unlink(tmp.c_str());
         return false;
     }
-    // FATFS 的 f_rename 不覆盖已存在目标（FR_EXIST）：先删目标，实现「同名覆盖」语义。
-    unlink(out_path);
+    // 替换前保留旧字库；提交失败可回滚，取消只在提交前生效。
+    struct stat old{};
+    const bool exists = stat(out_path, &old) == 0;
+    if (exists && rename(out_path, backup.c_str()) != 0) {
+        unlink(tmp.c_str());
+        return false;
+    }
     if (rename(tmp.c_str(), out_path) != 0) {
+        if (exists && rename(backup.c_str(), out_path) != 0) {
+            ESP_LOGE(TAG, "restore failed: %s", backup.c_str());
+        }
         unlink(tmp.c_str());
         return false;
     }
+    if (exists) unlink(backup.c_str());
     return true;
 }
 
@@ -343,20 +375,21 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
     const int base_line = std::max(desc, 0);
 
     std::vector<GlyphRec> recs;
-    std::vector<uint8_t> blob;
+    std::unique_ptr<uint8_t, decltype(&heap_caps_free)> blob(nullptr, heap_caps_free);
+    size_t blob_size = 0;
+    size_t blob_capacity = 0;
     try {
         recs.reserve(cps.size());
-        // 保守预留：平均字形远小于 size²；失败则按需增长，避免一次吃满 PSRAM
-        const size_t soft_cap =
-            std::min(cps.size() * (static_cast<size_t>(size_px) * size_px / 8 + 4),
-                     static_cast<size_t>(2 * 1024 * 1024));
-        blob.reserve(soft_cap);
     } catch (...) {
         std::snprintf(fail_msg, fail_msg_len, "oom reserve %d", size_px);
         return false;
     }
 
     for (size_t ci = 0; ci < cps.size(); ++ci) {
+        if (Cancelled()) {
+            std::snprintf(fail_msg, fail_msg_len, "转换已取消");
+            return false;
+        }
         if (s_io_failed.load(std::memory_order_acquire)) {
             std::snprintf(fail_msg, fail_msg_len, "sd io error");
             return false;
@@ -401,19 +434,30 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
         rec.adv = static_cast<uint16_t>(std::max(adv, 1));
         rec.ox = static_cast<int16_t>(ox);
         rec.oy = static_cast<int16_t>(oy);
-        try {
-            if (w == 0 || h == 0) {
-                rec.bmp_len = 1;  // 与 PC 工具一致：空字形占 1 字节 0x00
-                rec.bmp_off = static_cast<uint32_t>(blob.size());
-                blob.push_back(0);
-            } else {
-                const uint16_t len = static_cast<uint16_t>((w * h + 3) / 4);
-                rec.bmp_len = len;
-                rec.bmp_off = static_cast<uint32_t>(blob.size());
-                const size_t old = blob.size();
-                blob.resize(old + len, 0);
-                Quantize2bpp(bm.buffer, bm.pitch, w, h, blob.data() + rec.bmp_off);
+        const size_t len = (w == 0 || h == 0) ? 1 : (w * h + 3) / 4;
+        const size_t required = blob_size + len;
+        if (required > blob_capacity) {
+            // 固定步长增长，避免 vector 翻倍扩容的峰值；失败时保留原缓冲并正常退出。
+            constexpr size_t chunk = 64 * 1024;
+            const size_t capacity = ((required + chunk - 1) / chunk) * chunk;
+            auto* next = static_cast<uint8_t*>(heap_caps_realloc(
+                blob.get(), capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            if (next == nullptr) {
+                std::snprintf(fail_msg, fail_msg_len, "字形缓存内存不足，请减小字号");
+                return false;
             }
+            blob.release();
+            blob.reset(next);
+            blob_capacity = capacity;
+        }
+        rec.bmp_len = static_cast<uint16_t>(len);
+        rec.bmp_off = static_cast<uint32_t>(blob_size);
+        std::memset(blob.get() + blob_size, 0, len);
+        if (w != 0 && h != 0) {
+            Quantize2bpp(bm.buffer, bm.pitch, w, h, blob.get() + blob_size);
+        }
+        blob_size = required;
+        try {
             recs.push_back(rec);
         } catch (...) {
             std::snprintf(fail_msg, fail_msg_len, "oom glyph %d", size_px);
@@ -436,8 +480,8 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
         return false;
     }
     ESP_LOGI(TAG, "writing %s glyphs=%u bytes=%u", out_path,
-             static_cast<unsigned>(recs.size()), static_cast<unsigned>(blob.size()));
-    if (!WriteEf(out_path, line_height, base_line, recs, blob)) {
+             static_cast<unsigned>(recs.size()), static_cast<unsigned>(blob_size));
+    if (!WriteEf(out_path, line_height, base_line, recs, blob.get(), blob_size)) {
         std::snprintf(fail_msg, fail_msg_len, "write %.40s", out_path);
         return false;
     }
@@ -473,6 +517,12 @@ void RunWorker(Job* job) {
         job = nullptr;
     };
 
+    sd_access::Transaction transaction;
+    if (!transaction || Cancelled()) {
+        Fail("转换已取消或 SD 卡不可用");
+        release();
+        return;
+    }
     const std::string fam = SanitizeFamily(job->ttf_path.c_str());
     std::vector<uint32_t> cps;
     if (!LoadCharset(job->template_path.c_str(), &cps)) {
@@ -483,6 +533,11 @@ void RunWorker(Job* job) {
     ESP_LOGI(TAG, "charset %u cps from %s", static_cast<unsigned>(cps.size()),
              job->template_path.c_str());
 
+    if (Cancelled()) {
+        Fail("转换已取消");
+        release();
+        return;
+    }
     if (FT_Init_FreeType(&lib) != 0) {
         lib = nullptr;  // 半初始化 library 不可 FT_Done_FreeType
         Fail("FT_Init_FreeType");
@@ -529,6 +584,7 @@ void Worker(void* arg) {
     // 转换流程正常返回，栈上 std::string/std::vector 析构在此完成，
     // 避免 vTaskDeleteWithCaps 不展开 C++ 栈导致 heap 缓冲泄漏。
     RunWorker(job);
+    s_worker_active.store(false, std::memory_order_release);
     // 任务栈走 WithCaps 回收（见 xTaskCreatePinnedToCoreWithCaps）。
     ExitWorker();
 }
@@ -548,18 +604,17 @@ bool Start(const char* ttf_path, const char* template_ef_path, const char* out_d
         }
     }
 
-    // Idle/Done/Failed → Running；已在 Running 则拒绝（防双开）。
-    int expected = s_state.load(std::memory_order_acquire);
-    do {
-        if (expected == kStateRunning) {
-            return false;
-        }
-    } while (!s_state.compare_exchange_weak(expected, kStateRunning, std::memory_order_acq_rel,
-                                            std::memory_order_acquire));
+    bool inactive = false;
+    if (!s_worker_active.compare_exchange_strong(inactive, true, std::memory_order_acq_rel)) {
+        return false;
+    }
+    s_cancel.store(false, std::memory_order_release);
+    s_state.store(kStateRunning, std::memory_order_release);
 
     Job* job = new (std::nothrow) Job();
     if (job == nullptr) {
         Fail("oom job");
+        s_worker_active.store(false, std::memory_order_release);
         return false;
     }
     try {
@@ -569,6 +624,7 @@ bool Start(const char* ttf_path, const char* template_ef_path, const char* out_d
     } catch (...) {
         delete job;
         Fail("oom paths");
+        s_worker_active.store(false, std::memory_order_release);
         return false;
     }
     for (int i = 0; i < size_count; ++i) {
@@ -594,6 +650,7 @@ bool Start(const char* ttf_path, const char* template_ef_path, const char* out_d
                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
         Fail("task create");
+        s_worker_active.store(false, std::memory_order_release);
         return false;
     }
     return true;
@@ -605,7 +662,9 @@ int Percent() { return s_percent.load(std::memory_order_acquire); }
 
 const char* Error() { return s_error; }
 
-bool Busy() { return State() == kStateRunning; }
+bool Busy() { return s_worker_active.load(std::memory_order_acquire); }
+
+void Cancel() { s_cancel.store(true, std::memory_order_release); }
 
 void FamilyFromPath(const char* ttf_path, char* out, size_t out_len) {
     if (out == nullptr || out_len == 0) {

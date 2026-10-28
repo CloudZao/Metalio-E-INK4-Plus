@@ -27,8 +27,8 @@ public:
     /** @brief LVGL flush 末包完成时调用（供 epdiy flush_cb） */
     static void NotifyFlushCompleted();
 
-    /** @brief 待机 UI 就绪后，冻结 EPD flush 并全刷当前画面 */
-    static void EnterEpdSleep();
+    /** @brief 待机 UI 就绪后推白定格画面，成功返回 true */
+    static bool EnterEpdSleep();
 
     /** @brief 退出待机前恢复 EPD flush；未冻结则为空操作 */
     static void ExitEpdSleep();

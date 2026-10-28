@@ -42,6 +42,7 @@ typedef struct {
 #define FONT_AWESOME_WIFI "\xef\x87\xab"
 #define FONT_AWESOME_WIFI_FAIR "\xef\x9a\xab"
 #define FONT_AWESOME_WIFI_WEAK "\xef\x9a\xaa"
+#define FONT_AWESOME_PLANE "\xef\x81\xb2" // 飞行模式飞机图标
 #define FONT_AWESOME_WIFI_SLASH "\xef\x9a\xac"
 #define FONT_AWESOME_SIGNAL "\xef\x80\x92"
 #define FONT_AWESOME_SIGNAL_STRONG "\xef\x9a\x8f"

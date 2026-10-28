@@ -51,11 +51,9 @@ static std::atomic<bool> s_active{false};
 static std::atomic<uint32_t> s_session{0};
 static std::atomic<bool> s_play_pending{false};
 static std::atomic<bool> s_vibe_on{false};
-static TaskHandle_t s_audio_init_task = nullptr;
 
 static bool s_holding_testing_state = false;
 static bool s_holding_standby_inhibit = false;
-static bool s_owns_audio_service = false;
 static DeviceState s_saved_device_state = kDeviceStateIdle;
 static uint32_t s_counter = 0;
 
@@ -229,12 +227,8 @@ static void ApplyVibePhase(bool on, uint32_t session) {
 }
 
 static void ReleaseOwnedAudioIfNeeded() {
-    if (!s_owns_audio_service) {
-        return;
-    }
-    s_owns_audio_service = false;
     auto& app = Application::GetInstance();
-    app.ReleaseAudioService(Application::AudioClient::AgingTest);
+    app.RequestAudioServiceRelease(Application::AudioClient::AgingTest);
 }
 
 static void SchedulePlay(uint32_t session);
@@ -281,16 +275,22 @@ static void ArmNextAudioPlay(uint32_t session) {
     }
 }
 
-static void PlayFactoryAudioOnMain(uint32_t session) {
+static void PlayFactoryAudioOnTask(uint32_t session) {
     struct Guard {
-        ~Guard() { s_play_pending.store(false, std::memory_order_release); }
-    } guard;
+        uint32_t session; // 播放请求所属会话
+        ~Guard() {
+            if (s_session.load(std::memory_order_acquire) == session) {
+                s_play_pending.store(false, std::memory_order_release);
+            }
+        }
+    } guard{session};
 
     if (!s_active.load(std::memory_order_acquire) || s_session.load(std::memory_order_acquire) != session) {
         return;
     }
     auto& as = Application::GetInstance().GetAudioService();
     if (!as.IsStarted()) {
+        ESP_LOGE(TAG, "audio loop stopped: service not started session=%lu", static_cast<unsigned long>(session));
         return;
     }
     as.PlaySound(FactoryTestAssets::OGG_FACTORY_TEST_AUDIO);
@@ -307,11 +307,16 @@ static void PlayFactoryAudioOnMain(uint32_t session) {
 }
 
 static void SchedulePlay(uint32_t session) {
+    if (!s_active.load(std::memory_order_acquire) || s_session.load(std::memory_order_acquire) != session) {
+        return;
+    }
     bool expected = false;
     if (!s_play_pending.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         return;
     }
-    Application::GetInstance().Schedule([session]() { PlayFactoryAudioOnMain(session); });
+    if (!Application::GetInstance().Schedule([session]() { PlayFactoryAudioOnTask(session); }, Application::TaskDomain::Audio)) {
+        s_play_pending.store(false);
+    }
 }
 
 static void AsyncArmAudioLoop(void* p) {
@@ -323,20 +328,16 @@ static void AsyncArmAudioLoop(void* p) {
     SchedulePlay(session);
 }
 
-static void AudioInitTask(void* arg) {
-    const uint32_t session = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(arg));
+static void InitializeAudio(uint32_t session) {
     auto& app = Application::GetInstance();
-    const bool now_running = MetalioAudio_WaitModeReady(kMetalioAudioInitWaitMs) &&
-        app.AcquireAudioService(Application::AudioClient::AgingTest, [session] {
-        return s_session.load(std::memory_order_acquire) == session && s_active.load(std::memory_order_acquire);
-    });
-
-    if (s_session.load(std::memory_order_acquire) == session && s_active.load(std::memory_order_acquire) &&
-        now_running) {
-        s_owns_audio_service = true;
+    bool now_running = false;
+    if (MetalioAudio_WaitModeReady(kMetalioAudioInitWaitMs, [session] {
+            return s_session.load() == session && s_active.load();
+        })) {
+        now_running = app.AcquireAudioService(Application::AudioClient::AgingTest, [session] {
+            return s_session.load(std::memory_order_acquire) == session && s_active.load(std::memory_order_acquire);
+        });
     }
-
-    s_audio_init_task = nullptr;
 
     if (s_session.load(std::memory_order_acquire) == session && s_active.load(std::memory_order_acquire) &&
         now_running) {
@@ -345,25 +346,10 @@ static void AudioInitTask(void* arg) {
             ESP_LOGW(TAG, "PostLvAsync arm audio failed");
         }
     }
-    vTaskDelete(nullptr);
 }
 
 static void KickAudioInit(uint32_t session) {
-    if (s_audio_init_task != nullptr) {
-        return;
-    }
-    auto& app = Application::GetInstance();
-    if (app.GetAudioService().IsStarted()) {
-        s_owns_audio_service = app.AcquireAudioService(Application::AudioClient::AgingTest);
-        // Create() 已在 LVGL 任务：直接踢第一拍，勿再绕 async
-        AsyncArmAudioLoop(reinterpret_cast<void*>(static_cast<uintptr_t>(session)));
-        return;
-    }
-    const BaseType_t ok = xTaskCreate(AudioInitTask, "aging_aud_init", 4096,
-                                      reinterpret_cast<void*>(static_cast<uintptr_t>(session)), 5,
-                                      &s_audio_init_task);
-    if (ok != pdPASS) {
-        s_audio_init_task = nullptr;
+    if (!Application::GetInstance().Schedule([session]() { InitializeAudio(session); }, Application::TaskDomain::Audio)) {
         ESP_LOGW(TAG, "audio init task create failed");
     }
 }
@@ -417,7 +403,6 @@ lv_obj_t* SettingsTestAgingScreen::Create() {
     const uint32_t session = s_session.fetch_add(1, std::memory_order_acq_rel) + 1;
     s_counter = 0;
     s_counter_lbl = nullptr;
-    s_owns_audio_service = false;
     s_play_pending.store(false, std::memory_order_release);
     s_vibe_on.store(false, std::memory_order_release);
 

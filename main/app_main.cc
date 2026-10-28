@@ -8,8 +8,6 @@
 
 #include <esp_event.h>
 #include <esp_log.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 #include <nvs_flash.h>
 
 #define TAG "eink4p_main"
@@ -30,8 +28,5 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "Metalio-E-Ink4-Plus bring-up");
     Application::GetInstance().Start();
 
-    // Tick / 关机脉冲已在 lv_epdiy_tick；本任务仅保活
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(10000));
-    }
+    // 运行期由消息调度与显示任务接管；返回后 SDK 回收启动任务的栈。
 }

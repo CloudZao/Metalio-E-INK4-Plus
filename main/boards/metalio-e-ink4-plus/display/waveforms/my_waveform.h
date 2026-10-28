@@ -12,6 +12,10 @@ const EpdWaveform* my_waveform_fast(void);
 // Extreme: 30-phase, 8-gray GL only; GC uses the 16-gray profiles.
 const EpdWaveform* my_waveform_gray8(void);
 const EpdWaveform* my_waveform_short_du(void);
+/**
+ * @brief 获取快速档普通局刷使用的十四相 DU 波形
+ */
+const EpdWaveform* my_waveform_fast_du(void);
 // Binary wipe + reveal: band in target index, old/new binary flags in source.
 const EpdWaveform* my_waveform_wipe_reveal(void);
 const EpdWaveform* my_waveform_wipe_reveal_short(void);

@@ -40,7 +40,7 @@ struct LoadWork {
     int index = -1;
     uint32_t epoch = 0;
     uint32_t generation = 0;
-    char path[192] = {};
+    char path[SD_FILE_PATH_CAPACITY] = {};
 };
 
 struct LoadResultMsg {

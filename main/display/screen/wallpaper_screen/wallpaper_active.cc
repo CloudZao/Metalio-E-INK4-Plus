@@ -23,7 +23,7 @@ static constexpr const char* kLogTag = "WpActive";
 static constexpr const char* kNvsNs = "wallpaper";
 static constexpr const char* kNvsKeyShutdown = "shutdown";
 static constexpr const char* kNvsKeyStandby = "standby";
-static constexpr size_t kNameMax = 95;
+static constexpr size_t kNameMax = SD_FILE_NAME_MAX_BYTES;
 
 enum class WallpaperActiveSlot : uint8_t { Shutdown = 0, Standby = 1, Count = 2 };
 
@@ -60,26 +60,7 @@ static std::string AbsPathForName(const std::string& name) {
 
 // 仅允许单段、无路径穿越的文件名。
 static bool IsSafeWallpaperBasename(const char* name) {
-    if (name == nullptr || name[0] == '\0') {
-        return false;
-    }
-    const size_t n = std::strlen(name);
-    if (n > kNameMax) {
-        return false;
-    }
-    if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0) {
-        return false;
-    }
-    for (size_t i = 0; i < n; ++i) {
-        const unsigned char c = static_cast<unsigned char>(name[i]);
-        if (c < 0x20 || c == 0x7F) {
-            return false;
-        }
-        if (c == '/' || c == '\\' || c == ':' || c == '\0') {
-            return false;
-        }
-    }
-    return true;
+    return SdIsValidFileName(name);
 }
 
 static std::string BasenameOf(const char* path_or_name) {

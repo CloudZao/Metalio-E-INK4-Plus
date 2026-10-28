@@ -161,7 +161,7 @@ void AsyncApplyCheckResult(void* p) {
         return;
     }
 
-    // NewVersion：弹出两按钮确认；升级在主循环执行
+    // 显示新版本确认框，升级交由工作任务执行。
     const std::string url = msg->url;
     const std::string cur = msg->current;
     const std::string next = msg->next;
@@ -178,9 +178,11 @@ void AsyncApplyCheckResult(void* p) {
                 gen != s_check_gen.load(std::memory_order_acquire)) {
                 return;
             }
-            Application::GetInstance().Schedule([url, cur, next]() {
+            if (!Application::GetInstance().Schedule([url, cur, next]() {
                 Application::GetInstance().UpgradeFirmwareUrl(url, cur, next);
-            });
+            })) {
+                SetStatusTip(Lang::Strings::UPGRADE_FAILED);
+            }
         });
 
     s_about_prompt = shown;

@@ -1,5 +1,6 @@
 #include "home_pixel.h"
 #include "book_screen/book_screen.h"
+#include "workbuddy_screen/workbuddy_screen.h"
 #include "home_pixel_font.h"
 #include "home_icon_source.h"
 #include "home_screen/home_screen_ui.h"
@@ -36,6 +37,7 @@ struct PixelUi {
     lv_coord_t height = 0; // 状态栏下方可绘高度
 };
 PixelUi s;
+uint32_t s_app_child_start = 0; // 应用卡片、阴影和标题签的起始子节点
 
 lv_coord_t X(int value) { return (value * s.width + kDesignW / 2) / kDesignW; }
 lv_coord_t Y(int value) { return (value * s.height + kDesignH / 2) / kDesignH; }
@@ -176,6 +178,7 @@ void Refresh(bool force) {
 void HomePixel_Stop() {
     if (s.timer != nullptr) lv_timer_delete(s.timer);
     s = PixelUi{};
+    s_app_child_start = 0;
 }
 
 void HomePixel_Build(lv_obj_t* screen, lv_coord_t status_height) {
@@ -236,26 +239,39 @@ void HomePixel_Build(lv_obj_t* screen, lv_coord_t status_height) {
         lv_obj_set_style_border_color(s.counts[i], lv_color_black(), 0);
     }
 
+    s_app_child_start = lv_obj_get_child_count(s.root);
+    HomePixel_FillAppsPage();
+    Refresh(true);
+    s.timer = lv_timer_create([](lv_timer_t*) { Refresh(false); }, kRefreshMs, nullptr);
+}
+
+void HomePixel_FillAppsPage() {
+    if (!s.root) return;
+    while (lv_obj_get_child_count(s.root) > s_app_child_start) {
+        lv_obj_delete(lv_obj_get_child(s.root, s_app_child_start));
+    }
     const char* icons[] = {"A:ic_px_book.spng", "A:ic_px_wallpaper.spng", "A:ic_px_ai.spng",
                            "A:ic_px_task.spng", "A:ic_px_cloud.spng", "A:ic_px_setting.spng"};
     const int columns[] = {64, 334, 605};
     const int edge = X(160);
     const int row_step = edge + (Y(251) - edge) * 2 / 3;
-    for (int i = 0; i < 6; ++i) {
-        auto* card = Card(X(columns[i % 3]), Y(882) + (i / 3) * row_step, edge, edge, kSlashApps[i]);
+    const int start = Home_page * kAppsPerPage;
+    for (int i = 0; i < kAppsPerPage && start + i < kSlashAppCount; ++i) {
+        const int app = start + i;
+        const bool is_buddy = kSlashApps[app].create == WorkBuddyScreen::Create;
+        auto* card = Card(X(columns[i % 3]), Y(882) + (i / 3) * row_step, edge, edge, kSlashApps[app]);
         auto* icon = lv_image_create(card);
-        lv_image_set_src(icon, HomeIconSource(icons[i]));
+        lv_image_set_src(icon, HomeIconSource(app < 6 ? icons[app] : kSlashApps[app].icon_path));
         lv_obj_set_style_image_recolor(icon, lv_color_black(), 0);
         lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
-        lv_obj_set_size(icon, X(100), X(100));
+        const int icon_edge = X(100);
+        lv_obj_set_size(icon, icon_edge, icon_edge);
         lv_image_set_inner_align(icon, LV_IMAGE_ALIGN_CONTAIN);
         lv_image_set_antialias(icon, false);
         lv_obj_align(icon, LV_ALIGN_CENTER, 0, -Y(6));
         lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
-        const char* name = i == 0 ? Lang::Strings::HOME_PIXEL_READ :
-                           i == 3 ? Lang::Strings::HOME_PIXEL_NOTES : kSlashApps[i].name();
+        const char* name = is_buddy ? "buddy" : app == 0 ? Lang::Strings::HOME_PIXEL_READ :
+                           app == 3 ? Lang::Strings::HOME_PIXEL_NOTES : kSlashApps[app].name();
         BlackTab(card, name, true);
     }
-    Refresh(true);
-    s.timer = lv_timer_create([](lv_timer_t*) { Refresh(false); }, kRefreshMs, nullptr);
 }

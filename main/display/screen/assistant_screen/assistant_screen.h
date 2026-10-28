@@ -14,6 +14,9 @@ public:
     /** @brief 当前页面是否在前台；后台消息会被忽略 */
     static bool IsActive();
 
+    /** @brief 在 LVGL 线程暂停或恢复前台保网和语音连接；唤醒不自动开始录音 */
+    static void SetStandby(bool standby);
+
     /** @brief PTT 是否仍保持按下；用于统一监听和松手判定 */
     static bool IsPttHeld();
 

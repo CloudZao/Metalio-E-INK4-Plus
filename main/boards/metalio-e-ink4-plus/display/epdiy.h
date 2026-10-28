@@ -114,8 +114,8 @@ enum EpdDrawMode {
     MODE_FORCE_NO_PIE = 0x800,
     // S31 full-screen gray wipe/reveal; bits 13..14 encode UI orientation.
     MODE_SPATIAL_WIPE_GL = 0x1000,
-    /// Ordinary differential updates: equal old/new pixels emit no drive action.
-    /// Do not use for full refresh, recovery, tests or conditioning animations.
+    // 普通差分刷新屏蔽同色驱动，DU 允许保留黑→黑补黑。
+    // 全刷、恢复、测试及调理动画不使用此标记。
     MODE_SKIP_UNCHANGED = 0x8000,
 };
 

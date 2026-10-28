@@ -1,3 +1,4 @@
+#include "assets/lang_network.h"
 #include "wifi_board.h"
 
 #include "display.h"
@@ -8,6 +9,7 @@
 #include "power_hw.h"
 #include "power_policy.h"
 #include "standby_screen/standby_screen.h"
+#include "screen_common.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -55,7 +57,7 @@ bool SoftApOwnsRadio() {
 
 /** STA 关/未起时拉起；已连上则 no-op */
 void EnsureWifiRadioUp(WifiStation& wifi) {
-    if (wifi.IsConnected() || SoftApOwnsRadio()) {
+    if (!wifi.IsUserEnabled() || wifi.IsConnected() || SoftApOwnsRadio()) {
         return;
     }
     if (wifi.IsLpPaused()) {
@@ -138,14 +140,17 @@ void WifiBoard::StartNetwork() {
         display->ShowNotification(notification.c_str(), 3000);
         display->UpdateStatusBar(true);
     });
+    if (!wifi_station.IsUserEnabled()) return;
     wifi_station.Start();
 
-    // 有已存 WiFi：等保网时长拿 IP；失败不自动 SoftAP，Pause STA（停扫），下次 EnsureNetworkReady 再拉
-    const int wait_ms = PowerPolicy::GetInstance().GetNetGraceSec() * 1000;
+    // 永不保网仍仅等待 30 秒启动联网，超时后保留后台连接。
+    const int grace_sec = PowerPolicy::GetInstance().GetNetGraceSec();
+    const int wait_ms = (grace_sec == 0 ? 30 : grace_sec) * 1000;
     bool connected = false;
     for (int elapsed = 0; elapsed < wait_ms; elapsed += 50) {
+        if (!wifi_station.IsUserEnabled()) return;
         if (StandbyScreen::IsActive()) {
-            wifi_station.PauseForLp();
+            PowerPolicy::GetInstance().RequestReevaluate();
             ESP_LOGI(TAG, "boot WiFi wait cancelled for standby");
             return;
         }
@@ -155,9 +160,9 @@ void WifiBoard::StartNetwork() {
         }
     }
     if (!connected) {
-        ESP_LOGW(TAG, "WiFi not connected within net_grace %d s; skip auto SoftAP, pause STA",
-                 PowerPolicy::GetInstance().GetNetGraceSec());
-        wifi_station.PauseForLp();
+        ESP_LOGW(TAG, "WiFi not connected within %d ms; leave network to power policy", wait_ms);
+        // 统一由策略决定停网，避免与选项切换及业务占网并发执行 Pause。
+        PowerPolicy::GetInstance().RequestReevaluate();
         return;
     }
 }
@@ -199,8 +204,17 @@ void WifiBoard::PauseNetworkIfNotReady() {
     wifi.PauseForLp();
 }
 
+const char* WifiBoard::GetNetworkErrorText(const char* fallback) {
+    return WifiStation::GetInstance().IsUserEnabled() ? fallback : Lang::Strings::WIFI_DISABLED_RETRY;
+}
+
 bool WifiBoard::EnsureNetworkReady(int timeout_ms) {
     auto& wifi = WifiStation::GetInstance();
+    if (!wifi.IsUserEnabled()) {
+        auto notify = [](void*) { ScreenShowToast(Lang::Strings::WIFI_DISABLED_RETRY); };
+        if (!ScreenLvAsyncUrgent(notify)) ScreenLvAsync(notify);
+        return false;
+    }
     const char* task = pcTaskGetName(nullptr);
     const int core = xPortGetCoreID();
     const UBaseType_t stack_before = uxTaskGetStackHighWaterMark(nullptr);
@@ -252,7 +266,7 @@ bool WifiBoard::EnsureNetworkReady(int timeout_ms) {
 
     // 单飞：同一时刻仅一个 leader 切片 WaitForConnected；后来者延长 shared deadline 并跟随
     // 个人 deadline 到点即返回（百问 200ms 切片不被 30s 传输等网拖死）
-    while (!wifi.IsConnected()) {
+    while (wifi.IsUserEnabled() && !wifi.IsConnected()) {
         if (SoftApOwnsRadio()) return false;
         const int64_t now = esp_timer_get_time();
         if (now >= personal_dl) {
@@ -270,7 +284,7 @@ bool WifiBoard::EnsureNetworkReady(int timeout_ms) {
         portEXIT_CRITICAL(&s_ensure_mux);
 
         if (lead) {
-            while (!wifi.IsConnected() && !SoftApOwnsRadio()) {
+            while (wifi.IsUserEnabled() && !wifi.IsConnected() && !SoftApOwnsRadio()) {
                 const int64_t n2 = esp_timer_get_time();
                 portENTER_CRITICAL(&s_ensure_mux);
                 shared_dl = s_ensure_deadline_us;
@@ -356,7 +370,7 @@ const char* WifiBoard::GetNetworkStateIcon() {
         return FONT_AWESOME_WIFI_WEAK;
     }
     // 扫描/连接中：图标固定未连接，进度改由顶栏文案表示
-    return FONT_AWESOME_WIFI_SLASH;
+    return FONT_AWESOME_PLANE;
 }
 
 const char* WifiBoard::GetNetworkBusyStatusText() {

@@ -1,3 +1,4 @@
+#include "assets/lang_screen.h"
 #include "settings_storage_tab.h"
 
 #include "SdCardManager.hpp"
@@ -46,7 +47,7 @@ static void RefreshStorageUi() {
     auto& vd = UsbVirtualDisk::GetInstance();
     const bool exported = vd.IsSdExportedToHost();
     const bool has_card = sd.IsMounted() || vd.IsGadgetActive() || exported;
-    const bool usable = sd.IsMounted() && !exported;
+    const bool usable = sd.IsMounted() && !exported && !vd.IsBusy();
 
     if (s_ui.status_lbl != nullptr) {
         if (has_card) {

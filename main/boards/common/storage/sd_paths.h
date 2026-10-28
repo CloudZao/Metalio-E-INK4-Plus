@@ -2,15 +2,16 @@
 
 /**
  * @file sd_paths.h
- * @brief Unified on-device SD layout under /sdcard/metalio/e-ink/
+ * @brief 统一设备在 /sdcard/metalio/e-ink/ 下的 SD 数据布局
  *
- * Mount point stays `/sdcard` (SdCardManager). All app data lives under
- * `/sdcard/metalio/e-ink/<feature>/` so the card root stays clean.
+ * 挂载点为 `/sdcard`（SdCardManager），应用数据按功能放在
+ * `/sdcard/metalio/e-ink/<feature>/` 下。
  *
- * | Path | Use |
+ * | 路径 | 用途 |
  * |------|-----|
  * | .../文件上传前必读说明.txt | 上传前必读（中文；无则开机生成） |
  * | .../Read_Before_Upload.txt | 上传前必读（英文；无则开机生成） |
+ * | .../settings/wificonfig.json | Wi-Fi 配置，与 NVS 同步保存 |
  * | .../recordings | 录音 Ogg Opus |
  * | .../books | 电子书 .epub/.txt/.ebook；同目录 .txt.idx 为分页索引；<stem>.a2i1 为旁路封面 |
  * | .../fonts | 阅读用 .ef 字体（云推送 .ef 亦落此） |
@@ -39,10 +40,37 @@ extern "C" {
 #define SD_MOUNT_POINT "/sdcard"
 #endif
 
+#define SD_FILE_NAME_MAX_BYTES 246 // 用户文件名的 UTF-8 字节上限，包含扩展名
+#define SD_FILE_NAME_CAPACITY (SD_FILE_NAME_MAX_BYTES + 1) // 文件名缓冲区，包含终止符
+#define SD_FILE_PATH_CAPACITY (512 + sizeof(SD_MOUNT_POINT)) // 与传输服务一致的完整路径容量
+
+/** @brief 检查用户文件名长度及 FAT 不允许的名称字符 */
+static inline int SdIsValidFileName(const char* name) {
+    if (name == NULL || name[0] == '\0') return 0;
+    const size_t len = strlen(name);
+    if (len > SD_FILE_NAME_MAX_BYTES || name[len - 1] == '.' || name[len - 1] == ' ') return 0;
+    for (const unsigned char* p = (const unsigned char*)name; *p; ++p) {
+        if (*p < 32 || *p == 127 || strchr("/\\:*?\"<>|", *p) != NULL) return 0;
+    }
+    return 1;
+}
+
+/** @brief 获取不截断 UTF-8 字符且不超过字节预算的前缀长度 */
+static inline size_t SdUtf8PrefixLength(const char* text, size_t max_bytes) {
+    size_t len = strlen(text);
+    if (len <= max_bytes) return len;
+    len = max_bytes;
+    while (len > 0 && ((unsigned char)text[len] & 0xc0) == 0x80) --len;
+    return len;
+}
+
 /** 产品数据根目录 */
 #ifndef SD_APP_ROOT
 #define SD_APP_ROOT "/sdcard/metalio/e-ink"
 #endif
+
+#define SD_PATH_SETTINGS SD_APP_ROOT "/settings" // 用户配置
+#define SD_PATH_WIFI_CONFIG SD_PATH_SETTINGS "/wificonfig.json" // 无线网络配置
 
 #define SD_PATH_LOGS SD_APP_ROOT "/logs"
 #define SD_PATH_RUNTIME_LOG SD_PATH_LOGS "/metalio_logs.txt"
@@ -65,8 +93,8 @@ extern "C" {
 #define SD_PATH_UPLOAD_README_EN  SD_APP_ROOT "/Read_Before_Upload.txt" // 上传说明（英）
 
 /**
- * On-screen / user-facing path: strip VFS mount (`/sdcard`) so hints match USB MSC
- * card root (e.g. `metalio/e-ink/books`). Avoids users creating a literal `/sdcard` folder.
+ * @brief 移除 VFS 挂载点前缀，使界面路径与 USB MSC 卡根目录一致
+ * @note 例如显示 `metalio/e-ink/books`，避免用户额外创建 `/sdcard` 目录。
  */
 static inline const char* SdUserPath(const char* posix_abs) {
     if (posix_abs == NULL || posix_abs[0] == '\0') {
@@ -101,13 +129,14 @@ static inline int SdEnsureDir(const char* path) {
     return 0;
 }
 
-/** Create /sdcard/metalio/e-ink and common feature dirs (best-effort). Returns 1 on ok. */
+/** @brief 创建应用根目录并尝试补齐功能目录；根目录就绪返回 1 */
 static inline int SdEnsureAppLayout(void) {
     static const char* kTag = "sd_paths";
     if (!SdEnsureDir("/sdcard/metalio") || !SdEnsureDir(SD_APP_ROOT)) {
         ESP_LOGW(kTag, "ensure app root %s failed errno=%d", SD_APP_ROOT, errno);
         return 0;
     }
+    SdEnsureDir(SD_PATH_SETTINGS);
     SdEnsureDir(SD_PATH_RECORDINGS);
     SdEnsureDir(SD_PATH_BOOKS);
     SdEnsureDir(SD_PATH_FONTS);

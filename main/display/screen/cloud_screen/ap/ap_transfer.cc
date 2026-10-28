@@ -1,3 +1,5 @@
+#include "assets/lang_screen.h"
+#include "assets/lang_network.h"
 #include "ap_transfer.h"
 #include "ap_request_worker.h"
 
@@ -8,6 +10,8 @@
 #include "assets/lang_config.h"
 #include "power_policy.h"
 #include "wifi_station.h"
+#include "board.h"
+#include "dual_network_board.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -42,7 +46,7 @@
 namespace {
 
 constexpr const char* TAG = "ApTransfer";
-constexpr size_t kNameCapacity = 247; // UTF-8 名称含终止符，为临时文件前后缀预留 9 字节
+constexpr size_t kNameCapacity = SD_FILE_NAME_CAPACITY; // UTF-8 名称含终止符，为临时文件前后缀预留 9 字节
 constexpr size_t kWebPathCapacity = 512; // 网页路径含终止符
 constexpr size_t kFsPathCapacity = kWebPathCapacity + sizeof(SD_MOUNT_POINT); // 挂载路径含终止符
 constexpr size_t kTransferPathCapacity = kFsPathCapacity + 9; // 临时文件前后缀
@@ -81,6 +85,7 @@ void UnlockRadio() {
 httpd_handle_t s_httpd = nullptr;
 esp_netif_t* s_ap_netif = nullptr;
 bool s_running = false;
+bool s_station_service = false; // STA 射频由调用方管理
 bool s_paused_sta = false;
 bool s_we_inited = false;
 bool s_net_held = false;
@@ -217,13 +222,7 @@ bool IsTransferName(const char* name) {
 }
 
 bool SafeName(const char* name) {
-    if (name == nullptr || name[0] == '\0' || IsTransferName(name)) return false;
-    const size_t len = std::strlen(name);
-    if (len >= kNameCapacity || name[len - 1] == '.' || name[len - 1] == ' ') return false;
-    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(name); *p; ++p) {
-        if (*p < 32 || std::strchr("/\\:*?\"<>|", *p) != nullptr) return false;
-    }
-    return true;
+    return SdIsValidFileName(name) && !IsTransferName(name);
 }
 
 bool WebToFs(const char* web, char* out, size_t n) {
@@ -1218,6 +1217,51 @@ bool ApTransferNeedsStorageRestart() {
     return s_storage_failed.load() && !s_upload_busy.load();
 }
 
+static const char* TransferWifiUnavailableReason() {
+    auto* dual = dynamic_cast<DualNetworkBoard*>(&Board::GetInstance());
+    if (dual != nullptr && dual->GetNetworkType() == NetworkType::CELLULAR) {
+        return Lang::Strings::CLOUD_CELLULAR_NEED_WIFI;
+    }
+    return WifiStation::GetInstance().IsUserEnabled() ? nullptr : Lang::Strings::WIFI_DISABLED_RETRY;
+}
+
+bool WifiTransferStart(ApTransferInfo* info) {
+    LockRadio();
+    if (!info || s_standby_hold.load() || (s_running && !s_station_service)) {
+        UnlockRadio();
+        return false;
+    }
+    *info = {};
+    if (const char* reason = TransferWifiUnavailableReason()) {
+        info->fail = reason;
+        UnlockRadio();
+        return false;
+    }
+    auto* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip{};
+    wifi_ap_record_t ap{};
+    if (!netif || esp_netif_get_ip_info(netif, &ip) != ESP_OK ||
+        !ip.ip.addr || esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        info->fail = Lang::Strings::CLOUD_WIFI_FAIL;
+        UnlockRadio();
+        return false;
+    }
+    std::snprintf(info->ssid, sizeof(info->ssid), "%.*s", 32, reinterpret_cast<char*>(ap.ssid));
+    std::snprintf(info->url, sizeof(info->url), "http://" IPSTR "/", IP2STR(&ip.ip));
+    s_station_service = true;
+    if (!s_running && !StartHttp()) {
+        info->fail = Lang::Strings::CLOUD_AP_FAIL_HTTP;
+        ApTransferStop();
+        UnlockRadio();
+        return false;
+    }
+    HoldPower();
+    s_running = true;
+    info->ok = true;
+    UnlockRadio();
+    return true;
+}
+
 bool ApTransferStart(ApTransferInfo* info) {
     LockRadio();
     if (info != nullptr) {
@@ -1225,7 +1269,9 @@ bool ApTransferStart(ApTransferInfo* info) {
         FillSsid(info->ssid, sizeof(info->ssid));
         std::snprintf(info->url, sizeof(info->url), "%s", kUrl);
     }
-    if (s_standby_hold.load()) {
+    const char* unavailable = TransferWifiUnavailableReason();
+    if (s_standby_hold.load() || unavailable != nullptr) {
+        if (info != nullptr) info->fail = unavailable;
         UnlockRadio();
         return false;
     }
@@ -1274,7 +1320,7 @@ void ApTransferStop(bool resume_sta) {
     // HTTP 停止后不再产生会话回收回调，最后排空上传清理并退出任务。
     s_upload_worker.Stop();
     s_file_worker.Stop();
-    if (s_running || s_paused_sta || s_we_inited) {
+    if (!s_station_service && (s_running || s_paused_sta || s_we_inited)) {
         esp_wifi_stop();
         if (s_we_inited) {
             esp_wifi_deinit();
@@ -1282,7 +1328,7 @@ void ApTransferStop(bool resume_sta) {
         } else if (s_paused_sta) {
             // 切到 U 盘只关热点，不把 STA 拉起来
             esp_wifi_set_mode(WIFI_MODE_STA);
-            if (resume_sta) {
+            if (resume_sta && WifiStation::GetInstance().IsUserEnabled()) {
                 auto& sta = WifiStation::GetInstance();
                 if (sta.IsLpPaused()) {
                     sta.ResumeFromLp();
@@ -1294,6 +1340,7 @@ void ApTransferStop(bool resume_sta) {
         }
     }
     s_running = false;
+    s_station_service = false;
     s_upload_busy = false;
     ReleasePower();
     UnlockRadio();

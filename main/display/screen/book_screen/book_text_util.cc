@@ -229,6 +229,35 @@ std::string TruncateFilenameKeepExt(const std::string& name, const lv_font_t* fo
     return head + kEllipsis + suffix;
 }
 
+void Book_SetFilenameMiddle(lv_obj_t* label, const char* filename) {
+    lv_obj_update_layout(label);
+    const auto* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+    const int width = lv_obj_get_content_width(label);
+    std::string text = filename ? filename : "";
+    if (width > 0 && Book_MeasureTextWidth(font, text.c_str()) > width) {
+        size_t middle = text.size() / 2;
+        while (middle > 0 && (static_cast<unsigned char>(text[middle]) & 0xC0) == 0x80) --middle;
+        std::string head = text.substr(0, middle);
+        std::string tail = text.substr(middle);
+        while (!head.empty() || !tail.empty()) {
+            if (head.size() >= tail.size()) {
+                size_t end = head.size() - 1;
+                while (end > 0 && (static_cast<unsigned char>(head[end]) & 0xC0) == 0x80) --end;
+                head.resize(end);
+            } else {
+                size_t next = 1;
+                while (next < tail.size() && (static_cast<unsigned char>(tail[next]) & 0xC0) == 0x80) ++next;
+                tail.erase(0, next);
+            }
+            text = head + "…" + tail;
+            if (Book_MeasureTextWidth(font, text.c_str()) <= width) break;
+        }
+        if (Book_MeasureTextWidth(font, text.c_str()) > width) text.clear();
+    }
+    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+    lv_label_set_text(label, text.c_str());
+}
+
 void Book_DisableScroll(lv_obj_t* obj) {
     if (obj == nullptr) {
         return;
@@ -385,4 +414,3 @@ lv_obj_t* Book_CreateProgressPctBadge(lv_obj_t* parent, int pct_x10) {
 }
 
 // 书库/详情/正文共用：仅 BOOT 长按进百问；盖板 prev/next 长按连翻（vk_home 长按不进百问）
-

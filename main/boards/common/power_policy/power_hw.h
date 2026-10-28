@@ -56,7 +56,7 @@ esp_err_t power_hw_wifi_start(void);
 
 /**
  * @brief CPU 定频（MHz），并关闭自动浅睡
- * @param mhz 目标频率；策略常用 80 或 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ
+ * @param mhz 目标频率；刷屏满频保护期间暂存，释放后应用最新请求
  * @return ESP_OK 成功；未开 CONFIG_PM_ENABLE 时返回 ESP_ERR_NOT_SUPPORTED
  */
 esp_err_t power_hw_cpu_freq_set(int mhz);
@@ -89,4 +89,13 @@ void power_hw_gpio_wake_latch_get(bool* boot_low, bool* power_low);
 
 #ifdef __cplusplus
 }
+
+/** @brief 扫描及恢复期间保持默认满频，离开作用域后恢复最新策略频率。 */
+class PowerHwCpuFreqHold {
+public:
+    PowerHwCpuFreqHold();
+    ~PowerHwCpuFreqHold();
+    PowerHwCpuFreqHold(const PowerHwCpuFreqHold&) = delete;
+    PowerHwCpuFreqHold& operator=(const PowerHwCpuFreqHold&) = delete;
+};
 #endif

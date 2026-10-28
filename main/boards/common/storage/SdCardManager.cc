@@ -2,11 +2,13 @@
 
 #include "config.h"
 #include "sd_log_writer.h"
+#include "sd_access.h"
 
 #include <cstdlib>
 #include <cstring>
 
 #include <driver/gpio.h>
+#include <driver/sdmmc_defs.h>
 #include <esp_log.h>
 #include <esp_vfs_fat.h>
 #include <esp_heap_caps.h>
@@ -26,7 +28,19 @@ bool SdCardManager::CheckDmaBuffer(int slot, const void* buffer, size_t size) {
     return esp_ptr_internal(buffer) && sdmmc_host_check_buffer_alignment(slot, buffer, size);
 }
 
+esp_err_t SdCardManager::DoTransaction(int slot, sdmmc_command_t* command) {
+    const esp_err_t result = sdmmc_host_do_transaction(slot, command);
+    // 只记录数据读写错误，初始化探测中允许失败的命令不触发提示。
+    if ((result != ESP_OK || command->error != ESP_OK) && command->datalen > 0 &&
+        (command->opcode == MMC_READ_BLOCK_SINGLE || command->opcode == MMC_READ_BLOCK_MULTIPLE ||
+         command->opcode == MMC_WRITE_BLOCK_SINGLE || command->opcode == MMC_WRITE_BLOCK_MULTIPLE)) {
+        GetInstance().io_error_.store(true, std::memory_order_relaxed);
+    }
+    return result;
+}
+
 bool SdCardManager::PrepareDmaBuffer(sdmmc_host_t& host) {
+    host.do_transaction = DoTransaction;
     uint32_t caps = MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL;
     size_t bytes = 512;
     #if CONFIG_IDF_TARGET_ESP32S31
@@ -100,6 +114,8 @@ void SdCardManager::PreparePinsForMount() {
 }
 
 bool SdCardManager::Mount() {
+    sd_access::Transition transition;
+    if (!transition) return false;
     if (mounted_) {
         return true;
     }
@@ -117,7 +133,8 @@ bool SdCardManager::Mount() {
 
     ESP_LOGI(TAG, "mount SDMMC width=%d CLK=%d CMD=%d D0=%d", (int)slot.width, (int)SDMMC_CLK_PIN,
              (int)SDMMC_CMD_PIN, (int)SDMMC_D0_PIN);
-    esp_err_t err = esp_vfs_fat_sdmmc_mount(kMountPoint, &host, &slot, &mount_cfg, &card_);
+    sdmmc_card_t* mounted_card = nullptr;
+    esp_err_t err = esp_vfs_fat_sdmmc_mount(kMountPoint, &host, &slot, &mount_cfg, &mounted_card);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "SD mount fail: %s", esp_err_to_name(err));
         card_ = nullptr;
@@ -126,6 +143,7 @@ bool SdCardManager::Mount() {
         return false;
     }
 
+    card_ = mounted_card;
     raw_owned_ = false;
     mounted_ = true;
     sdmmc_card_print_info(stdout, card_);
@@ -138,6 +156,8 @@ bool SdCardManager::Mount() {
 }
 
 bool SdCardManager::Unmount() {
+    sd_access::Transition transition;
+    if (!transition) return false;
     SdLogWriter_OnSdUnmounting();
     if (!mounted_ || card_ == nullptr) {
         ReleaseRawCard();
@@ -157,6 +177,8 @@ bool SdCardManager::Unmount() {
 }
 
 sdmmc_card_t* SdCardManager::InitRawCardForMsc() {
+    sd_access::Transition transition;
+    if (!transition) return nullptr;
     if (mounted_) {
         if (!Unmount()) return nullptr;
     } else {
@@ -218,11 +240,14 @@ sdmmc_card_t* SdCardManager::InitRawCardForMsc() {
     card_ = card;
     raw_owned_ = true;
     mounted_ = false;
+    sd_access::SetMounted(false);
     ESP_LOGI(TAG, "raw SDMMC card ready for MSC");
     return card_;
 }
 
 void SdCardManager::ReleaseRawCard() {
+    sd_access::Transition transition;
+    if (!transition) return;
     if (!raw_owned_ || card_ == nullptr) {
         if (!mounted_) {
             card_ = nullptr;
@@ -231,8 +256,9 @@ void SdCardManager::ReleaseRawCard() {
         raw_owned_ = false;
         return;
     }
+    sd_access::SetMounted(false);
     ESP_LOGI(TAG, "release raw SDMMC card");
-    CallHostDeinit(&card_->host);
+    CallHostDeinit(&card_.load()->host);
     free(card_);
     card_ = nullptr;
     raw_owned_ = false;
@@ -243,16 +269,20 @@ void SdCardManager::ReleaseRawCard() {
 void SdCardManager::NotifyExternalAppMount(sdmmc_card_t* card) {
     card_ = card;
     mounted_ = (card != nullptr);
+    if (!mounted_) sd_access::SetMounted(false);
     if (mounted_) SdLogWriter_OnSdMounted();
     // TinyUSB only borrows our raw card; its APP mount does not transfer ownership.
 }
 
 void SdCardManager::NotifyExportedToHost() {
+    sd_access::SetMounted(false);
     SdLogWriter_OnSdUnmounting();
     mounted_ = false;
 }
 
 bool SdCardManager::RemountVfsFromCard() {
+    sd_access::Transition transition;
+    if (!transition) return false;
     if (mounted_ && !raw_owned_) {
         return true;
     }

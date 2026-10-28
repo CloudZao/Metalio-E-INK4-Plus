@@ -1,4 +1,5 @@
 #include "screen_common.h"
+#include "screen_frontlight.h"
 #include "screen_common_ui.h"
 #include "screen_common_nav.h"
 #include "screen_common_priv.h"
@@ -23,6 +24,11 @@ LV_FONT_DECLARE(font_awesome_30_1);
 bool ScreenCommon_on_home = true;
 ScreenFactory ScreenCommon_back_stack[kMaxBack] = {};
 int ScreenCommon_back_depth = 0;
+
+lv_coord_t ScreenStatusBarHeight() {
+    const lv_font_t* font = fontpack_lv_font_ui();
+    return (font != nullptr ? font->line_height : 30) + kStatusPadV * 2;
+}
 
 namespace {
 lv_timer_t* navigation_retry = nullptr;
@@ -108,6 +114,10 @@ ScreenFactory ScreenCommon_PopBackFactory() {
 }
 
 void ScreenCommon_GoHomeAsync(void* /*user_data*/) {
+    if (ScreenFrontlightIsVisible()) {
+        ScreenFrontlightHide();
+        return;
+    }
     if (ScreenCommon_on_home) {
         ESP_LOGI(TAG, "home ignored (already home)");
         return;
@@ -130,12 +140,39 @@ void ScreenCommon_NavigateBackAsync(void* /*user_data*/) {
     ScreenGoHome();
 }
 
+void ScreenShowToast(const char* text) {
+    if (text == nullptr || text[0] == '\0') {
+        return;
+    }
+    static lv_obj_t* notice = nullptr;
+    if (notice != nullptr) {
+        lv_obj_delete(notice);
+    }
+    notice = lv_label_create(lv_layer_top());
+    lv_obj_remove_style_all(notice);
+    lv_label_set_text(notice, text);
+    lv_label_set_long_mode(notice, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_max_width(notice, LV_HOR_RES - 32, 0);
+    lv_obj_set_style_text_font(notice, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(notice, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(notice, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(notice, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(notice, 8, 0);
+    lv_obj_set_style_pad_hor(notice, 12, 0);
+    lv_obj_set_style_pad_ver(notice, 8, 0);
+    lv_obj_clear_flag(notice, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(notice, LV_ALIGN_TOP_MID, 0, ScreenStatusBarHeight() + 8);
+    lv_obj_add_event_cb(notice, [](lv_event_t*) { notice = nullptr; },
+                        LV_EVENT_DELETE, nullptr);
+    lv_obj_delete_delayed(notice, 3000);
+}
+
 EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     EpdStatusBar out;
 
     const lv_font_t* ui_font = fontpack_lv_font_ui();
-    const lv_coord_t status_line_h = ui_font != nullptr ? ui_font->line_height : 30;
-    out.height = status_line_h + kStatusPadV * 2;
+    out.height = ScreenStatusBarHeight();
+    const lv_coord_t status_line_h = out.height - kStatusPadV * 2;
 
     out.bar = lv_obj_create(scr);
     lv_obj_set_size(out.bar, LV_HOR_RES, out.height);

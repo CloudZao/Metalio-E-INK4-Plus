@@ -8,10 +8,12 @@
 #include "pixel/home_pixel.h"
 #include "home_screen/home_hero.h"
 #include "assistant_screen/assistant_screen.h"
+#include "workbuddy_screen/workbuddy_screen.h"
 #include "assets/lang_config.h"
 #include "book_screen/book_screen.h"
 #include "cloud_screen/cloud_screen.h"
 #include "haptic_feedback.h"
+#include "epd_refresh.h"
 #include "screen_common.h"
 #include "settings.h"
 #include "settings_screen/settings_screen.h"
@@ -54,6 +56,8 @@ void Home_OnAppNameDraw(lv_event_t* e)
     const char *Home_AppNameCloud() { return Lang::Strings::HOME_APP_CLOUD; }
     const char *Home_AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
 
+    const char* Home_AppNameWorkBuddy() { return "workbuddy"; }
+
     extern const AppEntry kApps[] = {
         {"A:ic_app_home_task.spng", Home_AppNameTask, TaskScreen::Create},
         {"A:ic_app_home_teacher.spng", Home_AppNameAssistant, AssistantScreen::Create},
@@ -61,6 +65,7 @@ void Home_OnAppNameDraw(lv_event_t* e)
         {"A:ic_app_home_wallpaper.spng", Home_AppNameWallpaper, WallpaperScreen::Create},
         {"A:ic_app_home_cloud.spng", Home_AppNameCloud, CloudScreen::Create},
         {"A:ic_app_home_setting.spng", Home_AppNameSettings, SettingsScreen::Create},
+        {"A:ic_app_home_workbuddy.spng", Home_AppNameWorkBuddy, WorkBuddyScreen::Create},
     };
 
     // 仅对外展示用户可见的应用，保持首页与设计稿一致。
@@ -71,30 +76,32 @@ void Home_OnAppNameDraw(lv_event_t* e)
         {"A:ic_app_home_task.spng", Home_AppNameTask, TaskScreen::Create},
         {"A:ic_app_home_cloud.spng", Home_AppNameCloud, CloudScreen::Create},
         {"A:ic_app_home_setting.spng", Home_AppNameSettings, SettingsScreen::Create},
+        {"A:ic_app_home_workbuddy.spng", Home_AppNameWorkBuddy, WorkBuddyScreen::Create},
     };
 
-    // 随 kApps 自动变长；页数 = ceil(总数 / 每页 12)
+    // 每页六个应用，新增应用自动进入后续页。
     extern const int kTotalApps = static_cast<int>(sizeof(kApps) / sizeof(kApps[0]));
     extern const int kSlashAppCount = static_cast<int>(sizeof(kSlashApps) / sizeof(kSlashApps[0]));
 
 lv_obj_t *Home_apps = nullptr;
 lv_obj_t *Home_page_lbl = nullptr;
 lv_obj_t *Home_scr = nullptr;
-int Home_page = 0; // 离开子页再回首页时保持页码
+int Home_page = 0; // 普通返回保留页码，Home 操作返回第一页
 bool Home_slash_layout = false;
 lv_coord_t Home_slash_apps_h = 0;
 
 int Home_PageCount()
     {
-        if (Home_slash_layout || Home_card_style == HomeScreen::kCardStylePixel)
-        {
-            return 1;
-        }
         return (kTotalApps + kAppsPerPage - 1) / kAppsPerPage;
     }
 
     void Home_FillAppsPage()
     {
+        if (Home_card_style == HomeScreen::kCardStylePixel) {
+            HomePixel_FillAppsPage();
+            Home_UpdatePageIndicator();
+            return;
+        }
         if (Home_apps == nullptr)
         {
             return;
@@ -102,6 +109,7 @@ int Home_PageCount()
         if (Home_slash_layout)
         {
             Home_FillSlashAppsPage();
+            Home_UpdatePageIndicator();
             return;
         }
         const int pages = Home_PageCount();
@@ -131,31 +139,79 @@ int Home_PageCount()
             Home_CreateAppCell(Home_apps, kApps[i], card_style);
         }
 
-        if (Home_page_lbl != nullptr)
-        {
-            if (pages > 1)
-            {
-                char buf[16];
-                std::snprintf(buf, sizeof(buf), "%d / %d", Home_page + 1, pages);
-                lv_label_set_text(Home_page_lbl, buf);
-                lv_obj_clear_flag(Home_page_lbl, LV_OBJ_FLAG_HIDDEN);
-            }
-            else
-            {
-                lv_obj_add_flag(Home_page_lbl, LV_OBJ_FLAG_HIDDEN);
-            }
-        }
+        Home_UpdatePageIndicator();
         ESP_LOGI(TAG, "home page %d/%d apps %d..%d of %d", Home_page + 1, pages, start, end - 1,
                  kTotalApps);
     }
+
+void Home_UpdatePageIndicator() {
+    if (!Home_page_lbl) return;
+    lv_obj_clean(Home_page_lbl);
+    const int pages = Home_PageCount();
+    for (int i = 0; i < pages; ++i) {
+        auto* target = lv_obj_create(Home_page_lbl);
+        lv_obj_remove_style_all(target);
+        lv_obj_set_size(target, UiSx(20), UiSy(30));
+        lv_obj_clear_flag(target, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(target, LV_OBJ_FLAG_SCROLLABLE);
+        auto* dot = lv_obj_create(target);
+        lv_obj_remove_style_all(dot);
+        const int size = UiSx(i == Home_page ? 11 : 6);
+        lv_obj_set_size(dot, size, size);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(dot, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_center(dot);
+    }
+}
+
+static void Home_CreatePageIndicator(lv_obj_t* screen) {
+    Home_page_lbl = lv_obj_create(screen);
+    lv_obj_remove_style_all(Home_page_lbl);
+    lv_obj_set_size(Home_page_lbl, Home_PageCount() * UiSx(20), UiSy(30));
+    lv_obj_set_flex_flow(Home_page_lbl, LV_FLEX_FLOW_ROW);
+    lv_obj_clear_flag(Home_page_lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(Home_page_lbl, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(Home_page_lbl, LV_ALIGN_BOTTOM_MID, 0, -UiSy(8));
+    Home_UpdatePageIndicator();
+}
 
     ScreenPaintCoalesce s_home_paint{};
 
     void Home_RequestFillAppsPage() {
         if (s_home_paint.paint == nullptr) {
-            s_home_paint.paint = Home_FillAppsPage;
+            s_home_paint.paint = []() {
+                if (!ScreenIsHome() || Home_scr == nullptr) return;
+                EpdRequestScreenChange();
+                Home_FillAppsPage();
+            };
         }
         ScreenPaintCoalesceRequest(&s_home_paint);
+    }
+
+bool HomeScreen::GoToFirstPage() {
+    const auto go = [](void*) {
+        const bool changed = Home_page != 0;
+        Home_page = 0;
+        if (ScreenIsHome()) {
+            if (changed) Home_RequestFillAppsPage();
+        } else ScreenRequestHome();
+    };
+    if (ScreenLvAsyncUrgent(go) || ScreenLvAsync(go)) return true;
+    ESP_LOGW(TAG, "first home page navigation could not be queued");
+    return false;
+}
+
+    bool HomePageRepeatStep(int page_delta)
+    {
+        const int pages = Home_PageCount();
+        if (pages <= 1 || page_delta == 0) return false;
+        // 长按调度传入阅读器的十页步长，首页只取方向逐页循环。
+        const int next = (Home_page + (page_delta > 0 ? 1 : pages - 1)) % pages;
+        Home_page = next;
+        Home_RequestFillAppsPage();
+        return true;
     }
 
     bool Home_OnVkKey(const char *key)
@@ -164,55 +220,27 @@ int Home_PageCount()
         {
             return false;
         }
-        // vk_home 走默认（已在首页 no-op）
+        if (std::strcmp(key, "vk_home") == 0)
+        {
+            HomeScreen::GoToFirstPage();
+            return true;
+        }
         if (std::strcmp(key, "vk_prev") == 0)
         {
-            if (Home_page > 0)
-            {
-                --Home_page;
-                Home_RequestFillAppsPage();
-            }
+            HomePageRepeatStep(-1);
             return true;
         }
         if (std::strcmp(key, "vk_next") == 0)
         {
-            if (Home_page + 1 < Home_PageCount())
-            {
-                ++Home_page;
-                Home_RequestFillAppsPage();
-            }
+            HomePageRepeatStep(1);
             return true;
         }
         return false;
     }
 
-    bool HomePageRepeatStep(int page_delta)
-    {
-        if (page_delta == 0)
-        {
-            return false;
-        }
-        const int last = Home_PageCount() > 0 ? Home_PageCount() - 1 : 0;
-        int next = Home_page + page_delta;
-        if (next < 0)
-        {
-            next = 0;
-        }
-        else if (next > last)
-        {
-            next = last;
-        }
-        if (next == Home_page)
-        {
-            return false;
-        }
-        Home_page = next;
-        Home_RequestFillAppsPage();
-        return page_delta < 0 ? Home_page > 0 : Home_page < last;
-    }
-
     bool Home_OnVkKeyLongPress(const char *key)
     {
+        if (key && std::strcmp(key, "vk_home") == 0) return Home_OnVkKey(key);
         return VkPageRepeatTryStart(key, HomePageRepeatStep);
     }
 
@@ -388,6 +416,7 @@ lv_obj_t *HomeScreen::Create()
     const int card_style = LoadCardStyle();
     Home_slash_layout = (card_style == kCardStyleSlash);
     const int pages = Home_PageCount();
+    if (Home_page >= pages || Home_page < 0) Home_page = 0;
     ESP_LOGI(TAG, "layout apps=%d pages=%d per_page=%d style=%d slash=%d", kTotalApps, pages,
              kAppsPerPage, card_style, Home_slash_layout ? 1 : 0);
 
@@ -395,8 +424,8 @@ lv_obj_t *HomeScreen::Create()
         HomeHero_Teardown();
         Home_apps = nullptr;
         Home_page_lbl = nullptr;
-        Home_page = 0;
         HomePixel_Build(scr, status.height);
+        Home_CreatePageIndicator(scr);
         lv_obj_add_event_cb(scr, Home_OnHomeDeleted, LV_EVENT_DELETE, nullptr);
         ScreenSetIsHome(true);
         VkKey_AttachScreen(scr, kScreenId,
@@ -431,7 +460,7 @@ lv_obj_t *HomeScreen::Create()
         lv_obj_clear_flag(Home_apps, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(Home_apps, LV_OBJ_FLAG_CLICKABLE);
 
-        Home_page_lbl = nullptr;
+        Home_CreatePageIndicator(scr);
         Home_FillAppsPage();
 
         lv_obj_add_event_cb(scr, Home_OnHomeDeleted, LV_EVENT_DELETE, nullptr);
@@ -471,16 +500,7 @@ lv_obj_t *HomeScreen::Create()
     lv_obj_clear_flag(Home_apps, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(Home_apps, LV_OBJ_FLAG_CLICKABLE);
 
-    Home_page_lbl = lv_label_create(scr);
-    lv_label_set_text(Home_page_lbl, "");
-    lv_obj_set_style_text_font(Home_page_lbl, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(Home_page_lbl, lv_color_black(), 0);
-    lv_obj_align(Home_page_lbl, LV_ALIGN_BOTTOM_MID, 0, -4);
-    lv_obj_clear_flag(Home_page_lbl, LV_OBJ_FLAG_CLICKABLE);
-    if (pages <= 1)
-    {
-        lv_obj_add_flag(Home_page_lbl, LV_OBJ_FLAG_HIDDEN);
-    }
+    Home_CreatePageIndicator(scr);
 
     Home_FillAppsPage();
 

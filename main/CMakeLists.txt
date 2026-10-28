@@ -26,6 +26,9 @@ file(GLOB BOARD_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/${BOARD_DIR}/periph/*.cc"
 )
 
+file(GLOB WORKBUDDY_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/workbuddy/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/workbuddy_screen/*.cc")
+
 file(GLOB HOME_SCREEN_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/home_screen/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/home_screen/pixel/*.cc"
@@ -99,7 +102,7 @@ file(GLOB PROTOCOL_SRCS
 
 set(AUDIO_PROCESSOR_SRCS "audio/processors/no_audio_processor.cc")
 if(CONFIG_USE_AUDIO_PROCESSOR)
-    set(AUDIO_PROCESSOR_SRCS "audio/processors/afe_audio_processor.cc")
+    list(APPEND AUDIO_PROCESSOR_SRCS "audio/processors/afe_audio_processor.cc")
 endif()
 
 set(WAKE_WORD_SRCS "")
@@ -118,6 +121,7 @@ idf_component_register(
     SRCS
         "app_main.cc"
         "application.cc"
+        "application_tasks.cc"
         "ask_ai_boot_stubs.cc"
         "settings.cc"
         "haptic_feedback.cc"
@@ -148,6 +152,7 @@ idf_component_register(
         "boards/common/camera/dvp_camera.cc"
         "display/screen/screen_common.cc"
         "display/screen/screen_common_nav.cc"
+        "display/screen/screen_frontlight.cc"
         "display/screen/vk_key_handler.cc"
         "display/screen/vk_page_repeat.cc"
         "display/screen/boot_key_handler.cc"
@@ -155,6 +160,8 @@ idf_component_register(
         "display/screen/task_screen/task_screen.cc"
         "audio/audio_codec.cc"
         "audio/audio_service.cc"
+        "audio/audio_service_capture.cc"
+        "display/ui_qrcode.cc"
         "audio/processors/audio_debugger.cc"
         ${AUDIO_PROCESSOR_SRCS}
         ${WAKE_WORD_SRCS}
@@ -168,6 +175,7 @@ idf_component_register(
         ${READER_SRCS}
         ${OTA_UI_SRCS}
         ${HOME_SCREEN_SRCS}
+        ${WORKBUDDY_SRCS}
         ${SETTINGS_SCREEN_SRCS}
         ${BLUETOOTH_SCREEN_SRCS}
         ${NETWORK_SCREEN_SRCS}
@@ -286,7 +294,8 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
 )
 
 # All application and library FatFS admissions participate in standby draining.
-foreach(_sd_fn f_open f_close f_opendir f_closedir f_stat f_mkdir f_unlink f_rename f_utime f_getfree)
+foreach(_sd_fn f_open f_close f_opendir f_closedir f_stat f_mkdir f_unlink f_rename f_utime f_getfree f_mount
+    _open_r _close_r _stat_r _unlink_r _rename_r _link_r mkdir rmdir access utime truncate opendir closedir esp_vfs_fat_info)
     target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=${_sd_fn}")
 endforeach()
 
@@ -331,6 +340,16 @@ add_custom_command(OUTPUT "${_home_icon_pixels}"
         "${CMAKE_CURRENT_SOURCE_DIR}/xingzhi-assets" "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded" "${_pixel_icon_dir}"
     VERBATIM)
 target_sources(${COMPONENT_LIB} PRIVATE "${_home_icon_pixels}" "${CMAKE_CURRENT_SOURCE_DIR}/display/home_icon_decoder.cc")
+
+set(_quick_icon_dir "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded/quick_controls")
+set(_quick_icon_pixels "${CMAKE_CURRENT_BINARY_DIR}/quick_control_icons.cc")
+add_custom_command(OUTPUT "${_quick_icon_pixels}"
+    COMMAND ${PYTHON} "${PROJECT_DIR}/tools/generate_quick_control_icons.py"
+        --assets "${_quick_icon_dir}" --output "${_quick_icon_pixels}"
+    DEPENDS "${PROJECT_DIR}/tools/generate_quick_control_icons.py"
+        "${_quick_icon_dir}/cat_paw.png" "${_quick_icon_dir}/light.png" "${_quick_icon_dir}/color_temp.png"
+    VERBATIM)
+target_sources(${COMPONENT_LIB} PRIVATE "${_quick_icon_pixels}")
 
 spiffs_create_partition_assets(
     resources

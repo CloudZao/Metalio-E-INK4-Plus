@@ -1,3 +1,4 @@
+#include "screen_frontlight.h"
 #include "book_screen/book_geom.h"
 #include "book_screen/reader/book_auto_turn.h"
 #include "book_screen/book_nav.h"
@@ -8,6 +9,7 @@
 #include "book_screen/settings/book_tap_zones.h"
 #include "book_screen/book_text_util.h"
 #include "book_screen/reader/book_reader_body.h"
+#include "book_screen/reader/book_layout_debounce.h"
 #include "book_screen/reader/book_reader_overlay.h"
 
 #include <lvgl.h>
@@ -15,7 +17,24 @@
 #include <esp_log.h>
 
 #include "lv_adapter_display.h"
+#include "display_orient.h"
+#include "epd_refresh.h"
 #include "reader/reader.h"
+
+void ApplyReaderOrient(int orient) {
+    if (!DisplayUiSetOrient(orient)) {
+        return;
+    }
+    ApplyReaderChromeSize();
+    ShowReaderPageLoading();
+    RebuildSettingsSheet();
+    ReaderAutoTurnManualInput();
+    ApplyReaderLayoutLive(false);
+    EpdCancelPageTurn();
+    if (auto* disp = LVAdapterDisplay::Instance()) {
+        disp->RequestFullOnNextCommit();
+    }
+}
 
 lv_coord_t ReaderFooterHeight() {
     const auto* font=Book_ItemFont();
@@ -49,10 +68,11 @@ void BindSessionLayoutPrefs(reader::BookSession& session) {
 // 正文内容区宽度（阅读页边距）；与沉浸态居中栏宽一致。 书库/详情继续用 Book_ContentWidth()（kListPad），互不影响。
 lv_coord_t ReadContentWidth() {
     BookReaderPrefsEnsureLoaded();
-    const int ml = BookReaderPrefsWritingMode() == kBookReaderWritingVertical && !ReaderPageImagesHint()
-        ? kReaderVerticalLeftInset : BookReaderPrefsMarginLeft();
+    const int ml = BookReaderPrefsMarginLeft();
     const int mr = BookReaderPrefsMarginRight();
-    lv_coord_t w = LV_HOR_RES - static_cast<lv_coord_t>(ml + mr);
+    const int extra_left = BookReaderPrefsWritingMode() == kBookReaderWritingVertical && !ReaderPageImagesHint()
+        ? kReaderVerticalLeftInset : 0;
+    lv_coord_t w = LV_HOR_RES - static_cast<lv_coord_t>(ml + mr + extra_left);
     return w > 40 ? w : 40;
 }
 
@@ -179,7 +199,7 @@ void OnReadTimeCheckpoint(lv_timer_t* /*t*/) {
     }
     const bool ok = st.reader.session->SaveProgress();
     if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings && st.settings.reader_tab == 4 &&
-        !st.settings.reader_light_page && !TouchUiFingerIsDown() && !TouchUiHasPendingEdges()) {
+        !ScreenFrontlightIsVisible() && !TouchUiFingerIsDown() && !TouchUiHasPendingEdges()) {
         RequestSettingsSheetPaint();
     }
     const uint32_t sec = st.reader.session->ReadingSeconds();

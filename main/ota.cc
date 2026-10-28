@@ -97,9 +97,6 @@ std::unique_ptr<Http> Ota::SetupHttp() {
     return http;
 }
 
-/* 
- * Specification: https://ccnphfhqs21z.feishu.cn/wiki/FjW6wZmisimNBBkov6OcmfvknVd
- */
 esp_err_t Ota::CheckVersion() {
     return CheckResponse(false);
 }
@@ -121,6 +118,7 @@ esp_err_t Ota::CheckResponse(bool chat_only) {
         const int remaining = int((deadline - esp_timer_get_time()) / 1000);
         if (remaining <= 0) { result = ESP_ERR_TIMEOUT; break; }
         if (!board.IsNetworkReady() && !board.EnsureNetworkReady(std::min(remaining, 5000))) {
+            if (board.GetNetworkErrorText(nullptr)) { result = ESP_ERR_INVALID_STATE; break; }
             result = ESP_ERR_TIMEOUT;
         } else {
             result = CheckResponseOnce(chat_only, std::min(deadline, esp_timer_get_time() + int64_t(8000000)));

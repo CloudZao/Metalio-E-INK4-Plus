@@ -28,5 +28,7 @@ void Network_AsyncOpenSuccess(void* p);
 void Network_ScheduleConnect(const std::string& ssid, const std::string& password);
 /** @brief 离开网络页时拆除 WiFi 扫描/连接资源 */
 void Network_WifiTeardownForScreen();
+/** @brief 中断后台扫描或连接，等待任务结束并释放页面网络资源 */
+void Network_StopForScreen();
 /** @brief 异步弹出连接失败 */
 void Network_AsyncShowFailure(void* p);

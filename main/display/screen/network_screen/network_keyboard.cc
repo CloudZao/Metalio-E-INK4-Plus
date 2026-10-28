@@ -2,15 +2,100 @@
 #include "network_screen/network_screen.h"
 #include "network_screen_priv.h"
 #include "network_keyboard.h"
+#include "book_screen/book_text_util.h"
 
 #include "assets/lang_config.h"
 #include "haptic_feedback.h"
 #include "screen_common.h"
+#include "epd_refresh.h"
 
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
 #include <string>
+
+static lv_timer_t* s_key_feedback_timer = nullptr;
+struct KeyFeedback {
+    uint32_t tick = 0; // 当前键最近一次按下时间
+    uint32_t sequence = 0; // 按下时已提交的刷新序号
+};
+static KeyFeedback s_key_feedback[kKbKeysCap];
+static KbAction s_key_pending_action = KbAction::kEmpty;
+
+static void Network_ApplyKeyAction(KbAction action);
+
+static void Network_StopKeyFeedback() {
+    if (s_key_feedback_timer != nullptr) {
+        lv_timer_delete(s_key_feedback_timer);
+        s_key_feedback_timer = nullptr;
+    }
+    s_key_pending_action = KbAction::kEmpty;
+}
+
+static void Network_KeyFeedbackTick(lv_timer_t*) {
+    if (Network_State().ui.pwd_keyboard == nullptr ||
+        !lv_obj_is_visible(Network_State().ui.pwd_keyboard)) {
+        Network_StopKeyFeedback();
+        return;
+    }
+    const auto stats = EpdGetStats();
+    bool pending = false;
+    for (int i = 0; i < kKbKeysCap; ++i) {
+        lv_obj_t* key = Network_State().kb_keys[i];
+        if (key == nullptr || !lv_obj_has_state(key, LV_STATE_USER_1)) continue;
+        const auto& feedback = s_key_feedback[i];
+        // 每个键独立等待自身灰底落墨，不受后续按键计时或刷新忙状态影响。
+        if (lv_obj_has_state(key, LV_STATE_PRESSED) ||
+            lv_tick_elaps(feedback.tick) < 30 ||
+            static_cast<int32_t>(stats.completed - feedback.sequence) <= 0) {
+            pending = true;
+        } else {
+            lv_obj_remove_state(key, LV_STATE_USER_1);
+        }
+    }
+    if (!pending) {
+        const KbAction action = s_key_pending_action;
+        Network_StopKeyFeedback();
+        Network_ApplyKeyAction(action);
+    }
+}
+
+static void Network_OnKeyFeedback(lv_event_t* e) {
+    auto* key = static_cast<lv_obj_t*>(lv_event_get_target(e));
+    for (int i = 0; i < kKbKeysCap; ++i) {
+        if (Network_State().kb_keys[i] == key) {
+            s_key_feedback[i] = {lv_tick_get(), EpdGetStats().submitted};
+            break;
+        }
+    }
+    lv_obj_add_state(key, LV_STATE_USER_1);
+    lv_obj_invalidate(key);
+    if (s_key_feedback_timer == nullptr) {
+        s_key_feedback_timer = lv_timer_create(Network_KeyFeedbackTick, 30, nullptr);
+    }
+}
+
+static const lv_image_dsc_t* Network_KeyPressedImage() {
+    // 仅使用黑白像素合成 25% 灰度，保持 DU 刷新，不引入原生灰阶。
+    static const uint8_t pixels[] = {
+        0x00, 0xFF, 0x00, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF,
+        0x00, 0xFF, 0x00, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF,
+    };
+    static const lv_image_dsc_t image = [] {
+        lv_image_dsc_t dsc = {};
+        dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+        dsc.header.cf = LV_COLOR_FORMAT_L8;
+        dsc.header.w = 4;
+        dsc.header.h = 4;
+        dsc.header.stride = 4;
+        dsc.data_size = sizeof(pixels);
+        dsc.data = pixels;
+        return dsc;
+    }();
+    return &image;
+}
 
 void Network_RefreshPasswordDisplay() {
     if (Network_State().ui.pwd_lbl == nullptr) {
@@ -140,10 +225,17 @@ void Network_OnCustomKeyPressed(lv_event_t* e) {
     }
 }
 
-// 切布局：松手再建盘，避免 PRESSED 里 lv_obj_clean 删掉当前按键。
+// 切布局与确认等按下反馈完成后执行，避免重建覆盖尚未落墨的灰底。
 void Network_OnCustomKeyClicked(lv_event_t* e) {
     const auto action = static_cast<KbAction>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
+    if (s_key_feedback_timer != nullptr) {
+        s_key_pending_action = action;
+        return;
+    }
+    Network_ApplyKeyAction(action);
+}
 
+static void Network_ApplyKeyAction(KbAction action) {
     switch (action) {
         case KbAction::kShift:
             Network_State().kb_upper = !Network_State().kb_upper;
@@ -162,7 +254,7 @@ void Network_OnCustomKeyClicked(lv_event_t* e) {
             Network_RebuildCustomKeyboard();
             break;
         case KbAction::kConfirm:
-            Network_OnPwdConnect(e);
+            Network_OnPwdConnect(nullptr);
             break;
         default:
             break;
@@ -264,6 +356,7 @@ void Network_RebuildCustomKeyboard() {
     if (Network_State().ui.pwd_keyboard == nullptr) {
         return;
     }
+    Network_StopKeyFeedback();
     lv_obj_clean(Network_State().ui.pwd_keyboard);
     for (int i = 0; i < kKbKeysCap; ++i) {
         Network_State().kb_keys[i] = nullptr;
@@ -288,7 +381,11 @@ void Network_RebuildCustomKeyboard() {
         lv_obj_set_style_border_color(btn, lv_color_black(), 0);
         lv_obj_set_style_border_width(btn, 1, 0);
         lv_obj_set_style_radius(btn, UiSx(7), 0);
+        lv_obj_set_style_bg_image_src(btn, Network_KeyPressedImage(), LV_STATE_USER_1);
+        lv_obj_set_style_bg_image_tiled(btn, true, LV_STATE_USER_1);
+        lv_obj_set_style_bg_image_opa(btn, LV_OPA_COVER, LV_STATE_USER_1);
         lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(btn, Network_OnKeyFeedback, LV_EVENT_PRESSED, nullptr);
         HapticAttachClick(btn);
         void* ud = reinterpret_cast<void*>(static_cast<uintptr_t>(d.action));
         // 输入键按下即上屏；切 英/符/大小写 仍 CLICKED，防止重建时销毁按中的键
@@ -329,6 +426,14 @@ void Network_OnPwdConnect(lv_event_t* /*e*/) {
 void Network_OnPwdCancel(lv_event_t* /*e*/) { Network_ClosePasswordPage(); }
 
 void Network_ClosePasswordPage() {
+    Network_StopKeyFeedback();
+    for (lv_obj_t* key : Network_State().kb_keys) {
+        if (key != nullptr) lv_obj_remove_state(key, LV_STATE_USER_1);
+    }
+    if (Network_State().transfer_mode && Network_State().ui.pwd_keyboard != nullptr) {
+        lv_obj_clean(Network_State().ui.pwd_keyboard);
+        for (auto& key : Network_State().kb_keys) key = nullptr;
+    }
     if (Network_State().ui.pwd_page != nullptr) {
         lv_obj_add_flag(Network_State().ui.pwd_page, LV_OBJ_FLAG_HIDDEN);
     }
@@ -393,7 +498,7 @@ void Network_BuildPasswordPage(lv_obj_t* parent, lv_coord_t top_y) {
     lv_obj_set_width(Network_State().ui.pwd_ssid_lbl, 1);
     lv_obj_set_style_min_width(Network_State().ui.pwd_ssid_lbl, UiSx(24), 0);
     lv_obj_set_height(Network_State().ui.pwd_ssid_lbl, UiSy(34));
-    lv_label_set_long_mode(Network_State().ui.pwd_ssid_lbl, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(Network_State().ui.pwd_ssid_lbl, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_align(Network_State().ui.pwd_ssid_lbl, LV_TEXT_ALIGN_LEFT, 0);
     if (ui != nullptr) {
         lv_obj_set_style_text_font(Network_State().ui.pwd_ssid_lbl, ui, 0);
@@ -473,7 +578,7 @@ void Network_BuildPasswordPage(lv_obj_t* parent, lv_coord_t top_y) {
 
     Network_State().kb_mode = KbMode::kEn;
     Network_State().kb_upper = false;
-    Network_RebuildCustomKeyboard();
+    if (!Network_State().transfer_mode) Network_RebuildCustomKeyboard();
 }
 
 void Network_OpenPasswordPage(const std::string& ssid, wifi_auth_mode_t authmode) {
@@ -485,9 +590,8 @@ void Network_OpenPasswordPage(const std::string& ssid, wifi_auth_mode_t authmode
     Network_State().kb_mode = KbMode::kEn;
     Network_State().kb_upper = false;
 
-    // 仅填 SSID；前缀固定在左侧，「连接到：」不会被长名称挤掉
-    lv_label_set_text(Network_State().ui.pwd_ssid_lbl, ssid.c_str());
-    lv_label_set_long_mode(Network_State().ui.pwd_ssid_lbl, LV_LABEL_LONG_DOT);
+    // 先清除旧名称，固定标题行仅按实际可用宽度显示新 SSID。
+    lv_label_set_text(Network_State().ui.pwd_ssid_lbl, "");
 
     Network_ClearPassword();
 
@@ -499,7 +603,7 @@ void Network_OpenPasswordPage(const std::string& ssid, wifi_auth_mode_t authmode
     lv_obj_clear_flag(Network_State().ui.pwd_page, LV_OBJ_FLAG_HIDDEN);
     // 先出布局再刷省略，确保按实际分配宽度裁切
     lv_obj_update_layout(Network_State().ui.pwd_page);
-    lv_label_set_long_mode(Network_State().ui.pwd_ssid_lbl, LV_LABEL_LONG_DOT);
+    Book_SetFilenameMiddle(Network_State().ui.pwd_ssid_lbl, ssid.c_str());
     Network_LayoutCustomKeyboard();
 }
 

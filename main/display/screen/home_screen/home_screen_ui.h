@@ -9,7 +9,7 @@ void Home_OnAppNameDraw(lv_event_t* e);
 bool Home_OnVkKey(const char* key);
 /** @brief BOOT 长按快捷进百问 */
 bool Home_OnBootLongPress();
-/** @brief 应用页连翻步进 */
+/** @brief 按方向循环切换一页应用，单页时返回 false */
 bool HomePageRepeatStep(int page_delta);
 /** @brief 首页删除事件：停 Hero */
 void Home_OnHomeDeleted(lv_event_t* e);
@@ -49,3 +49,6 @@ const char* Home_AppNameCloud();
 const char* Home_AppNameSettings();
 /** @brief 创建经典布局应用格 */
 lv_obj_t* Home_CreateAppCell(lv_obj_t* parent, const AppEntry& entry, int card_style);
+
+/** @brief 更新只读分页圆点 */
+void Home_UpdatePageIndicator();

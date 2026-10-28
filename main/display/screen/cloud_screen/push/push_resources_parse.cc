@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "assets/lang_config.h"
+#include "assets/lang_screen.h"
 
 namespace reader {
 
@@ -323,6 +324,7 @@ std::string CloudPushResource::LocalPath() const {
             file = resource_id.empty() ? "font.ef" : ("font-" + resource_id + ".ef");
         }
         // .ttf/.otf → fonts_ttf（供阅读设置「导入 TTF」）；.ef 等 → fonts
+        if (!SdIsValidFileName(file.c_str())) return {};
         const char* dir = IsTtfOrOtfBasename(file) ? SD_PATH_FONT_SRC : SD_PATH_FONTS;
         std::string path = dir;
         if (!path.empty() && path.back() != '/') {
@@ -396,7 +398,7 @@ bool FetchPushResources(std::vector<CloudPushResource>& out, std::string& err_ou
         if (gate != nullptr) {
             gate->CloseHttp();
         }
-        err_out = gate != nullptr && gate->IsCancelled() ? Lang::Strings::CLOUD_CANCELLED : Lang::Strings::CLOUD_REQUEST_FAIL;
+        err_out = gate != nullptr && gate->IsCancelled() ? Lang::Strings::CLOUD_CANCELLED : Lang::Strings::CLOUD_FETCH_FAIL;
         return false;
     }
 
@@ -412,14 +414,19 @@ bool FetchPushResources(std::vector<CloudPushResource>& out, std::string& err_ou
     } else {
         http_raw->Close();
     }
-    if (!read_err.empty() || body.empty()) {
-        err_out = read_err.empty() ? Lang::Strings::CLOUD_REQUEST_FAIL : read_err;
-        return false;
-    }
     ESP_LOGI(TAG, "list response status=%d bytes=%u", status,
              static_cast<unsigned>(body.size()));
+    if (status >= 100 && (status < 200 || status >= 300)) {
+        err_out = std::string(Lang::Strings::CLOUD_FETCH_FAIL) + " (HTTP " + std::to_string(status) + ")";
+        return false;
+    }
+    if (!read_err.empty() || body.empty()) {
+        err_out = read_err.empty() || read_err == Lang::Strings::CLOUD_READ_TIMEOUT
+            ? Lang::Strings::CLOUD_FETCH_FAIL : read_err;
+        return false;
+    }
     if (status < 200 || status >= 300) {
-        err_out = Lang::Strings::CLOUD_REQUEST_FAIL;
+        err_out = Lang::Strings::CLOUD_FETCH_FAIL;
         return false;
     }
 
@@ -436,6 +443,9 @@ bool FetchPushResources(std::vector<CloudPushResource>& out, std::string& err_ou
             err_out = msg->valuestring;
         } else {
             err_out = Lang::Strings::CLOUD_API_ERROR;
+        }
+        if (cJSON_IsNumber(code)) {
+            err_out += " (code " + std::to_string(code->valueint) + ")";
         }
         cJSON_Delete(root);
         return false;

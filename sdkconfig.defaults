@@ -58,3 +58,6 @@ CONFIG_COMPILER_CXX_RTTI=y
 
 # AP 文件上传和设备进度使用 WebSocket。
 CONFIG_HTTPD_WS_SUPPORT=y
+
+# WorkBuddy 设备授权二维码
+CONFIG_LV_USE_QRCODE=y

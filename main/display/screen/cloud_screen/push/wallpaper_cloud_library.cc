@@ -51,7 +51,10 @@ std::string MetaPathFor(const char* wallpaper_path) {
     if (wallpaper_path == nullptr || wallpaper_path[0] == '\0') {
         return {};
     }
-    return std::string(wallpaper_path) + ".meta.json";
+    const char* base = std::strrchr(wallpaper_path, '/');
+    base = base != nullptr ? base + 1 : wallpaper_path;
+    // 最长用户文件名追加旧后缀会超出 FAT 单段上限，改用较短元数据后缀。
+    return std::string(wallpaper_path) + (std::strlen(base) > 245 ? ".meta" : ".meta.json");
 }
 
 
@@ -200,6 +203,7 @@ std::string CloudWallpaperTask::LocalPath() const {
             file = "wallpaper-unnamed.a2i1";
         }
     }
+    if (!SdIsValidFileName(file.c_str())) return {};
     path.append(file);
     return path;
 }

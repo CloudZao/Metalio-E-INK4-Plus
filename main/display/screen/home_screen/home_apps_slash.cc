@@ -50,7 +50,7 @@
             lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
 
-            const int base = r * 2;
+            const int base = Home_page * kAppsPerPage + r * 2;
             if (base < kSlashAppCount)
             {
                 Home_CreateSlashAppCell(row, kSlashApps[base], r, 0, row_h, cell_w);
@@ -59,10 +59,6 @@
             {
                 Home_CreateSlashAppCell(row, kSlashApps[base + 1], r, 1, row_h, cell_w);
             }
-        }
-        if (Home_page_lbl != nullptr)
-        {
-            lv_obj_add_flag(Home_page_lbl, LV_OBJ_FLAG_HIDDEN);
         }
         ESP_LOGI(TAG, "slash apps %d row_h=%d cell_w=%d", kSlashAppCount, static_cast<int>(row_h),
                  static_cast<int>(cell_w));
@@ -193,6 +189,9 @@
         }
         lv_obj_set_style_pad_top(cell, HOME_SLASH_PAD_V, 0);
         lv_obj_set_style_pad_bottom(cell, HOME_SLASH_PAD_V, 0);
+        if (left && std::strcmp(entry.name(), "workbuddy") == 0) {
+            lv_obj_set_style_pad_left(cell, HOME_SLASH_PAD_OUTER - UiSx(12), 0);
+        }
         lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
         HapticAttachClick(cell);

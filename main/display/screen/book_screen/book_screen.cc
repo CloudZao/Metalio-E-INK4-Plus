@@ -13,6 +13,7 @@
 #include "book_screen/book_nav.h"
 #include "book_screen/reader/book_reader_overlay.h"
 #include "book_screen/reader/book_reader_body.h"
+#include "book_screen/reader/book_reader_orient.h"
 #include "book_screen/settings/book_settings_sheet.h"
 #include "book_screen/settings/book_font_multi.h"
 
@@ -42,6 +43,7 @@ BookUiState& Book_State() {
 }
 
 static lv_obj_t* CreateBookHome(bool continue_latest) {
+    StopReaderAutoOrient();
     CancelReadFontScan();
     auto& st = Book_State();
     const bool workers_busy = st.reader.opening.load() || st.reader.layout_busy.load() ||
@@ -78,8 +80,6 @@ static lv_obj_t* CreateBookHome(bool continue_latest) {
     st.reader.status_overlay = nullptr;
     st.reader.status_h = 0;
     st.settings.settings_sheet = nullptr;
-    st.settings.reader_light_panel = nullptr;
-    st.settings.reader_light_page = false;
     ClearSettingsSheetWidgetRefs();
     StopTtfPollTimer();
     st.ttf.ttf_mode = BookUiState::TtfMode::kNone;

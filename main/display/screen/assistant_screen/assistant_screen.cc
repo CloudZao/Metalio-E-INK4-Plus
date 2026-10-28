@@ -25,10 +25,16 @@
 #include "vk_page_repeat.h"
 
 #include <cstring>
+#include <optional>
 
 #include <esp_log.h>
 #include "lv_adapter_epdiy.h"
 #include <esp_timer.h>
+
+namespace {
+std::optional<PowerNeedHold> s_network_hold; // 仅由 LVGL 生命周期持有，独立于语音通道
+std::atomic<bool> s_standby{false}; // 阻止待机期间的迟到语音启动和 UI 更新
+}
 
 AssistantUiState& Assistant_State() {
     static AssistantUiState s;
@@ -80,6 +86,8 @@ void Assistant_OnAssistantLifecycle(lv_event_t* e) {
     if (code == LV_EVENT_SCREEN_LOADED) {
         Assistant_State().chrome.scr = static_cast<lv_obj_t*>(lv_event_get_target(e));
         Assistant_State().active.store(true, std::memory_order_release);
+        s_standby.store(false);
+        if (!s_network_hold) s_network_hold.emplace(PowerNeed::ForegroundNetwork);
         const bool hold_through = BootKey_IsHeld();
         if (auto* disp = LVAdapterDisplay::Instance()) {
             disp->SetStatusTitlePrefix(nullptr);
@@ -90,23 +98,21 @@ void Assistant_OnAssistantLifecycle(lv_event_t* e) {
         if (Assistant_State().chrome.content != nullptr && lv_obj_is_valid(Assistant_State().chrome.content)) {
             a2ui_set_host(Assistant_State().chrome.content);
         }
-        if (hold_through) {
-            ESP_LOGD(TAG, "enter hold-through -> schedule voice + listen (skip standby)");
-            app.Schedule([]() {
-                TaskScreen::RequestCacheRefresh();
-                Application::GetInstance().StartXiaozhiVoice(true);
-            });
-        } else {
-            ESP_LOGD(TAG, "enter -> schedule voice session prepare (PTT, no auto listen)");
-            app.Schedule([]() {
-                TaskScreen::RequestCacheRefresh();
-                Application::GetInstance().StartXiaozhiVoice(false);
-            });
+        if (const char* hint = Board::GetInstance().GetNetworkErrorText(nullptr)) {
+            ScreenShowToast(hint);
+            Assistant_ApplyPttWave(false);
+            return;
         }
+        app.Schedule([]() {
+            if (AssistantScreen::IsActive()) TaskScreen::RequestCacheRefresh();
+        });
+        app.StartXiaozhiVoice(hold_through);
         Assistant_ApplyPttWave(Assistant_IsPttWaveWanted());
     } else if (code == LV_EVENT_SCREEN_UNLOADED) {
         ESP_LOGD(TAG, "leave -> schedule voice session stop (keep session RAM)");
         Assistant_State().active.store(false, std::memory_order_release);
+        s_standby.store(false);
+        s_network_hold.reset();
         if (Assistant_State().stream.coalesce_timer != nullptr) {
             esp_timer_stop(Assistant_State().stream.coalesce_timer);
         }
@@ -143,9 +149,7 @@ void Assistant_OnAssistantLifecycle(lv_event_t* e) {
             disp->SetStatusTitlePrefix(nullptr);
             disp->SetIdleStatusMode(IdleStatusMode::kClock);
         }
-        app.Schedule([]() {
-            Application::GetInstance().StopXiaozhiVoice();
-        });
+        app.StopXiaozhiVoice();
     }
 }
 
@@ -217,7 +221,20 @@ bool Assistant_OnVkKeyPressUp(const char* key) {
 
 bool AssistantScreen::IsActive() {
     // 主事件循环 / SetStatus 会跨线程调用；勿 lv_obj_is_valid / lv_screen_active
-    return Assistant_State().active.load(std::memory_order_acquire);
+    return Assistant_State().active.load(std::memory_order_acquire) && !s_standby.load();
+}
+
+void AssistantScreen::SetStandby(bool standby) {
+    if ((!Assistant_State().active.load() && !s_network_hold) || s_standby.exchange(standby) == standby) return;
+    if (standby) {
+        Assistant_ResetTouchPttState();
+        Assistant_ApplyPttWave(false);
+        s_network_hold.reset();
+        Application::GetInstance().StopXiaozhiVoice();
+    } else {
+        s_network_hold.emplace(PowerNeed::ForegroundNetwork);
+        Application::GetInstance().StartXiaozhiVoice(false);
+    }
 }
 
 bool AssistantScreen::IsPttHeld() {

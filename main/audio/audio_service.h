@@ -8,6 +8,7 @@
 #include <mutex>
 #include <atomic>
 #include <string_view>
+#include <string>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -47,6 +48,7 @@
 #define AS_EVENT_WAKE_WORD_RUNNING          (1 << 1)
 #define AS_EVENT_AUDIO_PROCESSOR_RUNNING    (1 << 2)
 #define AS_EVENT_PLAYBACK_NOT_EMPTY         (1 << 3)
+#define AS_EVENT_PCM_CAPTURE_RUNNING        (1 << 7) // 独占直通 PCM 采集
 #define AS_EVENT_INPUT_EXITED               (1 << 4)
 #define AS_EVENT_OUTPUT_EXITED              (1 << 5)
 #define AS_EVENT_OPUS_EXITED                (1 << 6)
@@ -84,7 +86,7 @@ public:
     ~AudioService();
 
     void Initialize(AudioCodec* codec);
-    /** Create input/output/opus tasks. Idempotent while already running. */
+    /** @brief 创建音频输入、输出和编解码任务；已启动时不重复创建 */
     void Start();
     /** 拆任务并销毁 AFE（离百问 / reboot / OTA / 开机清理）。 */
     void Stop();
@@ -108,9 +110,21 @@ public:
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
+    /**
+     * @brief 独占采集 16 kHz 单声道直通 PCM，不改变原有语音前处理器；启停须由 Application 任务串行调用。
+     * @param callback 音频块回调；数据仅在调用期间有效，返回 false 表示结束采集，不可在回调内调用启停。
+     * @param error 可选失败说明，区分占用、未就绪和内存不足。
+     * @return 音频服务已启动、麦克风空闲且直通处理器就绪时返回 true。
+     */
+    bool StartPcmCapture(std::function<bool(const int16_t*, size_t)> callback, std::string* error = nullptr);
+    /**
+     * @brief 停止 PCM 采集并等待正在执行的数据回调退出。
+     * @return 无返回值；返回后可安全释放回调使用的录音缓冲。
+     */
+    void StopPcmCapture();
     void ResetDecoder();
     /**
-     * Drop all PCM/Opus queues and wake waiters. Tasks stay alive.
+     * @brief 清空 PCM 和 Opus 队列并唤醒等待方，保留工作任务
      */
     void FlushQueues();
     /** @brief 解析嵌入式 OGG/Opus 并入队解码播放（老化厂测音效用） */
@@ -123,6 +137,12 @@ private:
     AudioCodec* codec_ = nullptr;
     bool codec_started_ = false;
     AudioServiceCallbacks callbacks_;
+    std::mutex pcm_capture_mutex_; // 保护接收器与采集路由归属
+    std::function<bool(const int16_t*, size_t)> pcm_capture_callback_; // 当前独占 PCM 接收器
+    std::atomic<uint32_t> pcm_capture_generation_{0}; // 识别停止前已经开始的输入读取
+    // 录音停止先封闭回调，再等待本轮 Feed 结束；不可持有回调锁调用处理器 Stop。
+    std::mutex pcm_feed_mutex_; // 串行化采集输入与处理器启停
+    std::unique_ptr<AudioProcessor> capture_processor_; // 仅在独占采集期间分配的直通处理器
     std::unique_ptr<AudioProcessor> audio_processor_;
     std::unique_ptr<WakeWord> wake_word_;
     std::unique_ptr<AudioDebugger> audio_debugger_;
@@ -162,6 +182,10 @@ private:
     std::chrono::steady_clock::time_point last_input_time_;
     std::chrono::steady_clock::time_point last_output_time_;
 
+    /** @brief 分发独占采集的单声道音频帧 */
+    void HandleCapturedAudio(std::vector<int16_t>&& data);
+    /** @brief 通知当前采集输入失败 */
+    void FailPcmCapture(uint32_t generation);
     void AudioInputTask();
     void ParkStoppedTask(EventBits_t bit);
     void AudioOutputTask();

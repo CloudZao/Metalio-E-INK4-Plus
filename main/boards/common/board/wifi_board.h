@@ -14,6 +14,8 @@ public:
     virtual std::string GetBoardType() override;
     virtual void StartNetwork() override;
     virtual bool EnsureNetworkReady(int timeout_ms = 30000) override;
+    /** @brief Wi-Fi 关闭时返回开启提示，否则使用默认文案 */
+    const char* GetNetworkErrorText(const char* fallback) override;
     virtual void RefreshNetworkWaitDeadline(int timeout_ms = 30000) override;
     virtual void PauseNetworkIfNotReady() override;
     virtual bool IsNetworkReady() override;

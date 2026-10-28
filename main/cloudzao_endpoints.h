@@ -28,6 +28,15 @@ extern const char cloudzao_path_library_sync[]; // 书库同步
 extern const char cloudzao_path_device_location_wifi[]; // WiFi 定位上报
 extern const char cloudzao_path_vision_upload[];// 视觉上传
 
+extern const char cloudzao_workbuddy_host[]; // WorkBuddy 服务配置
+extern const char cloudzao_path_workbuddy_authorization[]; // WorkBuddy 设备授权
+extern const char cloudzao_path_workbuddy_authorization_sessions[]; // WorkBuddy 扫码授权会话
+extern const char cloudzao_path_workbuddy_text_turn[]; // WorkBuddy 服务配置
+extern const char cloudzao_path_workbuddy_asr_stream[]; // WorkBuddy 服务配置
+extern const char cloudzao_path_workbuddy_local_messages[]; // WorkBuddy 服务配置
+extern const char cloudzao_path_workbuddy_local_status[]; // WorkBuddy 服务配置
+extern const char cloudzao_path_workbuddy_local_reply[]; // WorkBuddy 服务配置
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,4 +1,5 @@
 #pragma once
+#include "cloud_screen/ap/ap_transfer.h"
 
 #include "network_screen/network_screen.h"
 
@@ -6,6 +7,7 @@
 #include "ui_scale.h"
 
 #include <cstdint>
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -118,7 +120,7 @@ struct NearbyClickCtx {
 };
 
 struct SavedActionCtx {
-    int index = 0;
+    std::string ssid; // 按网络名称定位，避免列表重排后下标失效
 };
 
 struct ConnectCtx {
@@ -127,28 +129,42 @@ struct ConnectCtx {
 };
 
 struct AsyncStatusMsg {
+    uint32_t generation = 0; // 发起页面的代次
     char text[160] = {};
 };
 
 struct AsyncFailMsg {
+    uint32_t generation = 0; // 发起页面的代次
     std::string title;
     std::string detail;
 };
 
+struct AsyncConnectionMsg {
+    std::string ssid; // 已连接网络名称
+    uint32_t generation = 0; // 发起页面的代次
+};
+
 struct NetworkUiState {
+    std::atomic<uint32_t> generation{0}; // 过滤页面切换前排队的异步结果
     UiWidgets ui{};
     std::vector<ApItem> scan_results;
-    bool screen_active = false;
+    bool transfer_mode = false; // 连接后提供局域网文件传输
+    ApTransferInfo transfer_info{}; // 已启动服务的网址
+    std::atomic<bool> screen_active{false};
     bool wifi_initialized = false;
     bool ui_net_held = false;
     bool wifi_station_was_active = false;
-    bool scan_in_progress = false;
-    bool connect_in_progress = false;
+    std::atomic<bool> scan_in_progress{false};
+    std::atomic<bool> connect_in_progress{false};
     Tab tab = Tab::kNearby;
     int nearby_page = 0;
     int saved_page = 0;
+    bool transfer_scan_pending = false; // 扫描结果提示结束前暂不显示列表
+    std::string transfer_scan_message; // 居中显示的扫描结果提示
+    lv_timer_t* transfer_scan_timer = nullptr; // 扫描结果提示结束后展开列表
     int nearby_page_size = kPageSizeFallback;
     int saved_page_size = kPageSizeFallback;
+    std::string retry_ssid; // 连接失败后允许重新输入已保存网络的密码
     std::string pending_ssid;
     wifi_auth_mode_t pending_authmode = WIFI_AUTH_OPEN;
     KbMode kb_mode = KbMode::kEn;
@@ -208,6 +224,8 @@ lv_obj_t* Network_MakeBtn(lv_obj_t* parent, const char* text, lv_coord_t w, lv_c
                   void* user_data = nullptr);
 /** @brief 投递状态文案到 UI 线程 */
 void Network_PostStatus(const char* text);
+/** @brief 显示扫描结果提示，结束后展开 WIFI 分组列表 */
+void Network_PostScanResult(const char* text);
 /** @brief 投递重建列表到 UI 线程 */
 void Network_PostRebuildList();
 /** @brief 投递扫描按钮可用状态 */

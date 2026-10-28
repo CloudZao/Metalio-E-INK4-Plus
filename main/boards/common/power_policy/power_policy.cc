@@ -10,6 +10,7 @@
 #include "standby_screen/standby_screen.h"
 #include "cloud_screen/cloud_screen.h"
 #include "screen_common.h"
+#include <wifi_station.h>
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -63,7 +64,11 @@ bool standby_wake_exit = false;
 namespace {
 
 std::atomic<int> s_cpu_mhz_pending{0};
+std::atomic<int> s_net_grace_pending{-1};
+std::atomic<bool> s_net_grace_writer_running{false};
+bool s_hw_flushing = false; // 策略锁保护的硬件串行执行标记
 std::atomic<bool> s_cpu_freq_async_queued{false};
+std::atomic<bool> s_foreground_flush_queued{false}; // 合并前台保网变化，避免 UI 等待网络硬件
 
 bool NeedHeld(PowerNeed n)
 {
@@ -77,6 +82,7 @@ bool AnyFullNeed()
 
 bool AnyNetNeed()
 {
+    // 配网/激活态的事务需求；前台页面保网不覆盖其原有无操作待机规则。
     return NeedHeld(PowerNeed::AudioSession) || NeedHeld(PowerNeed::LocalMic) ||
            NeedHeld(PowerNeed::OtaDownload) || NeedHeld(PowerNeed::UiKeepNet) ||
            NeedHeld(PowerNeed::PeripheralReset);
@@ -119,7 +125,8 @@ bool NeedsHardNetActiveLocked()
 
 bool NeedsSoftKeepNetLocked()
 {
-    return NeedHeld(PowerNeed::AudioSession) || NeedHeld(PowerNeed::UiKeepNet);
+    return NeedHeld(PowerNeed::AudioSession) || NeedHeld(PowerNeed::UiKeepNet) ||
+           NeedHeld(PowerNeed::ForegroundNetwork);
 }
 
 bool AllowsUserIdleStandbyLocked()
@@ -181,7 +188,8 @@ bool ProvisioningStandbyGraceHoldsLocked()
     if (!UserInactiveLongEnoughLocked()) {
         return false;
     }
-    return InactiveUsLocked() < pwr::UserIdleToStandbyUs() + pwr::NetGraceUs();
+    return pwr::net_grace_sec != 0 &&
+           InactiveUsLocked() < pwr::UserIdleToStandbyUs() + pwr::NetGraceUs();
 }
 
 bool ShouldStayInStandbyUiLocked()
@@ -288,6 +296,9 @@ pwr::Mode EvaluateLocked()
     if (!CanEnterAppIdleLocked()) {
         return pwr::Mode::NetActive;
     }
+    if (pwr::net_grace_sec == 0) {
+        return pwr::Mode::NetActive;
+    }
     // 策略已 pause WiFi 且无占网：维持 AppIdle（回首页、触摸唤醒、退出待机等）
     // 需网页靠 UiKeepNet / 各页 OnResumeFromStandby 内 EnsureNetworkReady 自行拉网
     if (pwr::wifi_stopped_by_policy && !NeedsSoftKeepNetLocked() && !NeedsHardNetActiveLocked()) {
@@ -328,7 +339,7 @@ int NormalizeStandbyToShutdownSec(int sec)
 
 int NormalizeNetGraceSec(int sec)
 {
-    if (sec == 30 || sec == 60 || sec == 120) {
+    if (sec == 0 || sec == 30 || sec == 60 || sec == 120) {
         return sec;
     }
     return pwr::kNetGraceSecDefault;
@@ -367,12 +378,24 @@ void PersistIdleToStandbyTask(void* arg)
     vTaskDelete(nullptr);
 }
 
-void PersistNetGraceTask(void* arg)
+void PersistNetGraceTask(void* /*arg*/)
 {
-    const int sec = static_cast<int>(reinterpret_cast<intptr_t>(arg));
-    Settings settings(kPowerNvsNs, true);
-    settings.SetInt(kNetGraceNvsKey, sec);
-    ESP_LOGI(TAG, "nvs save net_grace_s=%d", sec);
+    for (;;) {
+        const int sec = s_net_grace_pending.exchange(-1);
+        if (sec >= 0) {
+            // 提交并关闭 NVS 后再处理更新，避免旧值覆盖新值。
+            {
+                Settings settings(kPowerNvsNs, true);
+                settings.SetInt(kNetGraceNvsKey, sec);
+            }
+            ESP_LOGI(TAG, "nvs save net_grace_s=%d", sec);
+            continue;
+        }
+        s_net_grace_writer_running.store(false);
+        if (s_net_grace_pending.load() < 0 || s_net_grace_writer_running.exchange(true)) {
+            break;
+        }
+    }
     vTaskDelete(nullptr);
 }
 
@@ -414,6 +437,19 @@ void TickCb(void* /*arg*/)
     }
     xSemaphoreGive(pwr::mu);
     pwr::FlushCpuFreqOutsideLock();
+}
+
+void FlushForegroundNetworkAsync()
+{
+    if (s_foreground_flush_queued.exchange(true)) return;
+    if (!Application::GetInstance().Schedule([]() {
+        // 硬件执行器会重读最新 pending 状态，快速离页或再次待机不会重放旧需求。
+        pwr::FlushCpuFreqOutsideLock();
+        s_foreground_flush_queued.store(false);
+    }, Application::TaskDomain::Network)) {
+        // 需求已存入引用计数；现有策略节拍会重新评估并执行，不丢失申请或释放。
+        s_foreground_flush_queued.store(false);
+    }
 }
 
 void SelfCheckThresholdsOnce()
@@ -474,36 +510,66 @@ void FlushCpuFreqOutsideLock()
         }
     }
 
-    // PauseForLp 含 httpd/DNS 等待，必须在策略锁外执行
-    // 轨序：上电 → 启 WiFi；停 WiFi → 掉电（避免射频/外设在无电时被访问）
-    if (main_rail_on_pending) {
-        main_rail_on_pending = false;
-        power_hw_main_rail_set(true);
+    // 网络操作可能阻塞；单个执行方在锁外串行执行，每步重读最新请求。
+    xSemaphoreTake(mu, portMAX_DELAY);
+    if (s_hw_flushing) {
+        xSemaphoreGive(mu);
+        return;
     }
-    if (wifi_stop_pending) {
-        wifi_stop_pending = false;
-        power_hw_wifi_stop();
-        ESP_LOGI(TAG, "WiFi paused (idle / standby LP)");
-    }
-    if (wifi_start_pending) {
-        wifi_start_pending = false;
-        power_hw_wifi_start();
-    }
-    if (main_rail_off_pending) {
-        main_rail_off_pending = false;
-        power_hw_main_rail_set(false);
+    s_hw_flushing = true;
+    for (;;) {
+        enum class Action {
+            None,      // 无待执行操作
+            RailOn,    // 恢复共享电源
+            WifiStop,  // 暂停 WiFi
+            WifiStart, // 恢复 WiFi
+            RailOff,   // 关闭共享电源
+        };
+        Action action = Action::None;
+        if (main_rail_on_pending) {
+            main_rail_on_pending = false;
+            action = Action::RailOn;
+        } else if (wifi_stop_pending) {
+            wifi_stop_pending = false;
+            action = Action::WifiStop;
+        } else if (wifi_start_pending) {
+            wifi_start_pending = false;
+            action = Action::WifiStart;
+        } else if (main_rail_off_pending) {
+            main_rail_off_pending = false;
+            action = Action::RailOff;
+        }
+        if (action == Action::None) {
+            s_hw_flushing = false;
+            xSemaphoreGive(mu);
+            break;
+        }
+        xSemaphoreGive(mu);
+        switch (action) {
+            case Action::RailOn:
+                power_hw_main_rail_set(true);
+                break;
+            case Action::WifiStop:
+                power_hw_wifi_stop();
+                break;
+            case Action::WifiStart:
+                power_hw_wifi_start();
+                break;
+            case Action::RailOff:
+                power_hw_main_rail_set(false);
+                break;
+            case Action::None:
+                break;
+        }
+        xSemaphoreTake(mu, portMAX_DELAY);
     }
 
-    bool show_standby = false;
-    bool restore_prov = false;
-    if (mu != nullptr) {
-        xSemaphoreTake(mu, portMAX_DELAY);
-        show_standby = standby_show_pending;
-        standby_show_pending = false;
-        restore_prov = restore_provisioning_ui_pending;
-        restore_provisioning_ui_pending = false;
-        xSemaphoreGive(mu);
-    }
+    xSemaphoreTake(mu, portMAX_DELAY);
+    const bool show_standby = standby_show_pending;
+    standby_show_pending = false;
+    const bool restore_prov = restore_provisioning_ui_pending;
+    restore_provisioning_ui_pending = false;
+    xSemaphoreGive(mu);
     if (show_standby) {
         // 与电源键同：勿经 MainEventLoop，避免被百问等网占死
         if (!ScreenLvAsyncUrgent(EnterStandbyUiShowCb)) {
@@ -513,6 +579,16 @@ void FlushCpuFreqOutsideLock()
     if (restore_prov) {
         ScreenLvAsync(RestoreProvisioningUiAsync);
     }
+}
+
+bool HasPendingHardwareWork()
+{
+    if (mu == nullptr) return false;
+    xSemaphoreTake(mu, portMAX_DELAY);
+    const bool pending = s_hw_flushing || wifi_start_pending || wifi_stop_pending ||
+                         main_rail_on_pending || main_rail_off_pending;
+    xSemaphoreGive(mu);
+    return pending;
 }
 
 void BeginPowerOffLocked()
@@ -563,15 +639,29 @@ void ApplyLocked(Mode next)
         (next == Mode::AppIdle) ||
         (next == Mode::StandbyUi && StandbyScreen::IsActive());
 
-    if (next == prev) {
-        if (next == Mode::StandbyUi && !standby_wake_exit && !shutdown_requested) {
-            ArmStandbyLpTaskLocked();
-            // 空闲先进 StandbyUi 再 Show：等 Overlay 就绪后补停网（对齐电源键路径）
-            if (StandbyScreen::IsActive() && IsWifiBoard() && !wifi_stopped_by_policy) {
+    if (IsWifiBoard()) {
+        const bool want_wifi_off =
+            !WifiStation::GetInstance().IsUserEnabled() || next == Mode::AppIdle ||
+            (next == Mode::StandbyUi && StandbyScreen::IsActive());
+        if (want_wifi_off) {
+            if (!wifi_stopped_by_policy) {
                 wifi_stopped_by_policy = true;
                 wifi_start_pending = false;
                 wifi_stop_pending = true;
             }
+        } else if (wifi_stopped_by_policy && next != Mode::StandbyUi) {
+            wifi_stopped_by_policy = false;
+            wifi_stop_pending = false;
+            wifi_start_pending = true;
+            if (next == Mode::KeepNet) {
+                ESP_LOGI(TAG, "WiFi kept for soft session (KeepNet)");
+            }
+        }
+    }
+
+    if (next == prev) {
+        if (next == Mode::StandbyUi && !standby_wake_exit && !shutdown_requested) {
+            ArmStandbyLpTaskLocked();
             if (StandbyScreen::IsActive()) {
                 QueueMainRailForModeLocked(true);
             }
@@ -614,11 +704,6 @@ void ApplyLocked(Mode next)
         !NeedHeld(PowerNeed::PeripheralReset) &&
         !NeedHeld(PowerNeed::UiKeepNet) &&
         ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)));
-    // 待机须 Overlay 已起来再停网（电源键短按就是先 Show 再 Reevaluate）
-    const bool want_wifi_off =
-        (next == Mode::AppIdle) ||
-        (next == Mode::StandbyUi && StandbyScreen::IsActive());
-
     QueueCpuMhzLocked(want_mhz);
 
     if (!NeedHeld(PowerNeed::UiKeepNet)) {
@@ -627,28 +712,6 @@ void ApplyLocked(Mode next)
 
     // MAIN_PWR 与保网掉电同生命周期（含 4G 板 AppIdle，不依赖 WiFi pause）
     QueueMainRailForModeLocked(want_main_rail_off);
-
-    if (!IsWifiBoard()) {
-        return;
-    }
-
-    if (want_wifi_off) {
-        if (!wifi_stopped_by_policy) {
-            wifi_stopped_by_policy = true;
-            wifi_start_pending = false;
-            wifi_stop_pending = true;
-        }
-        return;
-    }
-
-    if (wifi_stopped_by_policy && next != Mode::StandbyUi) {
-        wifi_stopped_by_policy = false;
-        wifi_stop_pending = false;
-        wifi_start_pending = true;
-        if (next == Mode::KeepNet) {
-            ESP_LOGI(TAG, "WiFi kept for soft session (KeepNet)");
-        }
-    }
 }
 
 void ReevaluateLocked()
@@ -670,6 +733,8 @@ void PowerPolicy::Init(Board* board)
     LoadPowerPrefsFromNvs();
     SelfCheckThresholdsOnce();
     pwr::board = board;
+    // 首次读取 Wi-Fi NVS 必须早于使用 PSRAM 栈的外设任务启动。
+    if (IsWifiBoard()) WifiStation::GetInstance();
     pwr::shutdown_requested = false;
     pwr::lp_session_active = false;
     pwr::last_user_activity_us = esp_timer_get_time();
@@ -702,7 +767,7 @@ void PowerPolicy::Acquire(PowerNeed need)
     xSemaphoreTake(pwr::mu, portMAX_DELAY);
     if (need == PowerNeed::PhoneCall || need == PowerNeed::BtAudio || need == PowerNeed::AudioSession ||
         need == PowerNeed::LocalMic || need == PowerNeed::OtaDownload || need == PowerNeed::UiKeepNet ||
-        need == PowerNeed::PeripheralReset) {
+        need == PowerNeed::PeripheralReset || need == PowerNeed::ForegroundNetwork) {
         pwr::ClearNetGraceLocked();
     }
     uint8_t& ref = pwr::need_ref[static_cast<int>(need)];
@@ -717,7 +782,8 @@ void PowerPolicy::Acquire(PowerNeed need)
     }
     pwr::ReevaluateLocked();
     xSemaphoreGive(pwr::mu);
-    pwr::FlushCpuFreqOutsideLock();
+    if (need == PowerNeed::ForegroundNetwork) FlushForegroundNetworkAsync();
+    else pwr::FlushCpuFreqOutsideLock();
 }
 
 void PowerPolicy::Release(PowerNeed need)
@@ -739,9 +805,24 @@ void PowerPolicy::Release(PowerNeed need)
         (inhibit_before && !NeedHeld(PowerNeed::StandbyInhibit))) {
         pwr::last_user_activity_us = esp_timer_get_time();
     }
+    // 等网任务可能在待机请求后才完成 Resume；最后归还前校正实际 STA 状态。
+    if (need == PowerNeed::ForegroundNetwork && StandbyScreen::IsActive() && IsWifiBoard() &&
+        !WifiStation::GetInstance().IsLpPaused()) {
+        pwr::wifi_stopped_by_policy = false;
+    }
     pwr::ReevaluateLocked();
     xSemaphoreGive(pwr::mu);
-    pwr::FlushCpuFreqOutsideLock();
+    if (need == PowerNeed::ForegroundNetwork) FlushForegroundNetworkAsync();
+    else pwr::FlushCpuFreqOutsideLock();
+}
+
+bool PowerPolicy::HasForegroundNetworkWork() const
+{
+    if (pwr::mu == nullptr) return false;
+    xSemaphoreTake(pwr::mu, portMAX_DELAY);
+    const bool held = NeedHeld(PowerNeed::ForegroundNetwork);
+    xSemaphoreGive(pwr::mu);
+    return held;
 }
 
 void PowerPolicy::NotifyDeviceState(DeviceState state)
@@ -865,7 +946,13 @@ int PowerPolicy::GetStandbyToShutdownSec() const
 
 int PowerPolicy::GetNetGraceSec() const
 {
-    return pwr::net_grace_sec;
+    if (pwr::mu == nullptr) {
+        return pwr::net_grace_sec;
+    }
+    xSemaphoreTake(pwr::mu, portMAX_DELAY);
+    const int sec = pwr::net_grace_sec;
+    xSemaphoreGive(pwr::mu);
+    return sec;
 }
 
 void PowerPolicy::SetIdleCpuMhz(int mhz)
@@ -921,23 +1008,27 @@ void PowerPolicy::SetUserIdleToStandbySec(int sec)
 void PowerPolicy::SetNetGraceSec(int sec)
 {
     sec = NormalizeNetGraceSec(sec);
-    if (pwr::mu == nullptr) {
-        if (pwr::net_grace_sec == sec) {
-            return;
-        }
-        pwr::net_grace_sec = sec;
-    } else {
+    if (pwr::mu != nullptr) {
         xSemaphoreTake(pwr::mu, portMAX_DELAY);
-        if (pwr::net_grace_sec == sec) {
-            xSemaphoreGive(pwr::mu);
-            return;
-        }
-        pwr::net_grace_sec = sec;
-        xSemaphoreGive(pwr::mu);
     }
-    if (xTaskCreate(PersistNetGraceTask, "net_grace_nvs", 4096,
-                    reinterpret_cast<void*>(static_cast<intptr_t>(sec)), 5, nullptr) != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate(net_grace_nvs) failed");
+    if (pwr::net_grace_sec != sec) {
+        pwr::net_grace_sec = sec;
+        s_net_grace_pending.store(sec);
+        if (pwr::mu != nullptr) {
+            // 原子更新策略并取消旧请求；在途停网由串行执行方补偿恢复。
+            pwr::ReevaluateLocked();
+        }
+    }
+    if (pwr::mu != nullptr) {
+        xSemaphoreGive(pwr::mu);
+        pwr::FlushCpuFreqOutsideLock();
+    }
+    if (s_net_grace_pending.load() >= 0 && !s_net_grace_writer_running.exchange(true)) {
+        if (xTaskCreate(PersistNetGraceTask, "net_grace_nvs", 4096,
+                        nullptr, 5, nullptr) != pdPASS) {
+            s_net_grace_writer_running.store(false);
+            ESP_LOGE(TAG, "xTaskCreate(net_grace_nvs) failed");
+        }
     }
 }
 

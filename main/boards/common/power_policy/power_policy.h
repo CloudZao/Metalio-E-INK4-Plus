@@ -3,7 +3,7 @@
  * 业务直接 PowerPolicy::GetInstance()；勿经 Board 转发。
  *
  * 档位摘要：Full=电话/BT；NetActive=满频保网（PA 另算）；
- * AppIdle=关 WiFi + 空闲降频（设置可选 160/240/320，默认 320）；断网前可暂留 NetActive（30/60/120s）。
+ * AppIdle=关 WiFi + 空闲降频（设置可选 160/240/320，默认 320）；断网前可暂留 NetActive（30/60/120s 或永不）。
  * PA：仅 Full（电话/BT）或 Speaking/音频测试；Connecting/Listening 保网但不拉 PA。
  * 翻译页 UiKeepNet 不参与 PA_en。
  * StandbyInhibit / UsbVirtualDisk：禁无操作进待机，不硬占网、不拉 PA。
@@ -32,6 +32,7 @@ enum class PowerNeed : uint8_t {
     UsbVirtualDisk, // 虚拟 U 盘启用：不计无操作进待机（不硬占网）
     StandbyInhibit, // 产测老化等：禁止无操作进待机；不硬占网、不驱动 PA（PA 仍靠 DeviceState）
     PeripheralReset, // 共享电源复位：保持活动、保网，强制关闭 PA
+    ForegroundNetwork, // 前台联网页面及其查询：软保网，不刷新无操作计时，不干预 PA
     kCount
 };
 
@@ -59,6 +60,9 @@ public:
      * @param need 需求类型
      */
     void Release(PowerNeed need);
+
+    /** @brief 前台联网页面或其请求是否尚未归还引用，供待机任务等待收尾 */
+    bool HasForegroundNetworkWork() const;
 
     /**
      * @brief 同步设备业务态（聆听/升级等驱动硬占网）
@@ -115,13 +119,13 @@ public:
 
     /**
      * @brief 无保网需求后仍保持联网的时长（秒）
-     * @return 30 / 60 / 120
+     * @return 0（永不因空闲断网）/ 30 / 60 / 120
      */
     int GetNetGraceSec() const;
 
     /**
      * @brief 设置断网前暂留时长并写入 NVS
-     * @param sec 仅接受 30 / 60 / 120，其它值归一为默认 30
+     * @param sec 仅接受 0 / 30 / 60 / 120，其它值归一为默认 30；0 不影响待机停网
      */
     void SetNetGraceSec(int sec);
 

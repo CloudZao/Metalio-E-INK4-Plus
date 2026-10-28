@@ -1,10 +1,10 @@
 #pragma once
 
-/** 热点与文件页地址，供传输页画二维码 */
+/** 传输网络与文件页地址，供传输页显示和生成二维码 */
 struct ApTransferInfo {
-    char ssid[33]; // Metalio- 加 MAC 后 4 位十六进制
+    char ssid[33]; // 热点名称或已连接的 WIFI 名称
     char url[48];  // 浏览器文件页
-    bool ok;       // 热点和网页已起来
+    bool ok;       // 传输网络和网页服务已就绪
     const char* fail; // 失败原因；成功为空
 };
 
@@ -13,8 +13,10 @@ struct ApTransferInfo {
  * @note 支持选择目录或自动分类上传；离开传输页时 ApTransferStop 恢复 STA
  */
 bool ApTransferStart(ApTransferInfo* info);
+/** @brief 在已连接的 STA 上启动文件服务，射频由调用方管理 */
+bool WifiTransferStart(ApTransferInfo* info);
 /**
- * @brief 关闭热点与文件页
+ * @brief 关闭文件服务，并释放本模块持有的热点资源
  * @param resume_sta true 时恢复进入前的 STA；切到 U 盘时传 false，射频保持关闭
  */
 void ApTransferStop(bool resume_sta = true);

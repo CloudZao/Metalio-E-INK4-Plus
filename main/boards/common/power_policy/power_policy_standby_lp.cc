@@ -205,6 +205,12 @@ bool DrainSdAndBootWork()
         if (PollStandbyPhysicalKeys()) return true;
         vTaskDelay(pdMS_TO_TICKS(20));
     }
+    // 业务任务归还网络和音频后，才允许暂停 CPU 并切断共享外设电源。
+    while (Application::GetInstance().HasNetworkAudioWork() ||
+           PowerPolicy::GetInstance().HasForegroundNetworkWork() || pwr::HasPendingHardwareWork()) {
+        if (PollStandbyPhysicalKeys()) return true;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
     return PollStandbyPhysicalKeys();
 }
 
@@ -400,9 +406,16 @@ void StandbyLpTask(void* /*arg*/)
         if (!key_in_settle) key_in_settle = DrainSdAndBootWork();
         if (!key_in_settle) {
             ESP_LOGI(TAG, "LP phase epd_park");
-            StandbyScreen::EnterEpdSleep();
-            ESP_LOGI(TAG, "LP phase lp_loop");
-            RunStandbyLpMainLoop();
+            while (!StandbyScreen::EnterEpdSleep()) {
+                if (DelayMsWithStandbyKeyPoll(500)) {
+                    key_in_settle = true;
+                    break;
+                }
+            }
+            if (!key_in_settle) {
+                ESP_LOGI(TAG, "LP phase lp_loop");
+                RunStandbyLpMainLoop();
+            }
         } else {
             ESP_LOGI(TAG, "LP phase skip park/loop (key in settle)");
         }

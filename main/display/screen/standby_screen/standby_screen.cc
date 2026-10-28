@@ -1,3 +1,4 @@
+#include "screen_frontlight.h"
 #include "standby_screen/standby_screen.h"
 
 #include "standby_screen/standby_classic.h"
@@ -8,6 +9,7 @@
 
 #include "application.h"
 #include "assistant_screen/assistant_screen.h"
+#include "workbuddy_screen/workbuddy_screen.h"
 #include "book_screen/book_screen.h"
 #include "cloud_screen/cloud_screen.h"
 #include "bq27220_gauge.h"
@@ -43,6 +45,7 @@ static StandbyVariant s_variant = StandbyVariant::None;
 static std::atomic<uint32_t> s_paint_token{0};
 static std::atomic<uint32_t> s_paint_flushed{0};
 static SemaphoreHandle_t s_park_done = nullptr;
+static std::atomic<bool> s_park_ok{false};
 static std::atomic<unsigned> s_wake_request{0};
 
 static void EnsureStandbyPortrait() {
@@ -133,6 +136,7 @@ void StandbyScreen::Show() {
     if (s_host_alive) {
         return;
     }
+    ScreenFrontlightHide();
     s_wake_request.store(0);
     lv_obj_t* under = lv_screen_active();
     if (under == nullptr) {
@@ -140,7 +144,9 @@ void StandbyScreen::Show() {
         return;
     }
     ESP_LOGI(TAG, "show overlay on screen=%p", static_cast<void*>(under));
-    EnsureStandbyPortrait();
+    if (!PreferWallpaperVariant()) {
+        EnsureStandbyPortrait();
+    }
 
     lv_obj_t* overlay = lv_obj_create(under);
     lv_obj_remove_style_all(overlay);
@@ -163,7 +169,7 @@ void StandbyScreen::Show() {
     lv_obj_move_foreground(overlay);
     lv_obj_add_event_cb(overlay, OnOverlayDeleted, LV_EVENT_DELETE, nullptr);
 
-    // 前光关在 Park FULL 上墨之后（见 ParkEpdForStandby），勿在此提前灭
+    // 前光关在 Park 上墨之后（见 ParkEpdForStandby），勿在此提前灭
 
     if (auto* disp = LVAdapterDisplay::Instance()) {
         disp->BeginStandbyEnterPaint();
@@ -171,6 +177,8 @@ void StandbyScreen::Show() {
 
     WallpaperScreen::SetDecodePaused(true);
     BookScreen::OnEnterStandby();
+    AssistantScreen::SetStandby(true);
+    WorkBuddyScreen::SetStandby(true);
     // Stop the log producer before closing admission. Existing file handles and
     // the explicitly permitted standby decoder finish before SD is removed.
     SdLogWriter_OnSdUnmounting();
@@ -215,8 +223,10 @@ void StandbyScreen::Dismiss() {
 
     DisplayUiSetFullScreen(false);
     PowerPolicy::GetInstance().OnStandbyOverlayDismissed();
+    AssistantScreen::SetStandby(false);
+    WorkBuddyScreen::SetStandby(false);
 
-    // 待机浅睡期间主循环停，电量单向步进冻在进待机前读数；退出时重锚定并立刻刷顶栏
+    // 清除待机前电量，待唤醒负载稳定 3s 后重新校准。
     Bq27220Gauge::GetInstance().ResetFilter();
     if (auto* disp = LVAdapterDisplay::Instance()) {
         disp->UpdateStatusBar(true);
@@ -241,11 +251,6 @@ void StandbyScreen::Dismiss() {
         if (lv_screen_active() != nullptr) {
             lv_obj_invalidate(lv_screen_active());
         }
-    }
-    if (AssistantScreen::IsActive()) {
-        Application::GetInstance().Schedule([]() {
-            Application::GetInstance().StartXiaozhiVoice(false);
-        });
     }
     WallpaperScreen::SetDecodePaused(false);
     CloudScreen::ReloadApAfterStandby();
@@ -276,7 +281,7 @@ bool StandbyScreen::IsPaintReady() {
     if (s_variant == StandbyVariant::Wallpaper) {
         return StandbyWallpaper_IsContentReady();
     }
-    // 经典页：须等至少一帧 flush 落地，避免 standby_lp 过早 Park 在 CPU0 上再跑 GC16
+    // 经典页：须等至少一帧 flush 落地，避免 standby_lp 过早 Park 在 CPU0 上再次刷屏
     const uint32_t tok = s_paint_token.load(std::memory_order_relaxed);
     return tok != 0 && s_paint_flushed.load(std::memory_order_relaxed) == tok;
 }
@@ -293,25 +298,25 @@ void StandbyScreen::NotifyFlushCompleted() {
 
 static void ParkEpdAsync(void* /*arg*/) {
     if (auto* disp = LVAdapterDisplay::Instance()) {
-        disp->ParkEpdForStandby();
+        s_park_ok.store(disp->ParkEpdForStandby());
     }
     if (s_park_done != nullptr) {
         xSemaphoreGive(s_park_done);
     }
 }
 
-void StandbyScreen::EnterEpdSleep()
+bool StandbyScreen::EnterEpdSleep()
 {
     if (!s_host_alive) {
-        return;
+        return false;
     }
-    // Park/GC16 放到 lv_epdiy_tick（CPU1）执行，避免 standby_lp（CPU0）堵死 IDLE0→WDT
+    // Park 刷屏放到 lv_epdiy_tick（CPU1）执行，避免 standby_lp（CPU0）堵死 IDLE0→WDT
     if (s_park_done == nullptr) {
         s_park_done = xSemaphoreCreateBinary();
     }
-    if (s_park_done != nullptr) {
-        while (xSemaphoreTake(s_park_done, 0) == pdTRUE) {
-        }
+    if (s_park_done == nullptr) return false;
+    s_park_ok.store(false);
+    while (xSemaphoreTake(s_park_done, 0) == pdTRUE) {
     }
     ESP_LOGI(TAG, "park: queue on LVGL tick");
     bool queued = false;
@@ -324,16 +329,13 @@ void StandbyScreen::EnterEpdSleep()
     if (!queued) {
         ESP_LOGW(TAG, "park: async fail, direct on caller");
         if (auto* disp = LVAdapterDisplay::Instance()) {
-            disp->ParkEpdForStandby();
+            return disp->ParkEpdForStandby();
         }
-        return;
+        return false;
     }
-    if (s_park_done == nullptr ||
-        xSemaphoreTake(s_park_done, pdMS_TO_TICKS(20000)) != pdTRUE) {
-        ESP_LOGE(TAG, "park: wait timeout");
-    } else {
-        ESP_LOGI(TAG, "park: done");
-    }
+    // 等待已排队的回调结束，避免超时后重入 Park 或与唤醒竞争。
+    xSemaphoreTake(s_park_done, portMAX_DELAY);
+    return s_park_ok.load();
 }
 
 void StandbyScreen::ExitEpdSleep()

@@ -55,7 +55,7 @@ lv_timer_t* s_playback_timer = nullptr;
 lv_timer_t* s_confirm_timer = nullptr;
 
 std::atomic<bool> s_audio_ready{false};
-TaskHandle_t s_audio_init_task = nullptr;
+std::atomic<bool> s_audio_init_pending{false}; // 录音测试初始化消息在途标记
 
 void UpdateButtonUi();
 void KickAudioInitIfNeeded();
@@ -404,22 +404,21 @@ void AsyncOnAudioReady(void* /*p*/) {
     }
 }
 
-void AudioInitTask(void* /*arg*/) {
+void InitializeAudio() {
     {
         PowerNeedHold power(PowerNeed::LocalMic);
-        if (MetalioAudio_WaitModeReady(kMetalioAudioInitWaitMs) && s_alive.load()) {
+        if (MetalioAudio_WaitModeReady(kMetalioAudioInitWaitMs, [] { return s_alive.load(); }) && s_alive.load()) {
             Application::GetInstance().AcquireAudioService(Application::AudioClient::FactoryTest,
                                                           [] { return s_alive.load(); });
         }
     }
     s_audio_ready.store(Application::GetInstance().GetAudioService().IsStarted() && MetalioAudio_ModeReady());
-    s_audio_init_task = nullptr;
-    if (IsLive()) {
+    s_audio_init_pending.store(false);
+    if (s_alive.load()) {
         if (!ScreenLvAsync(AsyncOnAudioReady, nullptr)) {
             ESP_LOGW(kTag, "ScreenLvAsync for audio ready failed");
         }
     }
-    vTaskDelete(nullptr);
 }
 
 void KickAudioInitIfNeeded() {
@@ -427,13 +426,10 @@ void KickAudioInitIfNeeded() {
         Application::GetInstance().GetAudioService().IsStarted() && MetalioAudio_ModeReady()) {
         return;
     }
-    if (s_audio_init_task != nullptr) {
-        return;
-    }
+    if (s_audio_init_pending.exchange(true)) return;
     s_audio_ready.store(false);
-    if (xTaskCreatePinnedToCore(AudioInitTask, "stest_audio", 8 * 1024, nullptr, 5,
-                                &s_audio_init_task, 0) != pdPASS) {
-        s_audio_init_task = nullptr;
+    if (!Application::GetInstance().Schedule(InitializeAudio, Application::TaskDomain::Audio)) {
+        s_audio_init_pending.store(false);
         ESP_LOGE(kTag, "audio init task create failed");
     }
 }
@@ -515,7 +511,5 @@ void SettingsTestAudio_Teardown() {
     s_record_lbl = nullptr;
     s_confirm_mask = nullptr;
     s_audio_ready.store(false);
-    Application::GetInstance().Schedule([] {
-        if (!s_alive.load()) Application::GetInstance().ReleaseAudioService(Application::AudioClient::FactoryTest);
-    });
+    Application::GetInstance().RequestAudioServiceRelease(Application::AudioClient::FactoryTest);
 }

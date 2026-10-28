@@ -100,7 +100,7 @@ bool BuildUniqueSaveAsPath(const FileEntry& src, char* out_path, size_t out_path
     }
     const size_t max_stem = out_name_len - reserve;
     if (std::strlen(stem) > max_stem) {
-        stem[max_stem] = '\0';
+        stem[SdUtf8PrefixLength(stem, max_stem)] = '\0';
     }
 
     char stamp[16] = {};
@@ -169,9 +169,9 @@ struct SaveWork {
     uint8_t rot_cw = 0;
     bool mirror_h = false;
     bool save_as = false;
-    char src_path[192] = {};
-    char out_path[192] = {};
-    char out_name[96] = {};
+    char src_path[SD_FILE_PATH_CAPACITY] = {};
+    char out_path[SD_FILE_PATH_CAPACITY] = {};
+    char out_name[SD_FILE_NAME_CAPACITY] = {};
 };
 
 struct SaveResultMsg {
@@ -181,7 +181,7 @@ struct SaveResultMsg {
     bool ok = false;
     bool save_as = false;
     size_t size_bytes = 0;
-    char out_name[96] = {};
+    char out_name[SD_FILE_NAME_CAPACITY] = {};
     char err[80] = {};
 };
 

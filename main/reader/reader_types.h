@@ -66,7 +66,7 @@ struct Page {
 
 // 阅读排版默认值（与 BookReaderPrefs 标准档一致；经 BookSession::SetGaps 注入）
 constexpr lv_coord_t kReaderLineGapDefault = 6;
-constexpr lv_coord_t kReaderParaGapDefault = 14;
+constexpr lv_coord_t kReaderParaGapDefault = 0; // 普通段落不增加额外段距，保持正文页行数稳定
 constexpr lv_coord_t kReaderChapterTitleAfterGap = 10; // 章名与后文额外间距
 /** @deprecated 兼容旧引用；新代码用 Default 或 prefs */
 constexpr lv_coord_t kReaderLineGap = kReaderLineGapDefault;

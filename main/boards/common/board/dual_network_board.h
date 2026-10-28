@@ -48,6 +48,8 @@ public:
 
     // 获取当前网络类型
     NetworkType GetNetworkType() const { return network_type_; }
+    /** @brief 获取当前网络类型对应的不可用提示 */
+    const char* GetNetworkErrorText(const char* fallback) override { return current_board_->GetNetworkErrorText(fallback); }
 
     // 获取当前活动的板卡引用
     Board& GetCurrentBoard() const { return *current_board_; }
@@ -70,4 +72,4 @@ public:
     virtual std::string GetDeviceStatusJson() override;
 };
 
-#endif // DUAL_NETWORK_BOARD_H 
+#endif // DUAL_NETWORK_BOARD_H

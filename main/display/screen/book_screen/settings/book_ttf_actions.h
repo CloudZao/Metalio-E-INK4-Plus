@@ -2,7 +2,7 @@
 
 #include <lvgl.h>
 
-/** @brief 钳制 TTF 预览字号 */
+/** @brief 钳制 TTF 转换字号 */
 void ClampTtfSizePx();
 /** @brief 刷新 TTF 确认区文案 */
 void RefreshTtfConfirmTexts();
@@ -22,11 +22,12 @@ void OnTtfSizeInc(lv_event_t* e);
 void OnTtfPagePrev(lv_event_t* e);
 /** @brief TTF 列表下一页 */
 void OnTtfPageNext(lv_event_t* e);
-/** @brief 确认转换 */
+/** @brief 确认并启动转换 */
 void OnTtfConfirmYes(lv_event_t* e);
 /** @brief 取消转换确认 */
 void OnTtfConfirmNo(lv_event_t* e);
-/** @brief 关闭 TTF 面板 */
+/** @brief 返回上一级字体页面并取消在途转换 */
 void OnTtfClose(lv_event_t* e);
-/** @brief 转换结果确认 */
-void OnTtfResultOk(lv_event_t* e);
+
+/** @brief 取消转换并返回 TTF 文件列表。 */
+void ReturnToTtfList();

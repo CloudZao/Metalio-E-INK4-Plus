@@ -241,8 +241,7 @@ enum EpdDrawError epd_hl_update_area(EpdiyHighlevelState* state, enum EpdDrawMod
         epd_full_screen(),
         state->difference_fb,
         diff_area,
-        // Row/column masks are coarse; the phase LUT must also suppress each
-        // unchanged pixel, including gray pixels inside active intersections.
+        // 行列掩码较粗，LUT 继续屏蔽未变化像素；DU 仅放行黑→黑补黑。
         MODE_PACKING_1PPB_DIFFERENCE | MODE_SKIP_UNCHANGED | mode,
         temperature,
         state->dirty_lines,

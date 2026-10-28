@@ -20,14 +20,18 @@
 #include "epd_board_metalio_eink4_plus.h"
 #include "lv_adapter_display.h"
 #include "sd_access.h"
+#include "display/font/ttf_convert.h"
 #include "standby_screen/standby_screen.h"
 
 #include <driver/gpio.h>
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <esp_sleep.h>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/idf_additions.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 #include <wifi_station.h>
 
 #if CONFIG_PM_ENABLE
@@ -45,7 +49,7 @@ extern "C" bool usb_serial_jtag_is_connected(void);
 
 #define TAG "PowerHw"
 
-static constexpr uint32_t kPwrOffStack = 4 * 1024;
+static constexpr uint32_t kPwrOffStack = 16 * 1024; // LVGL 同步绘制栈，与显示任务一致，分配到 PSRAM
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED
 static constexpr int kUsjReviveDisconnectMs = 150;
 static constexpr int kUsjReviveWaitConnectedMs = 800;
@@ -60,8 +64,7 @@ void power_hw_cellular_resume(void) {
     if (auto* cell = CellularBoard()) cell->RecoverAfterPowerOnAsync();
 }
 
-static bool s_main_rail_known = false;
-static bool s_main_rail_on = true;
+static std::atomic<int> s_main_rail_state{-1}; // -1=未知，0=关闭，1=开启；策略与联网任务共享
 static bool s_sd_parked = false;
 static bool s_gpio_wake_boot_low = false;
 static bool s_gpio_wake_power_low = false;
@@ -151,6 +154,8 @@ static void ReviveUsjAfterSdRestore(void) {
 }
 
 esp_err_t power_hw_sd_park(void) {
+    sd_access::Transition transition;
+    if (!transition) return ESP_ERR_TIMEOUT;
     if (s_sd_parked) return ESP_OK;
     if (!sd_access::IsQuiescing() || !sd_access::IsIdle()) return ESP_ERR_INVALID_STATE;
     if (!MetalioSd_HoldPinsLow()) return ESP_FAIL;
@@ -160,9 +165,11 @@ esp_err_t power_hw_sd_park(void) {
 }
 
 esp_err_t power_hw_sd_restore(void) {
+    sd_access::Transition transition;
+    if (!transition) return ESP_ERR_TIMEOUT;
     if (!s_sd_parked) return ESP_OK;
-    s_sd_parked = false;
     const bool mounted = MetalioSd_Init();
+    if (mounted) s_sd_parked = false;
     ReviveUsjAfterSdRestore();
     return mounted ? ESP_OK : ESP_FAIL;
 }
@@ -217,18 +224,17 @@ esp_err_t power_hw_bt_power_reset(void) {
 
 esp_err_t power_hw_main_rail_set(bool on) {
     // S31 无独立 MAIN_PWR；保持策略态幂等
-    if (s_main_rail_known && s_main_rail_on == on) {
+    const int next = on ? 1 : 0;
+    if (s_main_rail_state.exchange(next) == next) {
         return ESP_OK;
     }
-    s_main_rail_known = true;
-    s_main_rail_on = on;
     if (on) power_hw_cellular_resume();
     ESP_LOGD(TAG, "main_rail_set(%d) policy only; physical P14 follows light sleep", on ? 1 : 0);
     return ESP_OK;
 }
 
 bool power_hw_main_rail_is_on(void) {
-    return !s_main_rail_known || s_main_rail_on;
+    return s_main_rail_state.load() != 0;
 }
 
 esp_err_t power_hw_wifi_stop(void) {
@@ -247,6 +253,7 @@ esp_err_t power_hw_wifi_stop(void) {
 esp_err_t power_hw_wifi_start(void) {
     if (CellularBoard()) { power_hw_cellular_resume(); return ESP_OK; }
     auto& sta = WifiStation::GetInstance();
+    if (!sta.IsUserEnabled()) return ESP_OK;
     wifi_mode_t ap_mode = WIFI_MODE_NULL;
     if (esp_wifi_get_mode(&ap_mode) == ESP_OK && (ap_mode & WIFI_MODE_AP) != 0 &&
         (ap_mode & WIFI_MODE_STA) == 0) {
@@ -277,7 +284,12 @@ esp_err_t power_hw_wifi_start(void) {
     return ESP_OK;
 }
 
-esp_err_t power_hw_cpu_freq_set(int mhz) {
+static StaticSemaphore_t s_cpu_freq_mutex_storage;
+static SemaphoreHandle_t s_cpu_freq_mutex = xSemaphoreCreateMutexStatic(&s_cpu_freq_mutex_storage);
+static unsigned s_cpu_freq_holds = 0;
+static int s_cpu_freq_requested = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
+
+static esp_err_t ApplyCpuFreq(int mhz) {
 #if CONFIG_PM_ENABLE
     if (mhz < 10) {
         mhz = 10;
@@ -297,12 +309,44 @@ esp_err_t power_hw_cpu_freq_set(int mhz) {
 #endif
 }
 
+esp_err_t power_hw_cpu_freq_set(int mhz) {
+    xSemaphoreTake(s_cpu_freq_mutex, portMAX_DELAY);
+    const esp_err_t err = s_cpu_freq_holds ? ESP_OK : ApplyCpuFreq(mhz);
+    if (err == ESP_OK) s_cpu_freq_requested = mhz;
+    xSemaphoreGive(s_cpu_freq_mutex);
+    return err;
+}
+
+PowerHwCpuFreqHold::PowerHwCpuFreqHold() {
+    xSemaphoreTake(s_cpu_freq_mutex, portMAX_DELAY);
+    if (s_cpu_freq_holds == 0) {
+        #if CONFIG_PM_ENABLE
+        ESP_ERROR_CHECK(ApplyCpuFreq(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
+        #endif
+    }
+    ++s_cpu_freq_holds;
+    xSemaphoreGive(s_cpu_freq_mutex);
+}
+
+PowerHwCpuFreqHold::~PowerHwCpuFreqHold() {
+    xSemaphoreTake(s_cpu_freq_mutex, portMAX_DELAY);
+    if (--s_cpu_freq_holds == 0) {
+        ApplyCpuFreq(s_cpu_freq_requested);
+    }
+    xSemaphoreGive(s_cpu_freq_mutex);
+}
+
 static void PwrOffTask(void* /*arg*/) {
+    ttf_convert::Cancel();
+    while (ttf_convert::Busy()) vTaskDelay(pdMS_TO_TICKS(20));
     power_hw_pa_set(false);
-    // 先灭背光再刷关机图，避免 restore 轨 / GC16 过程中再亮一下
-    Frontlight::GetInstance().ForceAllLow();
+    if (power_hw_sd_restore() != ESP_OK) {
+        ESP_LOGW(TAG, "power-off: SD restore failed, using default wallpaper");
+    }
     if (auto* disp = LVAdapterDisplay::Instance()) {
-        disp->ShowPoweredOffScreen();
+        while (!disp->ShowPoweredOffScreen()) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
     }
     Frontlight::GetInstance().ForceAllLow();
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -320,8 +364,9 @@ void power_hw_begin_power_off(void) {
     }
     started = true;
     ESP_LOGW(TAG, "begin power off");
-    if (xTaskCreatePinnedToCore(PwrOffTask, "pwr_off", kPwrOffStack, nullptr,
-                                tskIDLE_PRIORITY + 5, nullptr, 0) != pdPASS) {
+    if (xTaskCreatePinnedToCoreWithCaps(PwrOffTask, "pwr_off", kPwrOffStack, nullptr,
+                                      tskIDLE_PRIORITY + 5, nullptr, 0,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGE(TAG, "pwr_off task create failed");
         started = false;
     }
@@ -336,6 +381,8 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us) {
         Application::GetInstance().IsBootWorkActive() || StandbyScreen::HasWakeRequest()) {
         return ESP_ERR_INVALID_STATE;
     }
+    sd_access::Transition transition;
+    if (!transition) return ESP_ERR_TIMEOUT;
     unsigned applied = 0;
     s31_sleep::BeginCycle();
     s31_sleep::Checkpoint(s31_sleep::Phase::Admission, applied); // admission passed

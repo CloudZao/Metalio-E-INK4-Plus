@@ -4,8 +4,7 @@
 
 #include "reader/reader.h"
 
-// Offset from the drawable LVGL area's left edge, in display pixels.
-inline constexpr lv_coord_t kReaderVerticalLeftInset = 10;
+inline constexpr lv_coord_t kReaderVerticalLeftInset = 20; // 竖排正文在页边距之外增加的左留白，单位像素
 
 /** @brief 设置卡片盖在正文上：关掉即可，不必重绘；目录整页需恢复正文 */
 void SyncReaderAaForImmersion(bool immersive);
@@ -15,6 +14,8 @@ void BindSessionLayoutPrefs(reader::BookSession& session);
 lv_coord_t ReadContentWidth();
 /** @brief 打开进度 UI 用书库边距；避免阅读页边距档位导致 Book_ContentWidth 溢出 */
 void ApplyOverlayListContentPads(lv_coord_t top_pad);
+/** @brief 应用阅读方向并更新正文、阅读菜单和排版；须在 LVGL 任务调用 */
+void ApplyReaderOrient(int orient);
 /** @brief 是否整页图模式（未 Open 时用 Peek，便于建屏设 viewport） */
 bool ReaderPageImagesHint();
 /** @brief 勿把 *_busy 置 false，否则其它路径会误 ReleaseBookFont 与计页抢字体 */

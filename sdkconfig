@@ -5052,8 +5052,7 @@ CONFIG_LV_USE_LODEPNG=y
 # CONFIG_LV_BIN_DECODER_RAM_LOAD is not set
 # default:
 # CONFIG_LV_USE_RLE is not set
-# default:
-# CONFIG_LV_USE_QRCODE is not set
+CONFIG_LV_USE_QRCODE=y
 # default:
 # CONFIG_LV_USE_BARCODE is not set
 # default:

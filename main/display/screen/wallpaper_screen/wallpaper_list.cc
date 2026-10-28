@@ -113,7 +113,7 @@ void OnActiveHydrated(void* /*user*/) {
     }
 }
 
-void CollectWallpapers() {
+void CollectWallpapers() try {
     std::vector<FileEntry> next_files;
     if (!Wallpaper_State().sd_ready) {
         Wallpaper_State().list.files.clear();
@@ -127,13 +127,18 @@ void CollectWallpapers() {
         Wallpaper_State().list.thumbs.clear();
         return;
     }
-    while (next_files.size() < static_cast<size_t>(kMaxItems)) {
+    std::unique_ptr<DIR, decltype(&closedir)> directory(dir, &closedir);
+    while (true) {
         errno = 0;
         dirent* ent = readdir(dir);
         if (ent == nullptr) {
+            if (errno != 0) {
+                ESP_LOGW(TAG, "wallpaper directory read failed: %d", errno);
+                return;
+            }
             break;
         }
-        if (!IsListableFile(ent->d_name)) {
+        if (!SdIsValidFileName(ent->d_name) || !IsListableFile(ent->d_name)) {
             continue;
         }
         const size_t name_len = std::strlen(ent->d_name);
@@ -156,10 +161,12 @@ void CollectWallpapers() {
         reader::ReadWallpaperMeta(entry.path, image_name, original_filename);
         const std::string title =
             reader::FormatWallpaperItemTitle(image_name, original_filename);
-        std::snprintf(entry.title, sizeof(entry.title), "%s", title.c_str());
+        const size_t title_len = SdUtf8PrefixLength(title.c_str(), sizeof(entry.title) - 1);
+        std::memcpy(entry.title, title.c_str(), title_len);
+        entry.title[title_len] = '\0';
         next_files.push_back(entry);
     }
-    closedir(dir);
+    directory.reset();
     std::sort(next_files.begin(), next_files.end(),
               [](const FileEntry& a, const FileEntry& b) { return std::strcmp(a.name, b.name) < 0; });
 
@@ -181,6 +188,8 @@ void CollectWallpapers() {
     Wallpaper_State().list.files = std::move(next_files);
     Wallpaper_State().list.thumbs = std::move(next_thumbs);
     SortFilesActiveFirst();
+} catch (const std::bad_alloc&) {
+    ESP_LOGW(TAG, "wallpaper list allocation failed");
 }
 
 int Wallpaper_ListPageCount() {
@@ -394,11 +403,18 @@ void RebuildListPageInternal() {
 
     Wallpaper_ClampListPage();
     SyncWpSelectedSize();
-    // 跨页保留已解码缩略图，避免返回上一页时重复解码。
+    // 仅保留当前页及相邻页缩略图，缓存占用不随壁纸数量增长。
     const lv_coord_t cell_w = Wallpaper_State().list.grid_cell_w;
     const lv_coord_t cover_h = Wallpaper_State().list.grid_cover_h;
     const int start = Wallpaper_State().list.list_page * Wallpaper_State().list.list_per_page;
     const int end = std::min(start + Wallpaper_State().list.list_per_page, static_cast<int>(Wallpaper_State().list.files.size()));
+    const int cache_start = std::max(0, start - Wallpaper_State().list.list_per_page);
+    const int cache_end = end + Wallpaper_State().list.list_per_page;
+    for (size_t i = 0; i < Wallpaper_State().list.thumbs.size(); ++i) {
+        if (static_cast<int>(i) < cache_start || static_cast<int>(i) >= cache_end) {
+            Wallpaper_State().list.thumbs[i].reset();
+        }
+    }
     for (int i = start; i < end; ++i) {
         CreateGridCell(Wallpaper_State().ui.list_host, i, cell_w, cover_h);
     }

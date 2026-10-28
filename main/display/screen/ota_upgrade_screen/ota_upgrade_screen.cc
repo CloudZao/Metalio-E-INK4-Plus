@@ -1,3 +1,4 @@
+#include "screen_frontlight.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
 
 #include "fontpack_lvgl.h"
@@ -137,6 +138,7 @@ static void ApplyPercentLocked(int percent) {
 }
 
 static void BuildUi(const char* current_ver, const char* new_ver) {
+    ScreenFrontlightHide();
     TeardownUi();
 
     // 待机若冻结 EPD flush，进度无法上屏

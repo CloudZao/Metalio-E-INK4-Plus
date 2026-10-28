@@ -1,5 +1,7 @@
 #include "book_screen/book_vk.h"
 #include "book_screen/reader/book_auto_turn.h"
+#include "book_screen/reader/book_reader_orient.h"
+#include "book_screen/reader/book_toc_footer.h"
 #include "book_screen/book_screen_priv.h"
 #include "book_screen/shelf/book_bookshelf.h"
 #include "book_screen/shelf/book_detail.h"
@@ -20,6 +22,9 @@
 #include "book_screen/reader/book_page_image.h"
 #include "standby_screen/standby_screen.h"
 #include "sd_access.h"
+#include "display/font/ttf_convert.h"
+#include "book_screen/settings/book_ttf_panel.h"
+#include "book_screen/settings/book_ttf_actions.h"
 #include <optional>
 
 #include <lvgl.h>
@@ -200,7 +205,12 @@ bool BookScreen::OnVkKey(const char* key_name) {
             // 悬浮设置：分区配置 → 字体多选 → 收起；next 忽略
             // 分区面板有 lv_obj_clean/del：须 BookLvAsync，禁止 touch_feed 同步改树
             if (std::strcmp(key_name, "vk_prev") == 0) {
-                if (st.tap.tap_zone_ui == BookUiState::TapZoneUi::kPick) {
+                if (st.ttf.ttf_mode != BookUiState::TtfMode::kNone) {
+                    BookLvAsync([](void*) {
+                        if (Book_State().ttf.ttf_mode == BookUiState::TtfMode::kList) SelectReadingSheetTab(1);
+                        else ReturnToTtfList();
+                    });
+                } else if (st.tap.tap_zone_ui == BookUiState::TapZoneUi::kPick) {
                     BookLvAsync(AsyncTapZonePickBack);
                 } else if (st.tap.tap_zone_ui != BookUiState::TapZoneUi::kClosed) {
                     BookLvAsync(AsyncTapZonesPanelClose);
@@ -326,10 +336,14 @@ bool BookScreen::OnVkKey(const char* key_name) {
 }
 
 namespace {
+bool s_ttf_return_after_standby = false; // 导入页待机后返回 TTF 文件列表
 std::optional<sd_access::Transaction> s_reader_standby_hold; // 资源收尾完成前阻止 SD 卸卡
 }
 
 void BookScreen::OnEnterStandby() {
+    StopReaderAutoOrient();
+    s_ttf_return_after_standby |= Book_State().ttf.ttf_mode != BookUiState::TtfMode::kNone;
+    TtfPanelClose();
     CancelReadFontScan();
     CloseBookmarkMessage();
     ResetBookmarkSelection();
@@ -356,7 +370,7 @@ void BookScreen::OnEnterStandby() {
 
 void BookScreen::PollStandbyWork() {
     auto& st = Book_State();
-    if (!st.reader.standby_paused || ReaderWorkersBusy()) return;
+    if (!st.reader.standby_paused || ReaderWorkersBusy() || ttf_convert::Busy()) return;
     if (st.reader.deferred_cleanup) FinishDeferredCleanup();
     if (StandbyScreen::IsActive()) {
         if (!st.reader.standby_detached) {
@@ -374,16 +388,20 @@ void BookScreen::PollStandbyWork() {
         st.reader.session->SetBackgroundPaused(false);
     }
     st.reader.standby_paused = st.reader.standby_detached = false;
+    const bool return_to_ttf = s_ttf_return_after_standby;
+    s_ttf_return_after_standby = false;
     if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings && st.settings.reader_tab == 1)
         StartReadFontScan();
     s_reader_standby_hold.reset();
     if (st.reader.deferred_cleanup || !st.reader.session || !st.reader.session->IsOpen() ||
         !st.reader.read_scr || !lv_obj_is_valid(st.reader.read_scr)) return;
     ResumeReadingTimeAfterStandby();
-    if (DisplayUiSetOrient(BookReaderPrefsOrient())) {
+    UpdateReadFooter();
+    if (DisplayUiSetOrient(ReaderDisplayOrient())) {
         ApplyReaderChromeSize();
         if (auto* disp = LVAdapterDisplay::Instance()) disp->RequestFullOnNextCommit();
     }
+    SyncReaderAutoOrient();
     if (st.reader.layout_again) {
         const bool reload = st.reader.layout_reload_font;
         st.reader.layout_again = st.reader.layout_reload_font = false;
@@ -395,6 +413,9 @@ void BookScreen::PollStandbyWork() {
         StartChapterPageWorker();
     }
     RequestRenderReaderPage();
+    if (return_to_ttf && st.reader.read_chrome == BookUiState::ReadChrome::kSettings) {
+        ReturnToTtfList();
+    }
     if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings) RequestSettingsSheetPaint();
 }
 
