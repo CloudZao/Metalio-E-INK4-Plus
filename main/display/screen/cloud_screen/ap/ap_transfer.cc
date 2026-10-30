@@ -165,6 +165,8 @@ UploadState UploadSnapshot() {
 
 extern const uint8_t kPageStart[] asm("_binary_ap_fileman_html_gz_start");
 extern const uint8_t kPageEnd[] asm("_binary_ap_fileman_html_gz_end");
+extern const uint8_t kPageEnStart[] asm("_binary_ap_fileman_en_html_gz_start");
+extern const uint8_t kPageEnEnd[] asm("_binary_ap_fileman_en_html_gz_end");
 
 void HoldPower() {
     if (!s_net_held) {
@@ -323,7 +325,11 @@ esp_err_t HandlePage(httpd_req_t* req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    return httpd_resp_send(req, reinterpret_cast<const char*>(kPageStart), kPageEnd - kPageStart);
+    const bool zh = std::strcmp(Lang::Current(), "zh-CN") == 0;
+    const uint8_t* start = zh ? kPageStart : kPageEnStart;
+    const uint8_t* end = zh ? kPageEnd : kPageEnEnd;
+    httpd_resp_set_hdr(req, "Content-Language", zh ? "zh-CN" : "en-US");
+    return httpd_resp_send(req, reinterpret_cast<const char*>(start), end - start);
 }
 
 bool AffectsUpload(const char* path) {
@@ -388,7 +394,7 @@ esp_err_t HandleStorage(httpd_req_t* req) {
     if (!SdCardManager::GetInstance().IsMounted()) return httpd_resp_sendstr(req, "{\"mounted\":false}");
     uint64_t total = 0, free = 0;
     if (esp_vfs_fat_info(SD_MOUNT_POINT, &total, &free) != ESP_OK) {
-        return SendText(req, "500 Internal Server Error", "SD 卡容量读取失败");
+        return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_SD_CAPACITY_FAILED);
     }
     char json[128];
     std::snprintf(json, sizeof(json), "{\"mounted\":true,\"total\":%llu,\"free\":%llu}",
@@ -407,24 +413,24 @@ int CmpEnt(const void* a, const void* b) {
 
 esp_err_t HandleFileList(httpd_req_t* req) {
     if (!SdCardManager::GetInstance().IsMounted()) {
-        return SendText(req, "503 Service Unavailable", "未检测到内存卡");
+        return SendText(req, "503 Service Unavailable", Lang::Strings::SETTINGS_STORAGE_USB_HINT_NO_SD);
     }
     char web[kWebPathCapacity];
     char fs[kFsPathCapacity];
     if (!QueryValue(req, "path", web, sizeof(web), "/") || !WebToFs(web, fs, sizeof(fs))) {
-        return SendText(req, "400 Bad Request", "路径无效");
+        return SendText(req, "400 Bad Request", Lang::Strings::WALLPAPER_PATH_INVALID);
     }
     FileOperationGuard guard;
     if (s_http_stopping.load()) return ESP_FAIL;
-    if (!RecoverUploads(fs)) return SendText(req, "500 Internal Server Error", "目录读取或上传恢复失败");
+    if (!RecoverUploads(fs)) return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_RECOVERY_FAILED);
     DIR* dir = opendir(fs);
     if (dir == nullptr) {
-        return SendText(req, "404 Not Found", "目录不存在");
+        return SendText(req, "404 Not Found", Lang::Strings::TRANSFER_DIRECTORY_MISSING);
     }
     auto* ents = static_cast<ApEnt*>(heap_caps_malloc(sizeof(ApEnt) * kMaxEntries, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (ents == nullptr) {
         closedir(dir);
-        return SendText(req, "500 Internal Server Error", "内存不足");
+        return SendText(req, "500 Internal Server Error", Lang::Strings::BOOK_OUT_OF_MEMORY);
     }
     int count = 0;
     bool truncated = false;
@@ -458,7 +464,7 @@ esp_err_t HandleFileList(httpd_req_t* req) {
     if (closedir(dir) != 0) read_failed = true;
     if (read_failed) {
         std::free(ents);
-        return SendText(req, "500 Internal Server Error", "目录读取失败，请检查 SD 卡后刷新");
+        return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_DIRECTORY_FAILED);
     }
     guard.Unlock();
     std::qsort(ents, static_cast<size_t>(count), sizeof(ApEnt), CmpEnt);
@@ -499,18 +505,18 @@ esp_err_t HandleDownload(httpd_req_t* req) {
     char fs[kFsPathCapacity];
     if (!QueryValue(req, "path", web, sizeof(web), "") || web[0] == '\0' ||
         !WebToFs(web, fs, sizeof(fs))) {
-        return SendText(req, "400 Bad Request", "路径无效");
+        return SendText(req, "400 Bad Request", Lang::Strings::WALLPAPER_PATH_INVALID);
     }
     FileOperationGuard guard;
     if (s_http_stopping.load()) return ESP_FAIL;
-    if (s_upload_busy.load()) return SendText(req, "503 Service Unavailable", "上传期间暂不支持下载，请完成后重试");
+    if (s_upload_busy.load()) return SendText(req, "503 Service Unavailable", Lang::Strings::TRANSFER_DOWNLOAD_BUSY);
     struct stat st;
     if (stat(fs, &st) != 0 || S_ISDIR(st.st_mode)) {
-        return SendText(req, "404 Not Found", "文件不存在");
+        return SendText(req, "404 Not Found", Lang::Strings::WALLPAPER_FILE_MISSING);
     }
     FILE* fp = std::fopen(fs, "rb");
     if (fp == nullptr) {
-        return SendText(req, "500 Internal Server Error", "无法读取");
+        return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_READ_FAILED);
     }
     const char* base = std::strrchr(web, '/');
     base = (base != nullptr && base[1] != '\0') ? base + 1 : web;
@@ -546,14 +552,14 @@ esp_err_t HandleDownload(httpd_req_t* req) {
 
 void UploadWriteError(int code, const char*& error) {
     if (code == ENOSPC) {
-        error = "SD 卡空间不足，原文件保留";
+        error = Lang::Strings::TRANSFER_SD_FULL;
     } else if (code == ENOMEM) {
-        error = "设备内存不足，上传已停止，原文件保留；请稍后重试";
+        error = Lang::Strings::TRANSFER_MEMORY;
     } else if (code == EIO) {
         s_storage_failed.store(true);
-        error = "内存卡状态异常，请重启设备后再试";
+        error = Lang::Strings::STORAGE_RESTART_REQUIRED;
     } else {
-        error = "SD 卡写入失败，原文件保留；请检查内存卡后重试";
+        error = Lang::Strings::TRANSFER_WRITE_FAILED;
     }
     ESP_LOGE(TAG, "upload storage error errno=%d", code);
 }
@@ -659,7 +665,7 @@ void ReleaseUpload(UploadSession* session, const char* error, bool cancelled = f
 void DestroyUploadSession(void* context) {
     FileOperationGuard guard;
     auto* session = static_cast<UploadSession*>(context);
-    if (OwnsUpload(session)) ReleaseUpload(session, "连接中断，未提交的文件已清理，原文件保留");
+    if (OwnsUpload(session)) ReleaseUpload(session, Lang::Strings::TRANSFER_DISCONNECTED);
     if (session->inflater.state) inflateEnd(&session->inflater);
     heap_caps_free(session->decoded);
     heap_caps_free(session->buffer);
@@ -721,18 +727,18 @@ const char* JsonString(cJSON* json, const char* key) {
 
 esp_err_t StartUpload(httpd_req_t* req, UploadSession* session, cJSON* json) {
     FileOperationGuard guard;
-    if (s_storage_failed.load()) return RejectUpload(req, "内存卡状态异常，请重启设备后再试");
+    if (s_storage_failed.load()) return RejectUpload(req, Lang::Strings::STORAGE_RESTART_REQUIRED);
     if (s_http_stopping.load()) return ESP_FAIL;
-    if (s_upload_busy.load()) return RejectUpload(req, "已有上传在进行，请稍后重试");
+    if (s_upload_busy.load()) return RejectUpload(req, Lang::Strings::TRANSFER_UPLOAD_BUSY);
     const char* id = JsonString(json, "id");
-    if (!*id || std::strlen(id) >= sizeof(s_upload.id)) return RejectUpload(req, "上传任务标识无效");
+    if (!*id || std::strlen(id) >= sizeof(s_upload.id)) return RejectUpload(req, Lang::Strings::TRANSFER_INVALID_ID);
     for (const char* p = id; *p; ++p) {
-        if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'z') || *p == '-')) return RejectUpload(req, "上传任务标识无效");
+        if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'z') || *p == '-')) return RejectUpload(req, Lang::Strings::TRANSFER_INVALID_ID);
     }
-    if (std::strcmp(UploadSnapshot().id, id) == 0) return RejectUpload(req, "此上传任务已处理，请刷新目录确认结果");
+    if (std::strcmp(UploadSnapshot().id, id) == 0) return RejectUpload(req, Lang::Strings::TRANSFER_ALREADY_HANDLED);
     const char* encoding = JsonString(json, "encoding");
     if (*encoding && std::strcmp(encoding, "identity") && std::strcmp(encoding, "zlib-stream-v1")) {
-        return RejectUpload(req, "不支持此上传编码，请刷新页面重试");
+        return RejectUpload(req, Lang::Strings::TRANSFER_ENCODING_UNSUPPORTED);
     }
     session->zlib_stream = std::strcmp(encoding, "zlib-stream-v1") == 0;
     if (session->inflater.state) inflateEnd(&session->inflater);
@@ -745,28 +751,28 @@ esp_err_t StartUpload(httpd_req_t* req, UploadSession* session, cJSON* json) {
     if (!SafeName(name) || std::strlen(web) + std::strlen(name) + (std::strcmp(web, "/") ? 1 : 0) >= kWebPathCapacity ||
         !WebToFs(web, dir, sizeof(dir)) || !cJSON_IsNumber(size) || !(size->valuedouble >= 0) ||
         size->valuedouble > static_cast<double>(static_cast<FSIZE_t>(-1)) || size->valuedouble > 9007199254740991.0) {
-        return RejectUpload(req, "文件名、路径或文件大小无效");
+        return RejectUpload(req, Lang::Strings::TRANSFER_INVALID_FILE);
     }
     const uint64_t expected = static_cast<uint64_t>(size->valuedouble);
-    if (static_cast<double>(expected) != size->valuedouble) return RejectUpload(req, "文件大小无效");
-    if (!SdCardManager::GetInstance().IsMounted()) return RejectUpload(req, "未检测到 SD 卡");
+    if (static_cast<double>(expected) != size->valuedouble) return RejectUpload(req, Lang::Strings::TRANSFER_INVALID_SIZE);
+    if (!SdCardManager::GetInstance().IsMounted()) return RejectUpload(req, Lang::Strings::WALLPAPER_NO_SD);
     uint64_t total_bytes = 0, free_bytes = 0;
-    if (esp_vfs_fat_info(SD_MOUNT_POINT, &total_bytes, &free_bytes) != ESP_OK) return RejectUpload(req, "无法读取 SD 卡容量");
-    if (expected > free_bytes) return RejectUpload(req, "SD 卡空间不足，原文件保留");
-    if (!RecoverUploads(dir)) return RejectUpload(req, "目录读取或上传恢复失败");
+    if (esp_vfs_fat_info(SD_MOUNT_POINT, &total_bytes, &free_bytes) != ESP_OK) return RejectUpload(req, Lang::Strings::TRANSFER_SD_CAPACITY_UNAVAILABLE);
+    if (expected > free_bytes) return RejectUpload(req, Lang::Strings::TRANSFER_SD_FULL);
+    if (!RecoverUploads(dir)) return RejectUpload(req, Lang::Strings::TRANSFER_RECOVERY_FAILED);
     session->replace = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "replace"));
     std::snprintf(session->path, sizeof(session->path), "%s/%s", dir, name);
     std::snprintf(session->temp, sizeof(session->temp), "%s/.cz-%s.part", dir, name);
     std::snprintf(session->backup, sizeof(session->backup), "%s/.cz-%s.bak", dir, name);
     struct stat st;
     const int rc = stat(session->path, &st);
-    if (rc == 0 && (S_ISDIR(st.st_mode) || !session->replace)) return RejectUpload(req, "已存在同名项目，请重新选择处理方式");
-    if (rc != 0 && errno != ENOENT) return RejectUpload(req, "无法检查目标文件");
+    if (rc == 0 && (S_ISDIR(st.st_mode) || !session->replace)) return RejectUpload(req, Lang::Strings::TRANSFER_EXISTS_CHOOSE);
+    if (rc != 0 && errno != ENOENT) return RejectUpload(req, Lang::Strings::TRANSFER_TARGET_CHECK_FAILED);
     // 与退出热点串行确认归属，避免开始写入后遗漏关闭清理。
     xSemaphoreTake(s_upload_lock, portMAX_DELAY);
     if (s_http_stopping.load()) { xSemaphoreGive(s_upload_lock); return ESP_FAIL; }
     session->file = std::fopen(session->temp, "wb");
-    if (session->file == nullptr) { xSemaphoreGive(s_upload_lock); return RejectUpload(req, "无法创建临时文件，原文件保留"); }
+    if (session->file == nullptr) { xSemaphoreGive(s_upload_lock); return RejectUpload(req, Lang::Strings::TRANSFER_TEMP_FAILED); }
     s_upload = UploadState{};
     std::snprintf(s_upload.id, sizeof(s_upload.id), "%s", id);
     s_upload.fd = session->fd;
@@ -783,14 +789,14 @@ esp_err_t FinishUpload(httpd_req_t* req, UploadSession* session) {
     FileOperationGuard guard;
     auto snapshot = UploadSnapshot();
     if (snapshot.received != snapshot.total || (session->zlib_stream && !session->stream_end)) {
-        ReleaseUpload(session, "上传不完整，原文件保留");
+        ReleaseUpload(session, Lang::Strings::TRANSFER_INCOMPLETE);
         return PushUpload(req);
     }
     xSemaphoreTake(s_upload_lock, portMAX_DELAY);
     const bool cancelled = s_upload.cancel || s_http_stopping.load();
     if (!cancelled) s_upload.phase = UploadPhase::Saving;
     xSemaphoreGive(s_upload_lock);
-    if (cancelled) { ReleaseUpload(session, "上传已取消，原文件保留", true); return PushUpload(req); }
+    if (cancelled) { ReleaseUpload(session, Lang::Strings::TRANSFER_CANCELLED, true); return PushUpload(req); }
     const char* error = nullptr;
     if (PushUpload(req) != ESP_OK) return ESP_FAIL;
     const int flush_result = std::fflush(session->file);
@@ -804,17 +810,17 @@ esp_err_t FinishUpload(httpd_req_t* req, UploadSession* session) {
     if (close_result != 0 && error == nullptr) UploadWriteError(close_error, error);
     // 提交与退出请求互斥，旧文件只在同步、关闭成功后进入备份提交。
     xSemaphoreTake(s_upload_lock, portMAX_DELAY);
-    if (error == nullptr && (s_upload.cancel || s_http_stopping.load())) error = "上传已取消，原文件保留";
+    if (error == nullptr && (s_upload.cancel || s_http_stopping.load())) error = Lang::Strings::TRANSFER_CANCELLED;
     if (error == nullptr) {
         struct stat st;
         const int rc = stat(session->path, &st);
         const bool exists = rc == 0;
-        if (exists && (!session->replace || S_ISDIR(st.st_mode))) error = "同名项目已变化，请重新上传";
-        else if (!exists && errno != ENOENT) error = "无法检查目标文件，原文件保留";
-        else if (exists && rename(session->path, session->backup) != 0) error = "无法保护原文件，已取消覆盖";
+        if (exists && (!session->replace || S_ISDIR(st.st_mode))) error = Lang::Strings::TRANSFER_TARGET_CHANGED;
+        else if (!exists && errno != ENOENT) error = Lang::Strings::TRANSFER_TARGET_CHECK_PRESERVED;
+        else if (exists && rename(session->path, session->backup) != 0) error = Lang::Strings::TRANSFER_BACKUP_FAILED;
         else if (rename(session->temp, session->path) != 0) {
-            error = "提交失败，原文件保留";
-            if (exists && rename(session->backup, session->path) != 0) error = "提交失败，原文件备份已保留，恢复 SD 卡后刷新目录重试";
+            error = Lang::Strings::TRANSFER_COMMIT_FAILED;
+            if (exists && rename(session->backup, session->path) != 0) error = Lang::Strings::TRANSFER_RESTORE_FAILED;
         } else if (exists && unlink(session->backup) != 0) ESP_LOGW(TAG, "Uploaded file committed; backup cleanup deferred");
     }
     if (error != nullptr) unlink(session->temp);
@@ -853,7 +859,7 @@ esp_err_t ProcessUploadRequest(httpd_req_t* req) {
         if (frame.len) result = session->zlib_stream ? InflateUploadData(session, buffer, frame.len) :
             WriteUploadData(session, buffer, frame.len);
         if (result != Z_OK) {
-            const char* error = "压缩流或数据长度错误，原文件保留";
+            const char* error = Lang::Strings::TRANSFER_INVALID_STREAM;
             if (result == Z_MEM_ERROR || result == Z_ERRNO) UploadWriteError(result == Z_MEM_ERROR ? ENOMEM : errno, error);
             const bool cancelled = UploadSnapshot().cancel || s_http_stopping.load();
             ReleaseUpload(session, error, cancelled);
@@ -870,16 +876,16 @@ esp_err_t ProcessUploadRequest(httpd_req_t* req) {
     const char* op = JsonString(json, "op");
     esp_err_t result;
     if (std::strcmp(op, "start") == 0) result = StartUpload(req, session, json);
-    else if (!OwnsUpload(session) || std::strcmp(JsonString(json, "id"), UploadSnapshot().id) != 0) result = RejectUpload(req, "未找到此连接的上传任务");
+    else if (!OwnsUpload(session) || std::strcmp(JsonString(json, "id"), UploadSnapshot().id) != 0) result = RejectUpload(req, Lang::Strings::TRANSFER_UPLOAD_MISSING);
     else if (std::strcmp(op, "ping") == 0) {
         frame.type = HTTPD_WS_TYPE_PING;
         frame.len = 0;
         result = httpd_ws_send_frame(req, &frame);
     } else if (std::strcmp(op, "cancel") == 0) {
-        ReleaseUpload(session, "上传已取消，原文件保留", true);
+        ReleaseUpload(session, Lang::Strings::TRANSFER_CANCELLED, true);
         result = PushUpload(req);
     } else if (std::strcmp(op, "finish") == 0) result = FinishUpload(req, session);
-    else result = RejectUpload(req, "上传命令无效");
+    else result = RejectUpload(req, Lang::Strings::TRANSFER_INVALID_COMMAND);
     cJSON_Delete(json);
     return result;
 }
@@ -931,13 +937,13 @@ esp_err_t HandleMkdir(httpd_req_t* req) {
         !WebToFs(web, parent, sizeof(parent)) ||
         std::snprintf(path, sizeof(path), "%s/%s", parent, name) >= static_cast<int>(sizeof(path)) ||
         std::strlen(path) - std::strlen(SD_MOUNT_POINT) >= kWebPathCapacity) {
-        return SendText(req, "400 Bad Request", "路径无效");
+        return SendText(req, "400 Bad Request", Lang::Strings::WALLPAPER_PATH_INVALID);
     }
     FileOperationGuard guard;
     if (s_http_stopping.load()) return ESP_FAIL;
-    if (AffectsUpload(path)) return SendText(req, "409 Conflict", "此路径正在上传，请完成后重试");
+    if (AffectsUpload(path)) return SendText(req, "409 Conflict", Lang::Strings::TRANSFER_PATH_BUSY);
     if (mkdir(path, 0775) != 0) {
-        return SendText(req, "500 Internal Server Error", "创建失败");
+        return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_CREATE_FAILED);
     }
     return SendText(req, nullptr, "ok");
 }
@@ -978,19 +984,19 @@ esp_err_t HandleDelete(httpd_req_t* req) {
     char body[2 * kEncodedPathCapacity + 64], web[kWebPathCapacity], path[kFsPathCapacity], recursive[4];
     if (!ReadForm(req, body, sizeof(body)) || !FormValue(body, "path", web, sizeof(web)) ||
         !WebToFs(web, path, sizeof(path)) || std::strcmp(path, SD_MOUNT_POINT) == 0) {
-        return SendText(req, "400 Bad Request", "路径无效或不允许删除根目录");
+        return SendText(req, "400 Bad Request", Lang::Strings::TRANSFER_DELETE_ROOT_INVALID);
     }
-    if (!SdCardManager::GetInstance().IsMounted()) return SendText(req, "503 Service Unavailable", "未检测到 SD 卡");
+    if (!SdCardManager::GetInstance().IsMounted()) return SendText(req, "503 Service Unavailable", Lang::Strings::WALLPAPER_NO_SD);
     FileOperationGuard guard;
     if (s_http_stopping.load()) return ESP_FAIL;
-    if (AffectsUpload(path)) return SendText(req, "409 Conflict", "此路径包含正在上传的文件，请完成后重试");
+    if (AffectsUpload(path)) return SendText(req, "409 Conflict", Lang::Strings::TRANSFER_DIRECTORY_BUSY);
     const bool recurse = FormValue(body, "recursive", recursive, sizeof(recursive)) && std::strcmp(recursive, "1") == 0;
     uint32_t deleted = 0;
     const bool ok = DeleteTree(path, sizeof(path), recurse, &deleted);
     if (deleted > 0) reader::InvalidateBookLibraryCache();
     char json[256];
     std::snprintf(json, sizeof(json), "{\"deleted\":%lu,\"error\":\"%s\"}", static_cast<unsigned long>(deleted),
-                  ok ? "" : "部分项目未删除，可能是文件使用中、路径过长或 SD 卡异常；已删除内容无法恢复，请刷新确认");
+                  ok ? "" : Lang::Strings::TRANSFER_DELETE_PARTIAL);
     httpd_resp_set_type(req, "application/json; charset=utf-8");
     return httpd_resp_sendstr(req, json);
 }
@@ -1004,29 +1010,29 @@ esp_err_t HandleRename(httpd_req_t* req) {
     if (!ReadForm(req, body, sizeof(body)) || !FormValue(body, "path", web, sizeof(web)) ||
         !FormValue(body, "name", name, sizeof(name)) || !SafeName(name) ||
         !WebToFs(web, from, sizeof(from)) || std::strcmp(from, SD_MOUNT_POINT) == 0) {
-        return SendText(req, "400 Bad Request", "路径无效");
+        return SendText(req, "400 Bad Request", Lang::Strings::WALLPAPER_PATH_INVALID);
     }
     char parent[kFsPathCapacity];
     std::snprintf(parent, sizeof(parent), "%s", from);
     char* slash = std::strrchr(parent, '/');
     if (slash == nullptr) {
-        return SendText(req, "400 Bad Request", "路径无效");
+        return SendText(req, "400 Bad Request", Lang::Strings::WALLPAPER_PATH_INVALID);
     }
     *slash = '\0';
     if (std::snprintf(to, sizeof(to), "%s/%s", parent, name) >= static_cast<int>(sizeof(to))) {
-        return SendText(req, "400 Bad Request", "路径无效");
+        return SendText(req, "400 Bad Request", Lang::Strings::WALLPAPER_PATH_INVALID);
     }
     FileOperationGuard guard;
     if (s_http_stopping.load()) return ESP_FAIL;
-    if (AffectsUpload(from) || AffectsUpload(to)) return SendText(req, "409 Conflict", "此路径正在上传，请完成后重试");
+    if (AffectsUpload(from) || AffectsUpload(to)) return SendText(req, "409 Conflict", Lang::Strings::TRANSFER_PATH_BUSY);
     if (std::strlen(to) - std::strlen(SD_MOUNT_POINT) >= kWebPathCapacity || !RecoverUploads(parent)) {
-        return SendText(req, "400 Bad Request", "路径过长或目录暂不可用");
+        return SendText(req, "400 Bad Request", Lang::Strings::TRANSFER_PATH_UNAVAILABLE);
     }
     struct stat st;
-    if (stat(to, &st) == 0) return SendText(req, "409 Conflict", "已存在同名项目");
-    if (errno != ENOENT) return SendText(req, "500 Internal Server Error", "无法检查目标项目");
+    if (stat(to, &st) == 0) return SendText(req, "409 Conflict", Lang::Strings::TRANSFER_EXISTS);
+    if (errno != ENOENT) return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_ITEM_CHECK_FAILED);
     if (rename(from, to) != 0) {
-        return SendText(req, "500 Internal Server Error", "改名失败");
+        return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_RENAME_FAILED);
     }
     reader::InvalidateBookLibraryCache();
     return SendText(req, nullptr, "ok");
@@ -1042,29 +1048,29 @@ esp_err_t HandleMove(httpd_req_t* req) {
     if (!ReadForm(req, body, sizeof(body)) || !FormValue(body, "path", web, sizeof(web)) ||
         !FormValue(body, "to", to_web, sizeof(to_web)) || !WebToFs(web, from, sizeof(from)) ||
         !WebToFs(to_web, dest_dir, sizeof(dest_dir)) || std::strcmp(from, SD_MOUNT_POINT) == 0) {
-        return SendText(req, "400 Bad Request", "路径无效");
+        return SendText(req, "400 Bad Request", Lang::Strings::WALLPAPER_PATH_INVALID);
     }
     const size_t from_len = std::strlen(from);
     if (strncasecmp(dest_dir, from, from_len) == 0 && (dest_dir[from_len] == '/' || dest_dir[from_len] == '\0')) {
-        return SendText(req, "400 Bad Request", "不能移动到自身或子目录");
+        return SendText(req, "400 Bad Request", Lang::Strings::TRANSFER_MOVE_SELF);
     }
     const char* base = std::strrchr(from, '/');
     base = base != nullptr ? base + 1 : from;
     if (!SafeName(base) ||
         std::snprintf(dest, sizeof(dest), "%s/%s", dest_dir, base) >= static_cast<int>(sizeof(dest))) {
-        return SendText(req, "400 Bad Request", "路径无效");
+        return SendText(req, "400 Bad Request", Lang::Strings::WALLPAPER_PATH_INVALID);
     }
     FileOperationGuard guard;
     if (s_http_stopping.load()) return ESP_FAIL;
-    if (AffectsUpload(from) || AffectsUpload(dest)) return SendText(req, "409 Conflict", "此路径正在上传，请完成后重试");
+    if (AffectsUpload(from) || AffectsUpload(dest)) return SendText(req, "409 Conflict", Lang::Strings::TRANSFER_PATH_BUSY);
     if (std::strlen(dest) - std::strlen(SD_MOUNT_POINT) >= kWebPathCapacity || !RecoverUploads(dest_dir)) {
-        return SendText(req, "400 Bad Request", "路径过长或目标目录暂不可用");
+        return SendText(req, "400 Bad Request", Lang::Strings::TRANSFER_DEST_UNAVAILABLE);
     }
     struct stat st;
-    if (stat(dest, &st) == 0) return SendText(req, "409 Conflict", "目标已存在同名项目");
-    if (errno != ENOENT) return SendText(req, "500 Internal Server Error", "无法检查目标项目");
+    if (stat(dest, &st) == 0) return SendText(req, "409 Conflict", Lang::Strings::TRANSFER_DEST_EXISTS);
+    if (errno != ENOENT) return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_ITEM_CHECK_FAILED);
     if (rename(from, dest) != 0) {
-        return SendText(req, "500 Internal Server Error", "移动失败");
+        return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_MOVE_FAILED);
     }
     reader::InvalidateBookLibraryCache();
     return SendText(req, nullptr, "ok");
@@ -1078,9 +1084,9 @@ struct RequestRoute {
 
 esp_err_t ProcessFileRequest(httpd_req_t* req) {
     const auto* route = static_cast<const RequestRoute*>(req->user_ctx);
-    if (s_http_stopping.load()) return SendText(req, "503 Service Unavailable", "热点正在关闭");
+    if (s_http_stopping.load()) return SendText(req, "503 Service Unavailable", Lang::Strings::TRANSFER_HOTSPOT_STOPPING);
     if (s_upload_busy.load() && route->handler == HandleDownload) {
-        return SendText(req, "503 Service Unavailable", "上传期间暂不支持下载，请完成后重试");
+        return SendText(req, "503 Service Unavailable", Lang::Strings::TRANSFER_DOWNLOAD_BUSY);
     }
     return route->handler(req);
 }
@@ -1088,7 +1094,7 @@ esp_err_t ProcessFileRequest(httpd_req_t* req) {
 esp_err_t HandleRequest(httpd_req_t* req) {
     if (s_http_stopping.load()) return ESP_FAIL;
     const esp_err_t err = s_file_worker.Submit(req, ProcessFileRequest);
-    if (err != ESP_OK) return SendText(req, "503 Service Unavailable", "文件请求繁忙，请稍后重试");
+    if (err != ESP_OK) return SendText(req, "503 Service Unavailable", Lang::Strings::TRANSFER_REQUEST_BUSY);
     return ESP_OK;
 }
 
@@ -1203,7 +1209,7 @@ const char* StartRadio(const char* ssid) {
         return Lang::Strings::CLOUD_AP_FAIL_START;
     }
     esp_wifi_set_ps(WIFI_PS_NONE);
-    #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS
+    #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
     if (esp_wifi_set_max_tx_power(kMetalioWifiMaxTxPower) != ESP_OK) {
         return Lang::Strings::CLOUD_AP_FAIL_START;
     }

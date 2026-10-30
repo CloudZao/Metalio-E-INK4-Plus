@@ -181,7 +181,8 @@ lv_obj_t* CreateSignalPanel(lv_obj_t* page) {
     lv_obj_t* row = lv_obj_create(page);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, lv_pct(100));
-    lv_obj_set_height(row, kSignalPanelH);
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_min_height(row, kSignalPanelH, 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(row, 2, 0);
@@ -196,17 +197,18 @@ lv_obj_t* CreateSignalPanel(lv_obj_t* page) {
     lv_obj_t* title = lv_label_create(row);
     lv_label_set_text(title, Lang::Strings::SETTINGS_TEST_SIGNAL_TITLE);
     lv_obj_set_width(title, kSignalTitleW);
-    lv_obj_set_height(title, lv_font_get_line_height(fontpack_lv_font_ui()));
-    lv_label_set_long_mode(title, LV_LABEL_LONG_CLIP);
+    lv_obj_set_height(title, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(title, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(title, lv_color_black(), 0);
     lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* value = lv_label_create(row);
     lv_label_set_text(value, Lang::Strings::SETTINGS_TEST_SIGNAL_READING);
+    lv_obj_set_width(value, 0);
     lv_obj_set_flex_grow(value, 1);
-    lv_obj_set_height(value, lv_font_get_line_height(fontpack_lv_font_ui()));
-    lv_label_set_long_mode(value, LV_LABEL_LONG_CLIP);
+    lv_obj_set_height(value, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(value, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(value, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(value, lv_color_black(), 0);
     lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);

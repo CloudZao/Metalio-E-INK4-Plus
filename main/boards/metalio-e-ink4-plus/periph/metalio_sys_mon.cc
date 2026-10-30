@@ -22,9 +22,14 @@ void MetalioPeriph_StartSystemMonitor() {
             uint64_t last_loop_end_us = 0;
 
             while (true) {
-                vTaskDelay(pdMS_TO_TICKS(3000));
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                auto& gauge = Bq27220Gauge::GetInstance();
+                int battery_level = 0;
+                bool charging = false, discharging = false;
+                const bool battery_valid = gauge.GetBatteryLevel(battery_level, charging, discharging);
 
                 const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+                if (now_us - prev_us < 3000000) continue;
                 if (last_loop_end_us != 0) {
                     const uint64_t gap_us = now_us - last_loop_end_us;
                     // 期望 ~3000ms；明显偏大说明 sys_mon(pri=1) 长期得不到 CPU
@@ -80,11 +85,7 @@ void MetalioPeriph_StartSystemMonitor() {
                     FirmwareMemoryCheckpoint("system-monitor");
                 }
 
-                auto& gauge = Bq27220Gauge::GetInstance();
-                int battery_level = 0;
-                bool charging = false;
-                bool discharging = false;
-                if (gauge.GetBatteryLevel(battery_level, charging, discharging)) {
+                if (battery_valid) {
                     uint16_t mv = 0;
                     if (gauge.GetVoltageMv(mv)) {
                         ESP_LOGI(kMonitorTag,

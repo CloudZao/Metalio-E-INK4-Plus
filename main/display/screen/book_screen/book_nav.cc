@@ -1,4 +1,12 @@
+#include "assets/lang_config.h"
+#include "assets/lang_reader.h"
+#include <new>
+#include "sd_access.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include "application.h"
 #include "book_screen/book_nav.h"
+#include "book_screen/reader/book_page_work.h"
 #include "book_screen/reader/book_auto_turn.h"
 #include "book_screen/reader/book_reader_orient.h"
 #include "book_screen/reader/book_reader_prefs.h"
@@ -33,6 +41,194 @@
 #include "lv_adapter_display.h"
 #include "screen_common.h"
 #include "vk_key_handler.h"
+
+namespace {
+using Kind = reader::BookSession::NavigationKind;
+constexpr const char* kTag = "ReaderWork";
+std::unique_ptr<ReaderPageResult> ready;
+std::unique_ptr<reader::BookSession> retired;
+bool pending = false;
+Kind pending_kind = Kind::kRefresh;
+int pending_value = 0;
+int after_absolute_delta = 0;
+uint32_t generation = 0;
+int64_t requested_us = 0;
+int64_t idle_after_us = 0;
+bool page_work_busy = false; // 仅由 UI 调度任务读写
+int pending_direction = 0; // 合并导航后保留到实际正文发布的移动方向
+
+int ReaderNavigationDirection(const reader::BookSession::LayoutAnchor& from,
+                              const reader::BookSession::LayoutAnchor& to) {
+    if (!from.valid || !to.valid) return 0;
+    if (to.txt) return (to.txt_byte_off > from.txt_byte_off) - (to.txt_byte_off < from.txt_byte_off);
+    if (to.chapter != from.chapter) return to.chapter > from.chapter ? 1 : -1;
+    return (to.page > from.page) - (to.page < from.page);
+}
+}
+
+bool RequestReaderNavigation(Kind kind, int value) {
+    auto& st = Book_State();
+    if (!st.reader.session || !st.reader.session->IsOpen() || st.reader.opening.load() ||
+        st.reader.deferred_cleanup || st.reader.standby_paused) return false;
+    if (kind == Kind::kRefresh && pending) return true;
+    const bool relative = kind == Kind::kDelta || kind == Kind::kChapterDelta;
+    if (kind == Kind::kDelta && pending && pending_kind != kind) {
+        after_absolute_delta = std::clamp(after_absolute_delta + std::clamp(value, -128, 128), -128, 128);
+    } else if (relative && pending && pending_kind == kind) {
+        pending_value = std::clamp(pending_value + std::clamp(value, -128, 128), -128, 128);
+    } else {
+        pending_kind = kind;
+        pending_value = relative ? std::clamp(value, -128, 128) : value;
+    }
+    if (!relative && kind != Kind::kRefresh) { ++generation; after_absolute_delta = 0; }
+    pending = true;
+    requested_us = esp_timer_get_time();
+    if (kind != Kind::kRefresh || idle_after_us == 0 || st.reader.layout_busy.load() || st.reader.chapter_pages_busy.load()) idle_after_us = requested_us + 1500000;
+    if (st.reader.layout_busy.load()) st.reader.session->PauseTxtPaginate();
+    if (st.reader.chapter_pages_busy.load() ||
+        (page_work_busy && !relative && kind != Kind::kRefresh)) st.reader.session->AbortChapterPageTable();
+    CancelPageImageLoad();
+    return true;
+}
+
+bool ReaderPageWorkPending() {
+    return pending || page_work_busy;
+}
+
+void CancelReaderPageWork() {
+    ++generation;
+    pending = false;
+    after_absolute_delta = 0;
+    pending_direction = 0;
+    ready.reset();
+    idle_after_us = 0;
+    if (Book_State().reader.session) Book_State().reader.session->ResumeTxtPaginate();
+}
+
+std::unique_ptr<ReaderPageResult> TakeReaderPageResult() { return std::move(ready); }
+
+void PollReaderPageWork() {
+    PollReaderLayoutWork();
+    auto& st = Book_State();
+    if (st.reader.session && !ReaderPageWorkPending() && !ready &&
+        esp_timer_get_time() >= idle_after_us)
+        st.reader.session->ResumeTxtPaginate();
+    if (st.reader.session && st.reader.session->IsOpen() && !st.reader.opening.load() &&
+        !st.reader.deferred_cleanup && !st.reader.standby_paused &&
+        !st.reader.layout_again && !st.reader.prefs_reopen_pending) {
+        static int64_t progress_after_us = 0;
+        const auto now = esp_timer_get_time();
+        if (now >= progress_after_us) {
+            progress_after_us = now + 100000;
+            if (st.reader.session->PollLayoutProgress()) {
+                if (st.reader.read_chrome == BookUiState::ReadChrome::kToc) RequestRenderTocList();
+                else if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings) RequestSettingsSheetPaint();
+            }
+        }
+    }
+    if (auto output = TakeCompletedReaderPageWork()) {
+        page_work_busy = false;
+        ready = std::move(output);
+        auto* result = ready.get();
+        retired = std::move(result->cursor);
+        const bool applicable = result->token == generation && !st.reader.deferred_cleanup &&
+            !st.reader.standby_paused && st.reader.content && st.reader.session;
+        const auto old_position = applicable ? st.reader.session->CaptureLayoutAnchor() :
+            reader::BookSession::LayoutAnchor{};
+        if (!applicable) {
+            ready.reset();
+        } else if (result->ok && st.reader.session->CommitNavigation(*retired)) {
+            const auto position = st.reader.session->CaptureLayoutAnchor();
+            const int moved = ReaderNavigationDirection(old_position, position);
+            if (moved) {
+                ReaderAutoTurnPageMoved();
+                pending_direction = moved;
+            }
+            st.reader.session->SaveProgress();
+            if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings) RequestSettingsSheetPaint();
+            if (pending) ready.reset();
+            else {
+                result->direction = pending_direction;
+                pending_direction = 0;
+                RequestRenderReaderPage();
+            }
+        } else {
+            if (retired->Error() != reader::BookReadError::kCancelled) {
+                static int64_t last_log = 0;
+                static unsigned suppressed = 0;
+                const auto now = esp_timer_get_time();
+                if (last_log == 0 || now - last_log >= 5000000) {
+                    ESP_LOGW(kTag, "navigation failed kind=%d phase=%s error=%d chapter=%d page=%d suppressed=%u",
+                        static_cast<int>(result->kind), result->ok ? "commit" : "prepare",
+                        static_cast<int>(retired->Error()), retired->ChapterIndex(), retired->CurrentPage(), suppressed);
+                    last_log = now; suppressed = 0;
+                } else ++suppressed;
+            }
+            if (st.reader.page_label) lv_label_set_text(st.reader.page_label,
+                result->kind == Kind::kBookmark ? Lang::Strings::BOOK_BOOKMARK_LOCATE_FAILED : Lang::Strings::BOOK_PAGE_LOAD_FAILED);
+            ready.reset();
+            if (!pending && pending_direction != 0) {
+                // 合并导航后的目标失败时，补画此前已成功提交的位置，仅重试一次。
+                pending_direction = 0;
+                RequestRenderReaderPage();
+            }
+        }
+        const auto now = esp_timer_get_time();
+        if (ready && now - ready->started_us > 500000) {
+            static int64_t last_log = 0;
+            static unsigned suppressed = 0;
+            if (last_log == 0 || now - last_log >= 5000000) {
+                ESP_LOGW(kTag, "page preparation kind=%d queue=%lldms navigation=%lldms raster=%lldms total=%lldms suppressed=%u",
+                    static_cast<int>(ready->kind), static_cast<long long>(ready->queue_us / 1000),
+                    static_cast<long long>(ready->navigation_us / 1000), static_cast<long long>(ready->raster_us / 1000),
+                    static_cast<long long>((now - ready->started_us) / 1000), suppressed);
+                last_log = now; suppressed = 0;
+            } else ++suppressed;
+        }
+    }
+    if (retired) {
+        auto* cursor = retired.get();
+        if (!ScheduleReaderSessionCleanup(cursor)) return;
+        retired.release();
+    }
+    if (st.reader.deferred_cleanup && !ReaderWorkersBusy()) FinishDeferredCleanup();
+    if (st.reader.layout_again && !ReaderWorkersBusy() && st.reader.content && !st.reader.standby_paused) {
+        const bool reload = st.reader.layout_reload_font;
+        st.reader.layout_again = st.reader.layout_reload_font = false;
+        ApplyReaderLayoutLive(reload);
+    }
+    if (!ReaderPageWorkPending() && !ready && st.reader.content && st.reader.session &&
+        st.reader.session->IsOpen() && !st.reader.standby_paused && !st.reader.prefs_reopen_pending && !ReaderWorkersBusy() &&
+        esp_timer_get_time() >= idle_after_us) {
+        if (st.reader.session->LiveRelayoutPending()) {
+            st.reader.layout_anchor = st.reader.session->CaptureLayoutAnchor();
+            StartLayoutWorker();
+        } else StartChapterPageWorker();
+        idle_after_us = INT64_MAX;
+    }
+    if (!pending || !st.reader.session || !st.reader.content || st.reader.standby_paused || st.reader.deferred_cleanup) return;
+    if (st.reader.opening.load() || st.reader.chapter_pages_busy.load() ||
+        st.reader.page_image_busy.load() || page_work_busy || st.reader.layout_again || st.reader.prefs_reopen_pending) return;
+    if (st.reader.layout_busy.load() && !st.reader.session->PauseTxtPaginate()) return;
+    const int followup_delta = after_absolute_delta;
+    after_absolute_delta = 0;
+    auto result = std::unique_ptr<ReaderPageResult>(new(std::nothrow) ReaderPageResult{});
+    if (!result) { ESP_LOGE(kTag, "page result allocation failed"); pending = false; return; }
+    int value = pending_value;
+    result->cursor = st.reader.session->CreateNavigationCursor(pending_kind, value);
+    if (!result->cursor) { pending = false; ESP_LOGE(kTag, "navigation snapshot failed"); return; }
+    result->kind = pending_kind; result->value = value;
+    result->token = generation; result->started_us = requested_us;
+    page_work_busy = true;
+    if (!StartReaderPageWork(std::move(result))) {
+        page_work_busy = false;
+        pending = false;
+        return;
+    }
+    pending = followup_delta != 0;
+    pending_kind = Kind::kDelta;
+    pending_value = followup_delta;
+}
 
 VkKeyScreenDesc BookAiLongPressDesc(ScreenFactory factory) {
     return VkKeyScreenDesc{factory, BookScreen::OnVkKey, BookScreen::OnBootClick,
@@ -75,59 +271,12 @@ void AttachReadBodyInput(lv_obj_t* obj) {
     lv_obj_add_event_cb(obj, OnReadContentClicked, LV_EVENT_CLICKED, nullptr);
 }
 
-void ApplyReaderPageDelta() {
-    auto& st = Book_State();
-    if (!st.reader.session || !st.reader.session->IsOpen()) {
-        s_reader_page_delta.store(0, std::memory_order_release);
-        return;
-    }
-    // 一次吃光积压：长按按档累加，每帧画到「当前指到的页」（墨水慢则中间页跳过）
-    int d = s_reader_page_delta.exchange(0, std::memory_order_acq_rel);
-    const bool auto_turn = ConsumeReaderAutoTurnRequest();
-    if (d == 0 && auto_turn) d = 1;
-    int moved = 0;
-    while (d > 0) {
-        if (!st.reader.session->NextPage()) {
-            break;
-        }
-        --d;
-        ++moved;
-    }
-    while (d < 0) {
-        if (!st.reader.session->PrevPage()) {
-            break;
-        }
-        ++d;
-        --moved;
-    }
-    if (moved) {
-        ReaderAutoTurnPageMoved();
-        const int page_turn = BookReaderPrefsPageTurn();
-        EpdSetReaderEffect(page_turn == kBookReaderPageTurnWipe ? EpdEffect::Wipe :
-                          page_turn == kBookReaderPageTurnRipple ? EpdEffect::Ripple : EpdEffect::None);
-        EpdRequestPageTurn(moved > 0 ? 1 : -1);
-    }
-}
-
-// 盖板键/长按定时器：只累加 delta，真正翻页在 RenderReaderPage（LVGL）
 bool QueueReaderPageTurn(int dir) {
     if (dir != 0) ReaderAutoTurnManualInput();
     auto& st = Book_State();
-    if (dir == 0 || !st.reader.session || !st.reader.session->IsOpen()) {
-        return false;
-    }
-    const int pending = s_reader_page_delta.load(std::memory_order_acquire);
-    if (dir > 0) {
-        if (pending <= 0 && !st.reader.session->HasNextPage()) {
-            return false;
-        }
-    } else if (pending >= 0 && !st.reader.session->HasPrevPage()) {
-        return false;
-    }
-    s_reader_page_delta.fetch_add(dir, std::memory_order_acq_rel);
-    // 上屏经 ScreenPaintCoalesce：有 pending 则等交完，连点跳到最终页再画
-    RequestRenderReaderPage();
-    return true;
+    if (dir == 0 || !st.reader.session || !st.reader.session->IsOpen()) return false;
+    if (!ReaderPageWorkPending() && (dir > 0 ? !st.reader.session->HasNextPage() : !st.reader.session->HasPrevPage())) return false;
+    return RequestReaderNavigation(reader::BookSession::NavigationKind::kDelta, dir);
 }
 
 void GoHomeFromBookAsync(void* /*user_data*/) {
@@ -147,20 +296,43 @@ void FinishDeferredCleanup() {
         return;
     }
     // worker 仍可能握着 session/font_ 计宽：busy 未清不得释字体
-    if (st.reader.opening.load() || st.reader.layout_busy.load() || st.reader.chapter_pages_busy.load() ||
-        st.reader.page_image_busy.load()) {
-        return;
-    }
+    if (ReaderWorkersBusy()) return;
+    if (!RetireReaderSession()) return;
     st.reader.deferred_cleanup = false;
-    EndReadingTimeTracking();
-    st.reader.session.reset();
     ReleaseBookFont();
+}
+
+bool ScheduleReaderSessionCleanup(reader::BookSession* session) {
+    if (!session) return true;
+    try {
+        sd_access::Permit permit;
+        auto access = std::make_shared<sd_access::DeferredTransaction>();
+        if (!*access) return false;
+        return Application::GetInstance().Schedule([session, access]() {
+            for (;;) {
+                sd_access::Transaction transaction(*access);
+                if (transaction) { delete session; return; }
+                vTaskDelay(1);
+            }
+        }, Application::TaskDomain::Cleanup);
+    } catch (const std::bad_alloc&) { return false; }
+}
+
+bool RetireReaderSession() {
+    auto& st = Book_State();
+    EndReadingTimeTracking();
+    if (!st.reader.session) return true;
+    if (!st.reader.session->PrepareClose()) return false;
+    auto* session = st.reader.session.get();
+    if (!ScheduleReaderSessionCleanup(session)) return false;
+    st.reader.session.release();
+    return true;
 }
 
 bool ReaderWorkersBusy() {
     auto& st = Book_State();
     return st.reader.opening.load() || st.reader.layout_busy.load() || st.reader.chapter_pages_busy.load() ||
-           st.reader.page_image_busy.load();
+           st.reader.page_image_busy.load() || page_work_busy;
 }
 
 // 阅读相关 worker 占线时打一条，便于串口对照「点了继续阅读却无 StartOpenWorker」
@@ -170,11 +342,11 @@ void WarnReaderWorkersBusy(const char* where) {
         return;
     }
     ESP_LOGW(TAG,
-             "%s ignored: open=%d layout=%d chapter_pages=%d page_img=%d deferred_cleanup=%d "
+             "%s ignored: open=%d layout=%d chapter_pages=%d page_img=%d page_work=%d deferred_cleanup=%d "
              "open_token=%u sel=%d",
              where, st.reader.opening.load() ? 1 : 0, st.reader.layout_busy.load() ? 1 : 0,
              st.reader.chapter_pages_busy.load() ? 1 : 0, st.reader.page_image_busy.load() ? 1 : 0,
-             st.reader.deferred_cleanup ? 1 : 0, static_cast<unsigned>(st.reader.open_token.load()),
+             page_work_busy ? 1 : 0, st.reader.deferred_cleanup ? 1 : 0, static_cast<unsigned>(st.reader.open_token.load()),
              st.shelf.selected);
 }
 
@@ -186,6 +358,8 @@ void ReleaseReaderForSystemHome() {
 }
 
 void ReleaseReaderSessionForLeave() {
+    CancelReaderPageWork();
+    EndReadingTimeTracking();
     StopReaderAutoOrient();
     CancelReadFontScan();
     CloseBookmarkMessage();
@@ -224,18 +398,14 @@ void ReleaseReaderSessionForLeave() {
     st.reader.read_chrome = BookUiState::ReadChrome::kReading;
     st.reader.settings_resume_after_open = false;
     st.reader.toc_list_page = 0;
-    const bool layout_running = st.reader.layout_busy.load();
-    const bool chapter_pages_running = st.reader.chapter_pages_busy.load();
-    const bool page_image_running = st.reader.page_image_busy.load();
     st.reader.layout_token.fetch_add(1);
     st.reader.layout_again = false;
     st.reader.layout_reload_font = false;
     st.reader.layout_anchor = {};
     st.reader.chapter_pages_token.fetch_add(1);
-    st.reader.chapter_pages_again = false;
     CancelPageImageLoad();
     if (st.reader.session) {
-        st.reader.session->InvalidateChapterPageTable();
+        st.reader.session->AbortChapterPageTable();
         st.reader.session->AbortTxtPaginate();
     }
     CancelLayoutDebounce();
@@ -245,16 +415,8 @@ void ReleaseReaderSessionForLeave() {
     ScreenPaintCoalesceReset(&s_reader_paint);
     ScreenPaintCoalesceReset(&s_toc_paint);
     ScreenPaintCoalesceReset(&s_settings_sheet_paint);
-    s_reader_page_delta.store(0, std::memory_order_release);
-    if (st.reader.opening.load() || layout_running || chapter_pages_running || page_image_running) {
-        // 勿把 *_busy 置 false，否则其它路径会误 ReleaseBookFont 与计页抢字体
-        StopReadTimeCheckpointTimer();
-        st.reader.deferred_cleanup = true;
-    } else {
-        EndReadingTimeTracking();
-        st.reader.session.reset();
-        ReleaseBookFont();
-    }
+    st.reader.deferred_cleanup = true;
+    FinishDeferredCleanup();
     SyncReaderAaForImmersion(false);
     if (DisplayUiSetOrient(kDisplayUiPortrait)) {
         if (auto* disp = LVAdapterDisplay::Instance()) {
@@ -273,8 +435,7 @@ lv_obj_t* ResumeReaderScreen() {
     if (st.reader.deferred_cleanup) {
         FinishDeferredCleanup();
     } else if (st.reader.session) {
-        EndReadingTimeTracking();
-        st.reader.session.reset();
+        if (!RetireReaderSession()) return BookScreen::Create();
         ReleaseBookFont();
     }
     if (st.shelf.selected < 0 || st.shelf.selected >= static_cast<int>(st.shelf.books.size())) {
@@ -303,33 +464,22 @@ void OpenAssistantFromReaderAsync(void* /*user_data*/) {
 }
 
 void RequestOpenAssistantFromReader() {
-    auto* d = LVAdapterDisplay::Instance();
-    if (d == nullptr || !d->IsReady()) {
-        return;
+    if (!ScreenLvAsyncUrgent(OpenAssistantFromReaderAsync)) {
+        ESP_LOGW(TAG, "assistant navigation queue full");
     }
-    if (!d->LockUi(-1)) {
-        ESP_LOGW(TAG, "assistant from reader: adapter lock failed");
-        return;
-    }
-    if (lv_async_call(OpenAssistantFromReaderAsync, nullptr) != LV_RESULT_OK) {
-        ESP_LOGW(TAG, "assistant from reader: lv_async_call failed");
-    }
-    d->UnlockUi();
 }
 
-// 盖板键在 touch_feed：须 ScreenLvAsync，禁止同步 lv_obj_clean/create（否则 tlsf 双释放）。
+// 回调统一经 UI 邮箱执行；投递失败时上下文仍由调用方持有。
 bool BookLvAsync(void (*cb)(void*), void* user_data) {
-    const int64_t t0 = esp_timer_get_time();
     const bool ok = ScreenLvAsync(cb, user_data);
-    ESP_LOGI(TAG, "BookLvAsync queue %s in %d us", ok ? "ok" : "fail",
-             static_cast<int>(esp_timer_get_time() - t0));
+    if (!ok) ESP_LOGW(TAG, "book UI queue rejected callback=%p", reinterpret_cast<void*>(cb));
     return ok;
 }
 
 static std::atomic<bool> s_bookshelf_screen_change{false};
 
 void PaintBookshelfPage() {
-    ESP_LOGI(TAG, "async RenderBookshelfPage page=%d begin", Book_State().shelf.list_page);
+    ESP_LOGD(TAG, "async RenderBookshelfPage page=%d begin", Book_State().shelf.list_page);
     const bool screen_change=s_bookshelf_screen_change.exchange(false);
     RenderBookshelfPage();
     if (screen_change && Book_State().shelf.list_scr==lv_screen_active()) {
@@ -337,7 +487,7 @@ void PaintBookshelfPage() {
         EpdRequestScreenChange();
         lv_obj_invalidate(lv_screen_active());
     }
-    ESP_LOGI(TAG, "async RenderBookshelfPage done");
+    ESP_LOGD(TAG, "async RenderBookshelfPage done");
 }
 
 void PaintReaderPage() {
@@ -345,9 +495,9 @@ void PaintReaderPage() {
 }
 
 void PaintTocList() {
-    ESP_LOGI(TAG, "async RenderTocList page=%d begin", Book_State().reader.toc_list_page);
+    ESP_LOGD(TAG, "async RenderTocList page=%d begin", Book_State().reader.toc_list_page);
     RenderTocList();
-    ESP_LOGI(TAG, "async RenderTocList done");
+    ESP_LOGD(TAG, "async RenderTocList done");
 }
 
 void EnsureBookPaintFns() {

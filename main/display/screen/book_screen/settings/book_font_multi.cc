@@ -224,7 +224,7 @@ int CurrentFontIndex() {
             return i;
         }
     }
-    return st.settings.font_entries.empty() ? -1 : 0;
+    return st.settings.font_entries.empty() || BookReaderPrefsFontSize() > 0 ? -1 : 0;
 }
 
 int FontListPageCount() {
@@ -259,7 +259,7 @@ void EnsureFontListPageShowsSelection() {
     ClampFontListPage();
 }
 
-// 列表主文案：去掉 .ef；过长截断
+// 列表仅去掉 .ef，显示省略由控件按可用宽度处理。
 void FormatFontListName(const std::string& file, char* out, size_t out_len) {
     if (out == nullptr || out_len == 0) {
         return;
@@ -271,13 +271,9 @@ void FormatFontListName(const std::string& file, char* out, size_t out_len) {
     if (stem.empty()) {
         stem = file;
     }
-    // 墨水屏行宽有限：过长用省略
-    constexpr size_t kMax = 22;
-    if (stem.size() <= kMax) {
-        std::snprintf(out, out_len, "%s", stem.c_str());
-        return;
-    }
-    std::snprintf(out, out_len, "%.19s...", stem.c_str());
+    const size_t bytes = SdUtf8PrefixLength(stem.c_str(), out_len - 1);
+    std::memcpy(out, stem.data(), bytes);
+    out[bytes] = '\0';
 }
 
 void SyncFontSelectedSize() {
@@ -425,7 +421,8 @@ void OnFontMultiRemove(lv_event_t* e) {
 
     // 先卸当前 epdfont 并立刻把 session/正文绑到安全字体，再 unlink。
     // 只 Release 不重绑：正文 style 仍握已释放的 lv_font → InstrFetchProhibited。
-    if (touch_cur) {
+    // 漫画中只保存字体选择，实际加载的字库可能与偏好不同，删除前统一解绑。
+    if (touch_cur || ReaderPageImagesHint()) {
         ReleaseBookFont();
         if (st.reader.session && st.reader.session->IsOpen()) {
             BindSessionLayoutPrefs(*st.reader.session);
@@ -463,7 +460,7 @@ void OnFontMultiRemove(lv_event_t* e) {
         }
         return false;
     };
-    if (!still_has(BookReaderPrefsFontFile())) {
+    if (BookReaderPrefsFontSize() == 0 && !still_has(BookReaderPrefsFontFile())) {
         // 还有剩余则切到第一项；全删则保持偏好名，EnsureBookFont 失败时 BookFont→fontpack
         if (!st.settings.font_entries.empty()) {
             BookReaderPrefsSetFontFile(st.settings.font_entries.front().file.c_str());

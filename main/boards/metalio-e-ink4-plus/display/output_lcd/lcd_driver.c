@@ -244,6 +244,10 @@ void epd_lcd_get_stream_stats(int* max_eof_gap_us,int* max_eof_work_us) {
     *max_eof_work_us=(int)lcd.eof_work_max_us;
 }
 
+int epd_lcd_get_scan_time_us(void) {
+    return (int)lcd.last_frame_us;
+}
+
 static IRAM_ATTR bool fill_bounce_buffer(uint8_t* buffer) {
     bool task_awoken = false;
 

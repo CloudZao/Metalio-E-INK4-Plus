@@ -1,3 +1,4 @@
+#include "assets/lang_workbuddy.h"
 #include "assets/lang_reader.h"
 #include "assets/lang_config.h"
 #include "assets/lang_screen.h"
@@ -21,6 +22,308 @@
 
 // X(name, zh, en)
 #define LANG_STRING_LIST(X)                                                                                    \
+    X(SETTINGS_TEST_FRONTLIGHT_START, "点击开启", "Tap to turn on") \
+    X(DEVICE_ACTIVATE_FIRST, "请先激活设备", "Activate the device first") \
+    X(STORAGE_IO_ERROR, "SD 卡读写异常", "SD card read/write error") \
+    X(AUDIO_SERVICE_NOT_READY, "音频服务尚未就绪，请稍后重试", "Audio service is not ready. Try again shortly.") \
+    X(AUDIO_CALLBACK_UNAVAILABLE, "录音回调不可用，请重新进入应用", "Recording is unavailable. Reopen the app.") \
+    X(AUDIO_RECORDING_BUSY, "上一轮录音尚未结束，请稍后重试", "The previous recording is still finishing. Try again shortly.") \
+    X(AUDIO_MIC_BUSY, "麦克风正被其他功能使用，请结束后重试", "The microphone is in use. Stop the other recording and retry.") \
+    X(AUDIO_RECORDING_MEMORY, "录音内存不足，请稍后重试", "Not enough memory to record. Try again shortly.") \
+    X(AUDIO_PROCESSOR_FAILED, "录音处理器初始化失败，请重新进入应用", "Recording initialization failed. Reopen the app.") \
+    X(TTF_SIZE_FAILED_FMT, "无法设置字号 %d", "Cannot set font size %d") \
+    X(TTF_SD_IO_FAILED, "存储卡读写失败，请检查存储卡", "SD card read/write failed. Check the card.") \
+    X(TTF_NO_GLYPHS_FMT, "字号 %d 无可用字形", "No glyphs available at size %d") \
+    X(TTF_WRITE_FAILED, "字体写入失败，请检查存储卡", "Cannot write font. Check the SD card.") \
+    X(TTF_VERIFY_FAILED, "字体校验失败，请重新转换", "Font verification failed. Convert again.") \
+    X(TTF_TEMPLATE_INVALID, "模板字体无效，请重新导入", "Invalid template font. Import it again.") \
+    X(TTF_ENGINE_INIT_FAILED, "字体引擎初始化失败", "Font engine initialization failed") \
+    X(TTF_SOURCE_OPEN_FAILED, "无法打开源字体，请检查字体文件", "Cannot open source font. Check the file.") \
+    X(TTF_JOB_INVALID, "转换任务无效，请重新转换", "Invalid conversion job. Convert again.") \
+    X(TTF_START_FAILED, "无法启动转换，请稍后重试", "Cannot start conversion. Try again shortly.") \
+    X(TTF_CANCELLED, "转换已取消", "Conversion cancelled") \
+    X(TTF_GLYPH_MEMORY, "字形缓存内存不足，请减小字号", "Not enough memory for glyphs. Reduce the font size.") \
+    X(TTF_CANCELLED_OR_NO_SD, "转换已取消或 SD 卡不可用", "Conversion cancelled or SD card unavailable") \
+    X(ASSISTANT_USER_PREFIX, "用户：", "You: ") \
+    X(ASSISTANT_CONNECTING_HOLD, "正在连接语音服务，请继续按住", "Connecting to voice service. Keep holding.") \
+    X(BOOK_IMPORT_TTF, "导入 TTF", "Import TTF") \
+    X(BOOK_ORIENT_AUTO, "自动", "Auto") \
+    X(BOOK_ORIENT_TITLE, "阅读方向", "Orientation") \
+    X(BOOK_WRITING_HORIZONTAL, "横排", "Horizontal") \
+    X(BOOK_WRITING_VERTICAL, "竖排", "Vertical") \
+    X(BOOK_WRITING_TITLE, "文字排版", "Text layout") \
+    X(BOOK_TEXT_DIRECTION, "文字方向", "Text direction") \
+    X(BOOK_TEXT_LEFT_TO_RIGHT, "从左往右", "Left to right") \
+    X(BOOK_TEXT_RIGHT_TO_LEFT, "从右往左", "Right to left") \
+    X(BOOK_TURN_SLIDE, "左右滑动", "Slide") \
+    X(BOOK_TURN_PUSH, "推白翻页", "Wipe") \
+    X(BOOK_TURN_TITLE, "翻页方式", "Page turn") \
+    X(BOOK_AUTO_TURN, "定时翻页", "Auto turn") \
+    X(BOOK_PRESET_SMALL, "小", "Small") \
+    X(BOOK_PRESET_LARGE, "大", "Large") \
+    X(BOOK_PRESET_XLARGE, "很大", "X-large") \
+    X(BOOK_MARGIN_TITLE, "边距设置", "Margins") \
+    X(BOOK_SPACING_TITLE, "行距设置", "Line spacing") \
+    X(BOOK_BACKGROUND_GRID, "方格", "Grid") \
+    X(BOOK_BACKGROUND_DOTS, "点阵", "Dots") \
+    X(BOOK_BACKGROUND_TITLE, "阅读背景", "Background") \
+    X(BOOK_CUSTOM, "自定义", "Custom") \
+    X(BOOK_FONT_LOADING, "字体加载中…", "Loading fonts...") \
+    X(BOOK_FONT_REOPEN, "字体加载失败，请重新打开字体页签", "Font loading failed. Reopen the Fonts tab.") \
+    X(BOOK_FONT_IMPORT_EMPTY, "暂无字体，请导入 TTF", "No fonts. Import a TTF font.") \
+    X(BOOK_BOOKMARKS, "书签", "Bookmarks") \
+    X(BOOK_LAYOUT_WAIT, "正文正在编排，请稍后操作", "Laying out text. Try again shortly.") \
+    X(COMMON_MEMORY_RETRY, "内存不足，请稍后操作", "Not enough memory. Try again shortly.") \
+    X(BOOK_BOOKMARKS_EMPTY, "暂无书签", "No bookmarks") \
+    X(BOOK_DURATION_HM_FMT, "%u小时%u分钟", "%uh %um") \
+    X(BOOK_READING_PROGRESS, "阅读进度", "Reading progress") \
+    X(BOOK_CHAPTER_PREV, "上一章", "Prev chapter") \
+    X(BOOK_CHAPTER_NEXT, "下一章", "Next chapter") \
+    X(BOOK_PAGE_PREV, "上一页", "Previous page") \
+    X(BOOK_PAGE_NEXT, "下一页", "Next page") \
+    X(BOOK_PAGE_FMT, "第%d页", "Page %d") \
+    X(BOOK_COMIC_SETTING_SAVED, "设置已保存，漫画暂不支持应用此项设置", "Saved. This setting does not apply to comics.") \
+    X(BOOK_FONT_SELECT, "选择字体", "Choose font") \
+    X(BOOK_READING_SETTINGS, "阅读设置", "Reading settings") \
+    X(BOOK_SELECTED_ITEMS_FMT, "已选 %u 项", "Selected %u") \
+    X(BOOK_TAP_MENU_REQUIRED, "至少保留一个菜单唤醒区域", "Keep at least one tap zone assigned to Menu.") \
+    X(TTF_FINISHING, "转换任务正在收尾，请稍后重试", "Conversion is finishing. Try again shortly.") \
+    X(TTF_SOURCE, "源字体", "Source font") \
+    X(TTF_OUTPUT, "输出", "Output") \
+    X(TTF_SUCCESS, "字体转换成功，已加入字体列表", "Font converted and added to the font list.") \
+    X(TTF_CONVERTING, "转换中", "Converting") \
+    X(TTF_FAILED, "转换失败", "Conversion failed") \
+    X(TTF_EMPTY, "未找到 TTF/OTF 字体\n请放入 SD 卡 metalio/e-ink/fonts_ttf 目录", "No TTF/OTF fonts found\nPlace fonts in metalio/e-ink/fonts_ttf on the SD card") \
+    X(TTF_SIZE_RANGE, "字号（20–80px）", "Font size (20–80px)") \
+    X(TTF_OVERWRITE_HINT, "同名 .ef 文件将被覆盖。离开页面或待机将取消转换，请勿拔卡。\n直接应用会降低翻页速度。", "Existing .ef files with the same name will be replaced. Leaving this page or entering standby cancels conversion. Keep the SD card inserted.\nApplying directly slows page turns.") \
+    X(TTF_START, "开始转换", "Convert") \
+    X(TTF_APPLY, "直接应用", "Apply directly") \
+    X(TTF_APPLY_FAILED, "字体加载失败，请检查字体文件或减小字号", "Cannot load font. Check the file or reduce the size.") \
+    X(TTF_OUTPUT_NAME_TOO_LONG, "输出名称过长或无效，请缩短源字体文件名后重试", "Output name too long or invalid. Shorten the source filename and retry.") \
+    X(TTF_GENERATING, "正在生成字库", "Generating font") \
+    X(TTF_PROGRESS_HINT, "转换完成后，字库将加入字体列表。离开页面或待机将取消转换，请勿拔卡。", "The converted font will appear in the font list. Leaving this page or entering standby cancels conversion. Keep the SD card inserted.") \
+    X(TTF_FAILED_FMT, "转换失败：%.60s", "Conversion failed: %.60s") \
+    X(TTF_BACK_TO_LIST, "返回导入列表", "Back to imports") \
+    X(BOOK_VIEW_COVER, "封面", "Covers") \
+    X(BOOK_VIEW_LIST, "列表", "List") \
+    X(BOOK_WEEK_READING, "本周阅读", "This week") \
+    X(BOOK_MINUTES_FMT, "%.1f 分钟", "%.1f min") \
+    X(BOOK_WEEK_MON, "一", "M") \
+    X(BOOK_WEEK_TUE, "二", "T") \
+    X(BOOK_WEEK_WED, "三", "W") \
+    X(BOOK_WEEK_THU, "四", "T") \
+    X(BOOK_WEEK_FRI, "五", "F") \
+    X(BOOK_WEEK_SAT, "六", "S") \
+    X(BOOK_WEEK_SUN, "日", "S") \
+    X(BOOK_WEEK_DURATION, "本周阅读时长", "This week") \
+    X(BOOK_TOTAL_DURATION, "总阅读时长", "Total reading time") \
+    X(TRANSFER_SD_CAPACITY_FAILED, "SD 卡容量读取失败", "Cannot read SD card capacity") \
+    X(TRANSFER_RECOVERY_FAILED, "目录读取或上传恢复失败", "Cannot read directory or recover uploads") \
+    X(TRANSFER_DIRECTORY_MISSING, "目录不存在", "Directory not found") \
+    X(TRANSFER_DIRECTORY_FAILED, "目录读取失败，请检查 SD 卡后刷新", "Cannot read directory. Check the SD card and refresh.") \
+    X(TRANSFER_DOWNLOAD_BUSY, "上传期间暂不支持下载，请完成后重试", "Wait for the upload to finish before downloading.") \
+    X(TRANSFER_READ_FAILED, "无法读取", "Cannot read file") \
+    X(TRANSFER_SD_FULL, "SD 卡空间不足，原文件保留", "SD card is full. The original file is preserved.") \
+    X(TRANSFER_MEMORY, "设备内存不足，上传已停止，原文件保留；请稍后重试", "Not enough memory. Upload stopped; the original file is preserved. Try again shortly.") \
+    X(STORAGE_RESTART_REQUIRED, "内存卡状态异常，请重启设备后再试", "SD card error. Restart the device and try again.") \
+    X(TRANSFER_WRITE_FAILED, "SD 卡写入失败，原文件保留；请检查内存卡后重试", "SD card write failed. The original file is preserved. Check the card and retry.") \
+    X(TRANSFER_DISCONNECTED, "连接中断，未提交的文件已清理，原文件保留", "Disconnected. Uncommitted files were removed; the original file is preserved.") \
+    X(TRANSFER_UPLOAD_BUSY, "已有上传在进行，请稍后重试", "An upload is in progress. Try again shortly.") \
+    X(TRANSFER_INVALID_ID, "上传任务标识无效", "Invalid upload ID") \
+    X(TRANSFER_ALREADY_HANDLED, "此上传任务已处理，请刷新目录确认结果", "Upload already processed. Refresh the directory to check the result.") \
+    X(TRANSFER_ENCODING_UNSUPPORTED, "不支持此上传编码，请刷新页面重试", "Unsupported upload encoding. Refresh the page and retry.") \
+    X(TRANSFER_INVALID_FILE, "文件名、路径或文件大小无效", "Invalid file name, path or size") \
+    X(TRANSFER_INVALID_SIZE, "文件大小无效", "Invalid file size") \
+    X(TRANSFER_SD_CAPACITY_UNAVAILABLE, "无法读取 SD 卡容量", "Cannot read SD card capacity") \
+    X(TRANSFER_EXISTS_CHOOSE, "已存在同名项目，请重新选择处理方式", "An item with this name already exists. Choose how to proceed.") \
+    X(TRANSFER_TARGET_CHECK_FAILED, "无法检查目标文件", "Cannot check the destination file") \
+    X(TRANSFER_TEMP_FAILED, "无法创建临时文件，原文件保留", "Cannot create temporary file. The original file is preserved.") \
+    X(TRANSFER_INCOMPLETE, "上传不完整，原文件保留", "Incomplete upload. The original file is preserved.") \
+    X(TRANSFER_CANCELLED, "上传已取消，原文件保留", "Upload cancelled. The original file is preserved.") \
+    X(TRANSFER_TARGET_CHANGED, "同名项目已变化，请重新上传", "The destination item has changed. Upload again.") \
+    X(TRANSFER_TARGET_CHECK_PRESERVED, "无法检查目标文件，原文件保留", "Cannot check the destination file. The original file is preserved.") \
+    X(TRANSFER_BACKUP_FAILED, "无法保护原文件，已取消覆盖", "Cannot back up the original file. Replacement cancelled.") \
+    X(TRANSFER_COMMIT_FAILED, "提交失败，原文件保留", "Save failed. The original file is preserved.") \
+    X(TRANSFER_RESTORE_FAILED, "提交失败，原文件备份已保留，恢复 SD 卡后刷新目录重试", "Save failed. The original backup is preserved. Restore the SD card, refresh and retry.") \
+    X(TRANSFER_INVALID_STREAM, "压缩流或数据长度错误，原文件保留", "Invalid compressed data or length. The original file is preserved.") \
+    X(TRANSFER_UPLOAD_MISSING, "未找到此连接的上传任务", "No upload found for this connection") \
+    X(TRANSFER_INVALID_COMMAND, "上传命令无效", "Invalid upload command") \
+    X(TRANSFER_PATH_BUSY, "此路径正在上传，请完成后重试", "An upload is using this path. Wait for it to finish.") \
+    X(TRANSFER_CREATE_FAILED, "创建失败", "Creation failed") \
+    X(TRANSFER_DELETE_ROOT_INVALID, "路径无效或不允许删除根目录", "Invalid path or root directory deletion is not allowed") \
+    X(TRANSFER_DIRECTORY_BUSY, "此路径包含正在上传的文件，请完成后重试", "This directory contains an active upload. Wait for it to finish.") \
+    X(TRANSFER_DELETE_PARTIAL, "部分项目未删除，可能是文件使用中、路径过长或 SD 卡异常；已删除内容无法恢复，请刷新确认", "Some items could not be deleted. Files may be in use, paths too long, or the SD card faulty. Deleted items cannot be restored. Refresh to check.") \
+    X(TRANSFER_PATH_UNAVAILABLE, "路径过长或目录暂不可用", "Path is too long or directory is unavailable") \
+    X(TRANSFER_EXISTS, "已存在同名项目", "An item with this name already exists") \
+    X(TRANSFER_ITEM_CHECK_FAILED, "无法检查目标项目", "Cannot check the destination item") \
+    X(TRANSFER_RENAME_FAILED, "改名失败", "Rename failed") \
+    X(TRANSFER_MOVE_SELF, "不能移动到自身或子目录", "Cannot move into itself or a subdirectory") \
+    X(TRANSFER_DEST_UNAVAILABLE, "路径过长或目标目录暂不可用", "Path is too long or destination is unavailable") \
+    X(TRANSFER_DEST_EXISTS, "目标已存在同名项目", "An item with this name already exists at the destination") \
+    X(TRANSFER_MOVE_FAILED, "移动失败", "Move failed") \
+    X(TRANSFER_HOTSPOT_STOPPING, "热点正在关闭", "Hotspot is shutting down") \
+    X(TRANSFER_REQUEST_BUSY, "文件请求繁忙，请稍后重试", "File service is busy. Try again shortly.") \
+    X(CLOUD_WIFI_PREPARING, "正在准备WIFI传输…", "Preparing Wi-Fi transfer...") \
+    X(CLOUD_TAB_WIFI, "WIFI传输", "Wi-Fi") \
+    X(COMMON_RESTART, "重启", "Restart") \
+    X(NETWORK_SCANNING_SHORT, "正在扫描", "Scanning") \
+    X(NETWORK_SAVED_COUNT_FMT, "已保存（%d）", "Saved (%d)") \
+    X(NETWORK_UNSAVED_COUNT_FMT, "未保存（%d）", "Unsaved (%d)") \
+    X(NETWORK_NO_SAVED_NEARBY, "附近暂无已保存网络", "No saved networks nearby") \
+    X(NETWORK_NO_UNSAVED_NEARBY, "附近暂无未保存网络", "No unsaved networks nearby") \
+    X(NETWORK_TRANSFER_READY, "WIFI传输已就绪", "Wi-Fi transfer is ready") \
+    X(NETWORK_TRANSFER_OPEN_HINT, "手机或电脑连接同一WIFI\n扫码或用浏览器打开下方网址", "Connect your phone or computer to the same Wi-Fi network.\nScan the code or open the address below in a browser.") \
+    X(NETWORK_TRANSFER_STOP_HINT, "切换传输方式或退出传输页将停止传输", "Switching transfer mode or leaving this page stops the transfer.") \
+    X(NETWORK_BACK_TO_LIST, "返回列表", "Back to list") \
+    X(NETWORK_CURRENT_SSID_FMT, "当前网络：%s", "Network: %s") \
+    X(QUICK_ENABLED, "已开启", "On") \
+    X(QUICK_DISABLED, "已关闭", "Off") \
+    X(QUICK_SWITCHING, "切换中", "Switching") \
+    X(QUICK_FAILED, "请重试", "Retry") \
+    X(QUICK_CONNECTED, "已连接", "Connected") \
+    X(QUICK_CONNECTING, "连接中", "Connecting") \
+    X(QUICK_DISCONNECTED, "未连接", "Offline") \
+    X(SETTINGS_DISPLAY_GRAY_HINT, "清屏后显示 16 阶原生灰度；00 为黑，15 为白。", "After clearing, 16 native gray levels are displayed: 00 is black; 15 is white.") \
+    X(SETTINGS_DISPLAY_BUSY, "屏幕忙，请稍后重试。", "Display is busy. Try again shortly.") \
+    X(SETTINGS_TEST_DISPLAY, "显示测试", "Display test") \
+    X(SETTINGS_DISPLAY_START_HINT, "点击“16 阶灰阶”开始测试。\n下方应显示从黑到白的 16 条灰阶，编号 00–15。", "Tap 16 gray levels to start.\n16 bars from black to white should appear below, numbered 00–15.") \
+    X(SETTINGS_DISPLAY_GRAY, "16 阶灰阶", "16 gray levels") \
+    X(SETTINGS_DISPLAY_DITHER, "点阵灰阶对照", "Dither comparison") \
+    X(SETTINGS_DISPLAY_DITHER_HINT, "黑白点阵对照：用黑白像素模拟灰度。", "Dither comparison: black and white pixels simulate gray levels.") \
+    X(SETTINGS_DISPLAY_RETEST_HINT, "可重复点击测试；NEXT 重测，PREV 返回。", "Tap to repeat. NEXT retests; PREV goes back.") \
+    X(WB_STATUS_QUERYING, "（状态查询中）", "(Checking)") \
+    X(WB_STATUS_FAILED, "（查询失败）", "(Check failed)") \
+    X(WB_STATUS_ONLINE, "（在线）", "(Online)") \
+    X(WB_STATUS_OFFLINE, "（离线）", "(Offline)") \
+    X(WB_STATUS_UNKNOWN, "（未知）", "(Unknown)") \
+    X(WB_AUTH_CHECKING, "正在检查 WorkBuddy 授权…", "Checking WorkBuddy authorization...") \
+    X(WB_SYNC_MESSAGES, "同步消息", "Sync messages") \
+    X(WB_REFRESHING, "刷新中", "Refreshing") \
+    X(WB_AUTH_SAVED_CHECKING, "设备授权已保存，正在确认电脑连接…", "Authorization saved. Checking the computer connection...") \
+    X(WB_CONNECTED, "电脑已连接，可以开始使用。", "Computer connected. Ready to use.") \
+    X(WB_BOUND_OFFLINE, "设备已绑定，电脑暂未连接。\n请在电脑打开对应账号的 WorkBuddy，连接后从菜单“同步消息”重试。", "Device linked; computer is offline.\nOpen WorkBuddy on your computer with the linked account, then choose Sync messages from the menu.") \
+    X(WB_BOUND_CONNECT_FAILED, "设备已绑定，暂时无法连接电脑：\n", "Device linked. Cannot connect to the computer:\n") \
+    X(WB_RELINK_HINT, "\n\n处理提示中的问题后，再点击右上角菜单“重新绑定”。", "\n\nResolve the issue, then choose Relink from the top-right menu.") \
+    X(WB_SYNC_RETRY_HINT, "\n\n无需重复扫码，可从菜单“同步消息”重试。", "\n\nChoose Sync messages from the menu to retry. No need to scan again.") \
+    X(WB_QR_GENERATING, "正在生成新的授权二维码…", "Generating a new authorization code...") \
+    X(WB_SCAN_FRIEND, "请朋友扫码，用自己的账号完成授权", "Ask your friend to scan and authorize with their own account.") \
+    X(WB_SCAN_AUTHORIZE, "请用手机扫码登录并授权", "Scan with your phone to sign in and authorize.") \
+    X(WB_AUTH_INCOMPLETE, "授权未完成，请刷新二维码重试", "Authorization incomplete. Refresh the code and retry.") \
+    X(WB_QR_EXPIRED, "二维码已过期，请点击刷新", "Code expired. Tap Refresh.") \
+    X(WB_AUTH_RECONNECTING, "网络暂时中断，正在重新查询授权…", "Connection interrupted. Checking authorization again...") \
+    X(WB_AUTHORIZE_PHONE, "请在手机上完成腾讯 WorkBuddy 授权", "Complete Tencent WorkBuddy authorization on your phone.") \
+    X(WB_WAIT_CLOSE, "正在等待上一次连接关闭…", "Waiting for the previous connection to close...") \
+    X(WB_WAIT_MEMORY, "内存不足，正在等待资源释放…", "Not enough memory. Waiting for resources...") \
+    X(WB_RELINK_PREPARING, "正在准备重新绑定…", "Preparing to relink...") \
+    X(WB_LINK_CHECKING, "正在检查绑定，请稍候…", "Checking device link. Please wait...") \
+    X(WB_REPLY_INTERRUPTED, "助理指令已受理，但自动读取中断：\n", "Request accepted, but reply retrieval was interrupted:\n") \
+    X(WB_TASK_CONTINUES_HINT, "\n\n助理任务可能继续执行。可从菜单“同步消息”查看，请勿重复发送同一指令。", "\n\nThe task may still be running. Choose Sync messages to check. Avoid sending the same request again.") \
+    X(WB_REPLY_TIMEOUT, "助理指令已受理，三分钟内暂未读到回复。助理任务仍可能继续执行，稍后可从菜单“同步消息”查看，请勿重复发送同一指令。", "Request accepted, but no reply received within three minutes. The task may still be running. Choose Sync messages later to check. Avoid sending the same request again.") \
+    X(WB_RECORDING_CANCELLED, "录音已取消", "Recording cancelled") \
+    X(AUDIO_MODULE_INIT_FAILED, "音频模块初始化失败，请检查模块连接后重启设备", "Audio module initialization failed. Check the connection and restart the device.") \
+    X(AUDIO_MODULE_NOT_READY, "音频模块尚未就绪，请稍后重试", "Audio module is not ready. Try again shortly.") \
+    X(WB_RECORDING_TASK_BUSY, "录音任务暂忙，请稍后重试", "Recording is busy. Try again shortly.") \
+    X(WB_SEND_UNCONFIRMED_HINT, "\n\n发送结果尚未确认，请先查看助理消息，避免重复发送同一指令。", "\n\nDelivery is unconfirmed. Check assistant messages before sending the request again.") \
+    X(WB_RECOGNITION_INCOMPLETE_HINT, "\n\n本次识别未完成，指令未发送到电脑。", "\n\nRecognition did not finish. The request was not sent to the computer.") \
+    X(WB_PREVIOUS_CLOSING, "上一轮连接正在关闭，请稍后再试", "The previous connection is closing. Try again shortly.") \
+    X(WB_CONTEXT_MEMORY, "请求上下文内存不足，请稍后再试", "Not enough memory for the request. Try again shortly.") \
+    X(WB_TASK_MEMORY, "语音或消息任务内存不足，请稍后再试", "Not enough memory for voice or messages. Try again shortly.") \
+    X(WB_HOLD_TO_SPEAK_HINT, "请持续按住，看到倾听波形后再说话（至少半秒）", "Keep holding. Speak after the listening waveform appears (at least half a second).") \
+    X(WB_RECORDING_FINISH_BUSY, "录音收尾任务暂忙，请稍后重试", "Recording is finishing. Try again shortly.") \
+    X(WB_MIC_READ_FAILED, "麦克风读取失败，请重新进入应用", "Cannot read microphone. Reopen the app.") \
+    X(WB_MINUTE_SUFFIX, " 分钟", " min") \
+    X(WB_SECOND_SUFFIX, " 秒", " sec") \
+    X(WB_CONFIRM_PHONE, "请在手机上确认绑定", "Confirm the device link on your phone.") \
+    X(WB_QR_VALIDITY_PREFIX, "手机扫码绑定助理\n二维码有效期 ", "Scan with your phone to link the assistant\nCode valid for ") \
+    X(WB_QR_FAILED, "二维码生成失败，请点击刷新重试。", "Cannot generate code. Tap Refresh to retry.") \
+    X(WB_QR_DISPLAY_FAILED, "二维码暂时无法显示", "Cannot display the code") \
+    X(WB_RELINK_WAIT, "正在准备重新绑定，请稍候…", "Preparing to relink. Please wait...") \
+    X(WB_RECOGNIZING, "正在识别…", "Recognizing...") \
+    X(WB_SYNCING, "正在同步消息…", "Syncing messages...") \
+    X(WB_SENDING, "正在发送…", "Sending...") \
+    X(WB_PROCESSING, "助理正在处理…", "Assistant is working...") \
+    X(WB_NO_MESSAGES, "暂无可同步的文本消息", "No text messages to sync") \
+    X(WB_SYNCED, "消息已同步", "Messages synced") \
+    X(WB_LAYOUT_FAILED, "消息排版失败，请稍后重试", "Cannot lay out messages. Try again shortly.") \
+    X(WB_RELINK, "重新绑定", "Relink") \
+    X(WB_RELINK_TITLE, "重新绑定助理账号？", "Relink the assistant account?") \
+    X(WB_RELINK_WARNING, "新账号授权成功前，保留原绑定。已提交的任务可能继续执行。", "The current link is kept until the new account is authorized. Submitted tasks may continue running.") \
+    X(WB_RELINK_CANCEL, "暂不更换", "Keep current") \
+    X(WB_RELINK_CONTINUE, "继续绑定", "Continue") \
+    X(WB_SCAN_LINK, "请使用手机扫码绑定", "Scan with your phone to link the device.") \
+    X(WB_STOPPED_HINT, "本次录音或等待已停止。已提交的任务可能继续执行，可同步消息查看。", "Recording or waiting stopped. Submitted tasks may continue running. Sync messages to check.") \
+    X(WB_STOPPED, "已停止录音或等待，可继续对话", "Recording or waiting stopped. You can continue chatting.") \
+    X(WB_WELCOME_READY, "已经准备好了，随时可以开始对话。", "Ready whenever you are. Start a conversation.") \
+    X(WB_WELCOME_TASK, "今天想处理些什么？我来帮你一起完成。", "What would you like to work on today?") \
+    X(WB_WELCOME_IDEAS, "有什么想法或安排，都可以说给我听。", "Tell me about your ideas or plans.") \
+    X(WB_HISTORY_MEMORY, "历史内存不足，请稍后重试", "Not enough memory for chat history. Try again shortly.") \
+    X(WB_ME_PREFIX, "我：", "Me: ") \
+    X(WB_ASSISTANT_PREFIX, "助理：", "Assistant: ") \
+    X(AUDIO_SERVICE_START_FAILED, "音频服务启动失败，请稍后重试", "Audio service failed to start. Try again shortly.") \
+    X(WB_STORAGE_TASK_BUSY, "设备存储任务暂忙，请稍后重试", "Device storage task is busy. Try again shortly.") \
+    X(WB_STORAGE_BUSY, "设备存储暂忙，请稍后重试", "Device storage is busy. Try again shortly.") \
+    X(WB_ENDPOINT_MISSING, "尚未配置 WorkBuddy 服务地址", "WorkBuddy service address is not configured.") \
+    X(WB_NETWORK_SETTINGS_HINT, "网络未连接，请先在设置中连接网络", "No network. Connect in Settings first.") \
+    X(WB_CONNECTION_CREATE_FAILED, "无法创建网络连接，请稍后再试", "Cannot create a network connection. Try again shortly.") \
+    X(WB_SERVICE_TIMEOUT, "服务连接失败或请求超时，请稍后重试", "Service connection failed or request timed out. Try again shortly.") \
+    X(WB_RESPONSE_TIMEOUT, "等待服务响应超时，请稍后重试", "Service response timed out. Try again shortly.") \
+    X(WB_RESPONSE_READ_FAILED, "服务响应读取失败，请稍后重试", "Cannot read service response. Try again shortly.") \
+    X(WB_RESPONSE_TOO_LONG, "服务响应过长，请稍后重试", "Service response is too long. Try again shortly.") \
+    X(WB_HTTP_ERROR_PREFIX, "服务暂时不可用（HTTP ", "Service unavailable (HTTP ") \
+    X(WB_RESPONSE_INVALID, "服务返回异常，请稍后重试", "Invalid service response. Try again shortly.") \
+    X(WB_NO_REPLY, "服务没有返回回复，请稍后重试", "No reply from the service. Try again shortly.") \
+    X(WB_VOICE_ENDPOINT_MISSING, "尚未配置实时语音服务地址", "Live voice service address is not configured.") \
+    X(WB_TOKEN_MISSING_SCAN, "设备授权凭证缺失，请重新扫码授权", "Authorization credentials are missing. Scan again to authorize.") \
+    X(WB_VOICE_ENDPOINT_INVALID, "实时语音服务地址格式无效", "Invalid live voice service address") \
+    X(WB_RECORDING_BUFFER_MEMORY, "录音缓存内存不足，请稍后再试", "Not enough recording buffer memory. Try again shortly.") \
+    X(WB_TOKEN_NOT_SAVED, "设备尚未保存授权凭证", "No authorization credentials saved on the device") \
+    X(WB_ONLINE_STATUS_INVALID, "服务没有返回有效的电脑在线状态", "Service returned no valid computer connection status.") \
+    X(WB_AUTH_STATUS_MISSING, "服务未返回设备授权状态", "Service returned no device authorization status.") \
+    X(WB_SCAN_CANCELLED, "扫码请求已取消", "Scan request cancelled") \
+    X(WB_RELINK_UNSUPPORTED, "服务暂不支持重新绑定，请联系管理员更新服务", "Relinking is unavailable. Ask the administrator to update the service.") \
+    X(WB_QR_RESPONSE_INVALID, "服务返回的扫码信息无效", "Service returned invalid scan information.") \
+    X(WB_AUTH_SAVE_FAILED, "无法保存设备授权，请释放存储空间后重试", "Cannot save device authorization. Free storage space and retry.") \
+    X(WB_SCAN_SESSION_INVALID, "扫码会话无效，请刷新二维码", "Invalid scan session. Refresh the code.") \
+    X(WB_AUTH_STATUS_INVALID, "服务返回的授权状态无效，请刷新二维码", "Invalid authorization status. Refresh the code.") \
+    X(WB_TOKEN_SAVE_FAILED, "授权成功但设备凭证保存失败，请重新进入应用重试", "Authorized, but credentials could not be saved. Reopen the app and retry.") \
+    X(WB_ENTER_QUESTION, "请先输入问题", "Enter a question first.") \
+    X(WB_QUESTION_INVALID, "问题过长或包含无效字符，请缩短后重试", "Question is too long or contains invalid characters. Shorten it and retry.") \
+    X(WB_AUTHORIZE_FIRST, "请先扫码登录并授权 WorkBuddy", "Scan to sign in and authorize WorkBuddy first.") \
+    X(WB_TEXT_MEMORY, "内存不足，暂时无法发送文字", "Not enough memory to send text.") \
+    X(WB_MESSAGE_INVALID, "消息格式不正确，请更新服务后重试", "Invalid message format. Update the service and retry.") \
+    X(WB_REQUEST_ID_INVALID, "电脑受理编号无效，无法自动读取回复", "Invalid computer request ID. Cannot retrieve replies automatically.") \
+    X(WB_TOKEN_MISSING, "设备授权凭证缺失，请重新授权", "Authorization credentials are missing. Authorize again.") \
+    X(WB_AUTO_REPLY_UNAVAILABLE, "自动回复接口尚不可用，请先更新Java服务；可点电脑消息手动查看", "Automatic replies are unavailable. Update the Java service, or sync messages manually.") \
+    X(WB_AUTO_REPLY_MISMATCH, "自动回复数据与本次受理编号不匹配，请稍后手动查看电脑消息", "Reply does not match this request. Sync messages manually later.") \
+    X(WB_VOICE_RESPONSE_FORMAT, "实时语音响应格式异常", "Invalid live voice response format") \
+    X(WB_VOICE_RESPONSE_INVALID, "实时语音响应无效", "Invalid live voice response") \
+    X(WB_VOICE_SESSION_MISMATCH, "实时语音会话编号不匹配", "Live voice session ID mismatch") \
+    X(WB_VOICE_RECOGNITION_FAILED, "实时语音识别失败，请重新说话", "Live voice recognition failed. Speak again.") \
+    X(WB_VOICE_TEXT_INVALID, "实时识别文字为空、过长或顺序错误", "Recognized text is empty, too long or out of order.") \
+    X(WB_VOICE_VERSION, "实时语音协议版本不兼容，请更新Java服务", "Incompatible live voice protocol. Update the Java service.") \
+    X(WB_VOICE_BUFFER_FAILED, "实时录音缓冲申请失败", "Cannot allocate live recording buffer") \
+    X(WB_VOICE_NETWORK_HINT, "网络未连接，请重新连接后说话", "No network. Reconnect before speaking.") \
+    X(WB_VOICE_CONNECTION_CREATE, "无法创建实时语音连接", "Cannot create live voice connection") \
+    X(WB_VOICE_TRANSFER_FAILED, "实时语音传输异常，请重新说话", "Live voice transfer failed. Speak again.") \
+    X(WB_VOICE_CONNECTION_FAILED, "实时语音连接失败，请检查Java版本、WebSocket代理和设备授权", "Live voice connection failed. Check the Java service version, WebSocket proxy and device authorization.") \
+    X(WB_VOICE_EARLY_END, "识别提前结束，指令未发送", "Recognition ended early. Request not sent.") \
+    X(WB_VOICE_DISCONNECTED, "语音连接中断，指令未发送，请重新说话", "Voice disconnected. Request not sent. Speak again.") \
+    X(WB_VOICE_READY_TIMEOUT, "等待语音服务就绪超时，请稍后重试", "Voice service did not become ready in time. Try again shortly.") \
+    X(WB_VOICE_FINAL_TIMEOUT, "等待最终识别结果超时，请重新说话", "Final recognition result timed out. Speak again.") \
+    X(WB_VOICE_OVERFLOW, "实时音频待发送缓冲已满，请检查网络后重试", "Pending audio buffer is full. Check the network and retry.") \
+    X(WB_VOICE_BUFFER_UNAVAILABLE, "实时录音缓冲不可用，请重新进入应用", "Live recording buffer is unavailable. Reopen the app.") \
+    X(WB_VOICE_PCM_INVALID, "录音数据无效，请重新进入应用", "Recording data is invalid. Reopen the app.") \
+    X(WB_VOICE_SEND_FAILED, "实时音频发送失败，请重新说话", "Live audio send failed. Speak again.") \
+    X(WB_VOICE_TOO_SHORT, "录音不足半秒，请按住并说话更久", "Recording is shorter than half a second. Hold and speak longer.") \
+    X(WB_VOICE_INCOMPLETE, "录音发送字节数不匹配，请重新说话", "Sent audio byte count does not match the recording. Speak again.") \
+    X(WB_VOICE_FINISH_FAILED, "语音结束确认发送失败", "Cannot send end-of-voice confirmation") \
+    X(WB_VOICE_CANCELLED, "本次语音已取消，指令未发送", "Voice cancelled. Request not sent.") \
+    X(BOOK_BOOKMARK_LAYOUT_BUSY, "正文正在编排，请稍后添加书签", "Laying out text. Add the bookmark shortly.") \
+    X(BOOK_BOOKMARK_ADD_MEMORY, "内存不足，无法添加书签", "Not enough memory to add a bookmark") \
+    X(BOOK_BOOKMARK_LOCATE_FAILED, "无法定位书签，请检查书籍是否发生变化", "Cannot locate bookmark. Check whether the book has changed.") \
+    X(ASSISTANT_AI_PREFIX, "AI：", "AI: ") \
+    X(BOOK_BOOKMARK_IMAGE_SUFFIX, "（图片或章节页）", " (Image or chapter page)") \
+    X(BOOK_BOOKMARK_IMAGE, "图片或章节页", "Image or chapter page") \
     X(WIFI_DISABLED_RETRY, "Wi-Fi 已关闭，请打开 Wi-Fi 后重试", "Wi-Fi is off. Turn it on and try again.") \
     X(AUDIO_INIT_FAILED, "音频初始化失败", "Audio initialization failed") \
     X(SETTINGS_TEST_CAMERA_DETECTED, "已检测到", "Detected") \
@@ -351,11 +654,8 @@
     X(SETTINGS_TEST_CAMERA, "摄像头", "Camera")                                                                \
     X(SETTINGS_TEST_BACK, "返回", "Back")                                                                      \
     X(SETTINGS_TEST_TOUCH_START, "点击屏幕，开始测试", "Tap screen to start")                                  \
-    X(SETTINGS_TEST_TOUCH_SIZE, "请选择测试点大小", "Select test point size")                                 \
-    X(SETTINGS_TEST_TOUCH_SMALL, "小测试点", "Small test points")                                              \
-    X(SETTINGS_TEST_TOUCH_LARGE, "大测试点", "Large test points")                                              \
-    X(SETTINGS_TEST_BATTERY_HINT, "SOC: 3.30~4.33V; ≥4.33需稳30s→100%",                                         \
-      "SOC: 3.30~4.33V; ≥4.33 hold 30s→100%")                                                                   \
+    X(SETTINGS_TEST_BATTERY_HINT, "SOC: 3.30~4.30V; ≥4.30需稳30s→100%",                                         \
+      "SOC: 3.30~4.30V; ≥4.30 hold 30s→100%")                                                                   \
     X(SETTINGS_TEST_BATTERY_GAUGE, "电量计", "Fuel gauge")                                                     \
     X(SETTINGS_TEST_BATTERY_SOC_SMOOTH, "电量(平滑)", "SOC (smooth)")                                          \
     X(SETTINGS_TEST_BATTERY_SOC_RAW, "电量(瞬时)", "SOC (instant)")                                            \

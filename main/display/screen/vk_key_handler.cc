@@ -3,6 +3,10 @@
 #include "vk_page_repeat.h"
 
 #include <cstring>
+#include <atomic>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include "haptic_feedback.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -24,6 +28,70 @@ static constexpr int kMaxRegistry = 24;
 
 static const char* s_stack[kMaxStack] = {};
 static int s_depth = 0;
+static std::atomic<uint32_t> s_screen_epoch{0};
+
+namespace {
+struct TouchEdge { VkTouchPhase phase; uint8_t key; uint32_t epoch; };
+struct TouchMailbox {
+    StaticQueue_t storage{};
+    uint8_t bytes[24 * sizeof(TouchEdge)]{};
+    QueueHandle_t queue = xQueueCreateStatic(24, sizeof(TouchEdge), bytes, &storage);
+    std::atomic<bool> overflow{false};
+};
+TouchMailbox& TouchQueue() { static TouchMailbox mailbox; return mailbox; }
+constexpr const char* kTouchKeys[] = {"vk_home", "vk_prev", "vk_next"};
+}
+
+void VkKey_PostTouch(VkTouchPhase phase, const char* key_name) {
+    if (!key_name) return;
+    for (uint8_t key = 0; key < 3; ++key) {
+        if (std::strcmp(key_name, kTouchKeys[key]) != 0) continue;
+        const TouchEdge edge{phase, key, s_screen_epoch.load(std::memory_order_acquire)};
+        if (xQueueSend(TouchQueue().queue, &edge, 0) != pdTRUE) TouchQueue().overflow.store(true);
+        return;
+    }
+}
+
+void VkKey_DrainTouch() {
+    auto& mailbox = TouchQueue();
+    static int held_key = -1;
+    static uint32_t held_epoch = 0;
+    static bool long_consumed = false;
+    static bool saw_long = false;
+    if (mailbox.overflow.exchange(false)) {
+        VkPageRepeatStop();
+        held_key = -1;
+        xQueueReset(mailbox.queue);
+        static int64_t last_log = 0;
+        const auto now = esp_timer_get_time();
+        if (last_log == 0 || now - last_log >= 5000000) {
+            ESP_LOGW(TAG, "touch edge queue full; cancelled incomplete press");
+            last_log = now;
+        }
+        return;
+    }
+    TouchEdge edge{};
+    for (unsigned count = 0; count < 24 && xQueueReceive(mailbox.queue, &edge, 0) == pdTRUE; ++count) {
+        if (edge.epoch != s_screen_epoch.load(std::memory_order_acquire)) continue;
+        const char* key = kTouchKeys[edge.key];
+        if (edge.phase == VkTouchPhase::kDown) {
+            held_key = edge.key; held_epoch = edge.epoch; long_consumed = saw_long = false;
+        } else if (held_key == edge.key && held_epoch == edge.epoch) {
+            if (edge.phase == VkTouchPhase::kLong) {
+                saw_long = true;
+                long_consumed = VkKey_OnLongPress(key);
+                if (long_consumed) HapticPulseIfEnabled();
+            } else {
+                VkKey_OnPressUp(key);
+                if (!long_consumed) {
+                    if (saw_long) HapticPulseIfEnabled();
+                    VkKey_Dispatch(key);
+                }
+                held_key = -1;
+            }
+        }
+    }
+}
 
 struct VkKeyRegistryEntry {
     const char* name = nullptr;
@@ -158,6 +226,7 @@ static void DispatchDefault(const char* key_name, const char* screen) {
 
 
 void VkKey_OnScreenLifecycle(const char* name, vk_screen_lifecycle_t event) {
+    s_screen_epoch.fetch_add(1, std::memory_order_acq_rel);
     if (name == nullptr || name[0] == '\0') {
         name = kNoneScreen;
     }
@@ -272,7 +341,7 @@ void VkKey_Dispatch(const char* key_name) {
             ESP_LOGD(TAG, "%s handler %s in %d us (screen=%s)", key_name,
                      consumed ? "consumed" : "fallthrough", us, screen);
             if (us > 20000) {
-                ESP_LOGW(TAG, "%s handler slow %d us — likely sync LVGL on touch_feed", key_name,
+                ESP_LOGW(TAG, "%s UI handler slow %d us", key_name,
                          us);
             }
             if (consumed) {

@@ -25,16 +25,17 @@ bool AutoTurnReadingVisible() {
         lv_screen_active() == st.reader.read_scr && !StandbyScreen::IsActive() &&
         st.reader.read_chrome == BookUiState::ReadChrome::kReading &&
         !visible(st.settings.settings_sheet) && !ScreenFrontlightIsVisible() &&
-        st.reader.session && st.reader.session->IsOpen() && !st.reader.prefs_reopen_pending;
+        st.reader.session && st.reader.session->IsOpen() && !st.reader.opening.load() &&
+        !st.reader.standby_paused && !st.reader.deferred_cleanup &&
+        !st.reader.prefs_reopen_pending && !st.reader.layout_again;
 }
 
 void OnReaderAutoTurnTick(lv_timer_t*) {
     auto& st = Book_State();
     if (!s_auto_turn_enabled) return;
-    // Keep one full interval after menus, layout, images, touch or a pending paint.
-    if (!AutoTurnReadingVisible() || ReaderWorkersBusy() ||
-        st.reader.session->LiveRelayoutPending() || TouchUiFingerIsDown() ||
-        TouchUiHasPendingEdges() || s_auto_turn_pending.load() || s_reader_page_delta.load() != 0 ||
+    // 菜单、触摸和前台翻页完成后重新计时，后台编排不推迟当前可读页。
+    if (!AutoTurnReadingVisible() || TouchUiFingerIsDown() ||
+        TouchUiHasPendingEdges() || s_auto_turn_pending.load() || ReaderPageWorkPending() ||
         s_reader_paint.seq.load() != s_reader_paint.done.load()) {
         s_auto_turn_ready = false;
         ResetReaderAutoTurnDeadline();
@@ -96,8 +97,7 @@ void ReaderAutoTurnManualInput() {
 
 bool ConsumeReaderAutoTurnRequest() {
     if (!s_auto_turn_pending.exchange(false)) return false;
-    if (!s_auto_turn_enabled.load() || !AutoTurnReadingVisible() || ReaderWorkersBusy() ||
-        Book_State().reader.session->LiveRelayoutPending() ||
+    if (!s_auto_turn_enabled.load() || !AutoTurnReadingVisible() || ReaderPageWorkPending() ||
         TouchUiFingerIsDown() || TouchUiHasPendingEdges()) {
         ResetReaderAutoTurnDeadline();
         return false;

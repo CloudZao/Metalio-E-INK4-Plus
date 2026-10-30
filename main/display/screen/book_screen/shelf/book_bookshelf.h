@@ -29,7 +29,7 @@ constexpr lv_coord_t kShelfListIconW = UiSx(22);
 constexpr lv_coord_t kShelfListColGap = UiSx(10);
 constexpr lv_coord_t kShelfListTailGap = UiSx(8); // 文件名与右侧大小/> 间距
 constexpr lv_coord_t kShelfViewToggleH = UiSy(34); // 切换外框高（原 30，仅放大）
-constexpr lv_coord_t kShelfViewBtnW = UiSx(60);    // 单侧按钮宽（原 52）
+constexpr lv_coord_t kShelfViewBtnW = UiSx(80);    // 单侧按钮宽，容纳中英文文案
 constexpr lv_coord_t kShelfViewBtnH = UiSy(32);    // 单侧按钮高（原 28）
 
 /** @brief 创建书架网格页 */

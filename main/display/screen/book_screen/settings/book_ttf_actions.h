@@ -14,6 +14,16 @@ void TtfPollTimerCb(lv_timer_t* t);
 void OnFontImportClick(lv_event_t* e);
 /** @brief TTF 列表行点击 */
 void OnTtfRowClick(lv_event_t* e);
+/** @brief 长按源字体进入多选或切换选中状态。 */
+void OnTtfRowLongPressed(lv_event_t* e);
+/** @brief 获取已选源字体数量。 */
+int TtfSelectedCount();
+/** @brief 退出源字体多选。 */
+void OnTtfMultiCancel(lv_event_t* e);
+/** @brief 全选或清空源字体选择。 */
+void OnTtfMultiSelectAll(lv_event_t* e);
+/** @brief 删除所选源字体，先替换正在使用的字体。 */
+void OnTtfMultiRemove(lv_event_t* e);
 /** @brief 减小 TTF 字号 */
 void OnTtfSizeDec(lv_event_t* e);
 /** @brief 增大 TTF 字号 */
@@ -24,6 +34,8 @@ void OnTtfPagePrev(lv_event_t* e);
 void OnTtfPageNext(lv_event_t* e);
 /** @brief 确认并启动转换 */
 void OnTtfConfirmYes(lv_event_t* e);
+/** @brief 按选定字号直接加载 TTF/OTF 并应用于阅读。 */
+void OnTtfApply(lv_event_t* e);
 /** @brief 取消转换确认 */
 void OnTtfConfirmNo(lv_event_t* e);
 /** @brief 返回上一级字体页面并取消在途转换 */

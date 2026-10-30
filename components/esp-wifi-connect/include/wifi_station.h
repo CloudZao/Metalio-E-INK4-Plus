@@ -12,7 +12,7 @@
 #include <esp_wifi_types_generic.h>
 #include <sdkconfig.h>
 
-#if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS
+#if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
 constexpr int8_t kMetalioWifiMaxTxPower = 48; // TX 功率请求上限，单位 0.25 dBm，对应 12 dBm
 #endif
 

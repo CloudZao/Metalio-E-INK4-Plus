@@ -6,6 +6,7 @@
 #include "display.h"
 #include "assets/lang_config.h"
 #include "settings.h"
+#include "sdkconfig.h"
 #include <esp_log.h>
 
 static const char *TAG = "DualNetworkBoard";
@@ -28,11 +29,16 @@ InitializeCurrentBoard();
 }
 
 NetworkType DualNetworkBoard::LoadNetworkTypeFromSettings(int32_t default_net_type) {
+    #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
+    (void)default_net_type;
+    return NetworkType::WIFI;
+    #else
     Settings settings("network", true);
     // default_net_type: 1=4G, 0=WiFi；NVS 无记录时用该默认值
     const int fallback = (default_net_type == 0) ? 0 : 1;
     int network_type = settings.GetInt("type", fallback);
     return network_type == 1 ? NetworkType::CELLULAR : NetworkType::WIFI;
+    #endif
 }
 
 void DualNetworkBoard::SaveNetworkTypeToSettings(NetworkType type) {
@@ -54,6 +60,11 @@ void DualNetworkBoard::InitializeCurrentBoard() {
 }
 
 void DualNetworkBoard::SwitchToNetworkType(NetworkType type) {
+    #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
+    if (type != NetworkType::WIFI) {
+        return;
+    }
+    #endif
     if (type == network_type_) {
         return;
     }

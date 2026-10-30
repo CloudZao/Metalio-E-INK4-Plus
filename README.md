@@ -62,8 +62,10 @@ Product data lives under SD `metalio/e-ink/`. Cloud APIs use **ink-screen** push
 - **E-paper UI**: LVGL I1 / A2I1 via EPDiy; full and partial refresh; lists and reader **must not scroll** -- page with bezel keys or volume keys (TCA9555 **P1.0** + / **P1.1** -)
 - **Logical UI size**: 680x1212 with 2px insets on all sides; standby and shutdown use the full 684x1216 panel (`DISPLAY_CONTENT_*` in `config.h`).
 - **Library**: 3x3 cover grid -> detail -> body; `.ebook` / `.epub` / `.txt`
+- **UI scheduling**: reader navigation and page pixels are prepared in background workers; input dispatch and result publication stay on the UI task. See [UI scheduling](docs/ui-scheduling.md).
 - **Fonts**: UI fontpack on Flash `font_data`; reader `.ef` fonts on SD or via Transfer
-- **Text layout**: Paragraphs use first-line indentation without extra paragraph spacing. Full body-text pages have a fixed line count for the same font, line spacing, margins, orientation, and footer visibility; headings, images, and chapter endings may reduce it.
+- **Text layout**: Spacing presets express relative density. Font size and the content area determine each line's top and bottom space; backgrounds and underlines change drawing only, preserving pagination. The reading area meets a fixed footer with centered information. Full body-text pages keep the same line count for the same layout preferences; paragraphs retain first-line indentation, while headings, images, and chapter endings may reduce the count. See [reader layout](docs/ui-scheduling.md).
+- **Text direction**: Reading settings fit on one page without scrolling. Vertical columns can run left to right (default) or right to left; the fixed extra inset moves to the corresponding starting side. Underlines stay on each column's right. The choice is saved; horizontal text and image pages are unchanged.
 - **Toolchain**: `tools/ebook/` converts PDF/EPUB/MOBI/TXT to device `.ebook` (with Web preview)
 
 ### 2.3 Local multimodal features
@@ -86,10 +88,9 @@ Product data lives under SD `metalio/e-ink/`. Cloud APIs use **ink-screen** push
 - **Charging**: **USB -> CX25601N** (I2C 0x6B); default charge current **1000 mA**
 - **Power key**: side key (TCA9555 **P1.7**); firmware pulses **P1.3** (`PWR_KEY_PULSE`) for software power-off
 - **Idle policy** (Settings -> Power, `PowerPolicy`):
-  - **Idle -> light-sleep standby**: default **3 min** (10 / 30 optional) -> standby overlay (classic clock / wallpaper)
-  - **Standby cumulative power-off**: default **3 min** (10 / 30 optional)
-  - **AppIdle CPU**: 80 / 160 / **240 MHz** (default 240); Wi-Fi may be turned off to save power
-  - **Network grace**: stay online for **30 / 60 / 120 s** after needs clear; **Never** disables idle disconnection (standby still disconnects)
+  - Inactivity shows a classic clock or wallpaper standby page; sliced light sleep starts after software cleanup and physical display refresh complete.
+  - Idle CPU frequency, network grace, standby delay, and accumulated standby power-off are configurable. Manual Wi-Fi-off takes priority over automatic network recovery.
+  - See the [low-power policy](main/boards/common/power_policy/README.en.md) for standby entry/exit software and hardware order, defaults, and limits.
 - **Buttons**:
   - **POWER short press**: enter / leave standby overlay
   - **POWER long press ~3 s**: hard power-off
@@ -454,8 +455,13 @@ See `main/display/screen/assistant_screen/README.md`.
 
 - Path: `/sdcard/metalio/e-ink/books` (user-facing `metalio/e-ink/books`)
 - Formats: `.ebook` / `.epub` / `.txt`; `.txt.idx` index; side-car cover `.a2i1`
+- Images shrink proportionally without enlarging small originals. Pagination and rendering share image slot dimensions, with images centered horizontally and vertically within each slot.
+- Grayscale images use fixed level-5 darkening (gamma 2.0), covering reading illustrations, covers, wallpaper thumbnails and previews, standby and shutdown wallpapers, photos, and assistant images. Midtones are darkened only during drawing, preserving pure black and white, source images, and caches. Text antialiasing and UI backgrounds remain unchanged; content configured for black-and-white display retains that policy. All refresh profiles and full-screen wallpapers share the same darkening curve and 16-level grayscale quantization rule.
+- EPUBs whose reading-order documents each contain one image and no body text, and `.ebook` files marked as page images, use full-page image reading. Images fit proportionally within the drawable area after subtracting all four reading margins and the footer. Chapter headings are not inserted. Text fonts, spacing, underlines, text antialiasing, writing mode, and reading backgrounds do not affect these pages; all settings remain available, including font selection, import, and management. Text preferences are saved with a notice that they do not apply to comics; they take effect when opening a text book. Margins, screen orientation, footer, and page-turn settings remain available. Complex CSS, image rotation, and synthetic spreads are not fully supported. Books exceeding the image-page inspection budget use normal text-and-image layout.
+- Comic footers use page numbers, and the progress panel offers previous/next page navigation. The current image loads first, followed by alternating forward/backward prefetch. The target is 3–10 images on each side, reduced or paused when memory is limited. The L8 cache holds at most 21 images, uses no more than half the available PSRAM, and leaves at least 2 MiB for decoding and other work. Cache hits display directly; misses show a centered loading message. Prefetch does not refresh the screen. Opening settings pauses prefetch. Orientation or drawable-area changes clear old-size entries; standby SD detachment and book closure release the cache.
+- TXT supports UTF-8 and GB18030 (including GBK/GB2312) with streaming decoding; no full-book conversion is required. Contents detection accepts chapter headings without leading indentation, up to 60 characters, filtering common dates, measurements, list markers, and obvious prose references. Dense contents excerpts that lack body text and repeat later in the book are excluded; contents appear in batches during scanning and are finalized after indexing. Glyph display depends on the selected font's character coverage.
 - Fonts: `.../fonts/*.ef`
-- Import TTF/OTF fonts from `.../fonts_ttf` in reading settings; sizes 20–80px, default 40px. See [font import and cancellation](docs/ap-file-transfer.md) for details.
+- Import TTF/OTF fonts from `.../fonts_ttf` in reading settings; sizes 20–80px, default 40px. Apply the source font directly or convert it to `.ef`. An empty font list uses a built-in reading character set, so the first import needs no existing `.ef` file. See [font import and cancellation](docs/ap-file-transfer.md) for details.
 - Layout prefs in NVS; **no scroll** on list/body; VK / volume keys page
 - Reading settings → Orientation: portrait, left landscape, right landscape, or auto; the selection is saved. Auto works in the reading page, reading settings, fonts, bookmarks, and contents. It uses the SC7A20H gravity readings and rotates after the detected orientation remains stable for 0.8 seconds. Ambiguous readings keep the current orientation; upside-down portrait is excluded from auto mode. While the new page layout is pending, a loading message replaces only the reading content, leaving menus, navigation, and standby available. The current page replaces the message when ready. Leaving the reader restores portrait.
 - Reading settings → Page turn: slide or white wipe; the selection is saved. White wipe runs right to left for the next page and left to right for the previous page in either orientation. Required cleaning uses a full refresh.
@@ -470,6 +476,8 @@ See `main/display/screen/assistant_screen/README.md`.
   - Enabled standby wallpaper -> fullscreen A2I1
   - Else -> classic (date / lunar / weather / todos)
 - Shutdown image: NVS wallpaper first, else built-in `bg_shutdown.a2i1`
+- Startup first refreshes to white with a complete GC16 waveform, then reveals the home screen with a wipe. Refresh failures retain the recovery path.
+- Entering or leaving standby and shutting down first perform a full GC16 refresh to white, then reveal the target frame with a wipe. These transitions take longer and produce a visible flash; ordinary page changes keep their existing refresh behavior. See the [display documentation](main/display/README.md).
 
 ### 11.5 Transfer
 
@@ -484,17 +492,17 @@ See `main/display/screen/assistant_screen/README.md`.
 |:---|:---|
 | **Network** | Wi-Fi / 4G selection, Wi-Fi setup and SIM switching |
 | **Theme** | Home card style |
-| **Language** | UI language |
+| **Language** | Simplified Chinese / English, applied immediately; the file transfer web page follows the device language after a browser refresh |
 | **Haptics** | Key vibration on / off |
 | **Charging** | 0.5A / 1A / 1.5A; default 1A; saved and restored after reboot |
 | **Power** | AppIdle CPU, standby delay, network grace, cumulative power-off |
-| **Screen** | Refresh mode and black depth; frontlight controls are in the global swipe-down panel |
+| **Screen** | Refresh mode, black depth, and frontlight color and brightness; frontlight controls are also available in the global swipe-down panel |
 | **Conversation** | Baiwen TTS server preference |
 | **Bluetooth** | Modes 1/2/3, scan/pair (12.1) |
-| **Test** | Factory / aging entry |
+| **Test** | Factory / aging entry; auto test cycles the frontlight through cool + warm, cool, warm and off, then restores the previous state on exit |
 | **About** | Model, chip, FW version, MAC, Flash, PSRAM |
 
-Swiping down in a non-scrolling area opens the quick panel; vertical lists retain their own gestures. The panel includes the top status bar. Swipe up outside the sliders, tap outside the panel, or press Back or Home to close it while keeping the current page. OTA upgrades and standby dismiss and block the panel. Opening and closing it requests a GC16 full refresh, which produces a visible flash.
+Swiping down in an area without an actual vertical scroll range opens the quick panel, including scroll-enabled containers whose content fits within the viewport. Lists with vertical overflow retain their own gestures, including at the top and bottom. The panel includes the top status bar. Swipe up outside the sliders, tap outside the panel, or press Back or Home to close it while keeping the current page. OTA upgrades and standby dismiss and block the panel. Opening and closing it requests a GC16 full refresh, which produces a visible flash.
 
 The left side contains a Wi-Fi switch with a paw icon and a frontlight switch. The right side contains brightness and warm-light ratio sliders; moving up increases each value. Icons keep their native sizes and appear black over white areas and white over black fills. Slider titles, percentages and Bluetooth controls are omitted. Brightness 0 disables output. A warm-light ratio of 0 selects cool light, 50 drives both channels, and 100 selects warm light. PWM supports continuous blending; GPIO mode provides channel switching only. Turning the frontlight off retains its brightness and ratio. Adjusting either slider turns it on; adjusting the ratio or switching it on at brightness 0 uses brightness 40. The switch and values are saved; startup output waits until the Bluetooth shared-power reset finishes.
 
@@ -595,6 +603,8 @@ cd xingzhi-ai-470
 
 idf.py build
 ```
+
+To build the global variant, run `idf.py menuconfig` and select **Metalio E-Ink4-Plus → Board Type → Metalio E-Ink4-Plus Global (4.7 parallel)**, then build. Its board ID is `metalio-e-ink4-plus-global`; it shares the existing hardware drivers, hides WorkBuddy in all home styles, defaults to English when no language preference is saved, and uses the global NetEase Yunxin appkey for OTA/activation and WebSocket requests. The global variant uses Wi-Fi only: network settings show Wi-Fi configuration without 4G or SIM switching, and a previously saved 4G mode is ignored. A saved language preference still takes precedence, and both Chinese and English remain available in Settings. The default board remains `metalio-e-ink4-plus`.
 
 ### 14.2 About sdkconfig
 

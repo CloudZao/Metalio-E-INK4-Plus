@@ -4,6 +4,7 @@
 #include "power_i2c.h"
 
 #include <cstdint>
+#include <atomic>
 #include <mutex>
 
 // BQ27220 电量计：单例封装，板级初始化后直接通过 GetInstance() 使用。
@@ -34,12 +35,14 @@ public:
 
     /**
      * @brief 电量与充放电状态（对齐 Board::GetBatteryLevel）
-     * @param level 0..100，步长 5%；≥4.33V 连续 30s 才允许 100%
+     * @param level 0..100，步长 5%；≥4.30V 连续 30s 才允许 100%
      * @param charging 电流 > +5mA 且 level < 100
      * @param discharging 电流 < -5mA
      * @return 开机或重置后未满 3s，或读取失败时返回 false
      */
     bool GetBatteryLevel(int& level, bool& charging, bool& discharging);
+    /** @brief 返回后台最近一次采样结果，不等待 I²C 或采样锁；未就绪时返回 false。 */
+    bool GetCachedBatteryLevel(int& level, bool& charging, bool& discharging) const;
 
     /** @brief 按充放电状态换算瞬时电量，未做滤波、阶梯和满电确认 */
     static float VoltageToPercent(uint16_t mv, bool charging);
@@ -62,7 +65,7 @@ private:
     static constexpr int64_t kSamplePeriodUs = 1000LL * 1000;
     static constexpr int64_t kSocStepUs = 30LL * 1000 * 1000;
     static constexpr int64_t kFullHoldUs = 30LL * 1000 * 1000;
-    static constexpr uint16_t kFullConfirmMv = 4330;
+    static constexpr uint16_t kFullConfirmMv = 4300; // 显示满电；充电截止见 CX25601N VREG
     static constexpr uint16_t kFullExitMv = 4280;
 
     power_i2c_t bus_{};
@@ -80,6 +83,7 @@ private:
     bool  filter_primed_ = false;
 
     int     displayed_soc_ = -1;
+    std::atomic<uint32_t> battery_snapshot_{0}; // 有效位、电量、充放电状态的原子快照
     std::mutex soc_mutex_; // 串行化显示采样与待机重置
     int64_t last_sample_us_ = 0;
     int64_t last_filter_us_ = 0;

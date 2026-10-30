@@ -1,18 +1,22 @@
 #pragma once
 
 #include <lvgl.h>
+#include "reader/book_session.h"
+struct ReaderPageResult;
 
 /** @brief 从 LVGL 事件读取触点坐标 */
 bool ReadEventPoint(lv_event_t* e, lv_point_t* out);
-/** @brief 应用已排队的正文翻页增量 */
-void ApplyReaderPageDelta();
-/** @brief 盖板键/长按定时器：只累加 delta，真正翻页在 RenderReaderPage（LVGL） */
+/** @brief 盖板键与长按提交翻页增量，后台任务准备目标页 */
 bool QueueReaderPageTurn(int dir);
 /** @brief 请求退回阅读应用首页 */
 void RequestBackHome();
 /** @brief 完成离开正文后的延迟清理 */
 void FinishDeferredCleanup();
-/** @brief 打开/排版/插图 worker 是否忙碌 */
+/** @brief 提交最终进度并将会话析构交给回收任务；队列满时保留会话供重试。 */
+bool RetireReaderSession();
+/** @brief 预留 SD 事务并后台销毁会话；成功后取得指针所有权。 */
+bool ScheduleReaderSessionCleanup(reader::BookSession* session);
+/** @brief 打开/排版/正文/插图 worker 是否忙碌 */
 bool ReaderWorkersBusy();
 /** @brief 阅读相关 worker 占线时打一条，便于串口对照「点了继续阅读却无 StartOpenWorker」 */
 void WarnReaderWorkersBusy(const char* where);
@@ -52,3 +56,14 @@ void CancelDetailCoverLoad();
 void CancelListCoverFill();
 /** @brief 作废正文插图后台解码；翻页 clean 前调用。 */
 void CancelPageImageLoad();
+
+/** @brief 在 UI 提交导航；相对翻页累加，绝对跳转保留最新目标。 */
+bool RequestReaderNavigation(reader::BookSession::NavigationKind kind, int value = 0);
+/** @brief 在 UI 轮询页面结果，并调度前台导航与后台扫描。 */
+void PollReaderPageWork();
+/** @brief 是否存在待执行或正在准备的正文请求。 */
+bool ReaderPageWorkPending();
+/** @brief 取走已发布的正文结果，由正文绘制函数消费。 */
+std::unique_ptr<ReaderPageResult> TakeReaderPageResult();
+/** @brief 离开或换参时作废结果并清空积压输入。 */
+void CancelReaderPageWork();

@@ -67,7 +67,7 @@ WifiStation::WifiStation() {
     } else if (err != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGE(TAG, "Failed to open NVS: %d", err);
     }
-    #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS
+    #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
     max_tx_power_ = kMetalioWifiMaxTxPower;
     #endif
 }

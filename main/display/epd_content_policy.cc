@@ -1,4 +1,5 @@
 #include "epd_content_policy.h"
+#include "reader/image_tone.h"
 #include "src/draw/lv_draw_private.h"
 #include "src/draw/sw/blend/lv_draw_sw_blend_private.h"
 #include "src/draw/sw/blend/lv_draw_sw_blend_to_l8.h"
@@ -8,6 +9,7 @@
 
 namespace {
 bool EpdContentUsesGray(lv_obj_t* object);
+EpdContentRole ContentRole(lv_obj_t* object);
 struct Entry { lv_obj_t* object; EpdContentRole role; bool has_gray; };
 std::vector<Entry> entries;
 // Central policy switches: fast list/reading entry preferences can be added
@@ -89,7 +91,10 @@ void Blend(lv_draw_task_t* task,const lv_draw_sw_blend_dsc_t* dsc) {
     if(dsc->mask_buf && dsc->mask_area && !lv_area_intersect(&area,&area,dsc->mask_area)) return;
     auto* layer=task->target_layer;
     const auto* base=static_cast<const lv_draw_dsc_base_t*>(task->draw_dsc);
-    const bool gray=task->type==LV_DRAW_TASK_TYPE_LAYER || EpdContentUsesGray(base->obj);
+    const auto role=ContentRole(base->obj);
+    const bool gray=task->type==LV_DRAW_TASK_TYPE_LAYER || GrayRole(role);
+    const bool darken=gray && task->type==LV_DRAW_TASK_TYPE_IMAGE &&
+        role!=EpdContentRole::ReaderAntialias && role!=EpdContentRole::Shelf;
     const bool label=task->type==LV_DRAW_TASK_TYPE_LABEL;
     lv_area_t relative=area; lv_area_move(&relative,-layer->buf_area.x1,-layer->buf_area.y1);
     const int width=lv_area_get_width(&area),height=lv_area_get_height(&area);
@@ -117,10 +122,10 @@ void Blend(lv_draw_task_t* task,const lv_draw_sw_blend_dsc_t* dsc) {
         fill.opa=LV_OPA_COVER;fill.relative_area=relative;
         lv_draw_sw_blend_color_to_l8(&fill);return;
     }
-    if(dsc->src_buf && gray) {
+    if(dsc->src_buf && gray && !darken) {
         lv_draw_sw_blend_image_dsc_t image{};
         image.dest_buf=dest; image.dest_w=width; image.dest_h=height; image.dest_stride=dest_stride;
-        image.opa=task->type==LV_DRAW_TASK_TYPE_LAYER ? LV_OPA_COVER : dsc->opa; image.blend_mode=dsc->blend_mode;
+        image.opa=task->type==LV_DRAW_TASK_TYPE_LAYER ? static_cast<lv_opa_t>(LV_OPA_COVER) : dsc->opa; image.blend_mode=dsc->blend_mode;
         image.src_stride=dsc->src_stride; image.src_color_format=dsc->src_color_format;
         image.src_buf=static_cast<const uint8_t*>(dsc->src_buf)+
             size_t(area.y1-dsc->src_area->y1)*dsc->src_stride+
@@ -137,7 +142,7 @@ void Blend(lv_draw_task_t* task,const lv_draw_sw_blend_dsc_t* dsc) {
     for(int y=0;y<height;++y) {
         for(int x=0;x<width;++x) {
             const unsigned alpha=mask ? mask[size_t(y)*mask_stride+x] : 255;
-            mask_row[x]=alpha>(label ? 0u : 127u) ? 255 : 0;
+            mask_row[x]=darken ? alpha : (alpha>(label ? 0u : 127u) ? 255 : 0);
         }
         if(!source) {
             lv_draw_sw_blend_fill_dsc_t fill{};
@@ -175,15 +180,18 @@ void Blend(lv_draw_task_t* task,const lv_draw_sw_blend_dsc_t* dsc) {
                     break;
                 case LV_COLOR_FORMAT_A8:
                     lum=lv_color_luminance(dsc->color);alpha=input[i];break;
-                default: LV_LOG_WARN("Unsupported binary UI source format"); break;
+                default: LV_LOG_WARN("Unsupported L8 source format"); break;
             }
-            row[x*2]=lum>16 ? 255 : 0; row[x*2+1]=alpha>127 ? 255 : 0;
+            // 图片只转换本次绘制源像素，原图、透明度和蒙版保持不变。
+            row[x*2]=darken ? reader::DarkenImagePixel(lum) : (lum>16 ? 255 : 0);
+            row[x*2+1]=darken ? alpha : (alpha>127 ? 255 : 0);
         }
         lv_draw_sw_blend_image_dsc_t image{};
         image.dest_buf=dest+size_t(y)*dest_stride; image.dest_w=width; image.dest_h=1;
-        image.dest_stride=dest_stride; image.opa=LV_OPA_COVER; image.blend_mode=LV_BLEND_MODE_NORMAL;
+        image.dest_stride=dest_stride; image.opa=darken ? dsc->opa : static_cast<lv_opa_t>(LV_OPA_COVER);
+        image.blend_mode=darken ? dsc->blend_mode : LV_BLEND_MODE_NORMAL;
         image.src_buf=row.data(); image.src_stride=width*2; image.src_color_format=LV_COLOR_FORMAT_AL88;
-        image.mask_buf=mask_row.data(); image.mask_stride=width;
+        image.mask_buf=mask ? mask_row.data() : nullptr; image.mask_stride=width;
         lv_draw_sw_blend_image_to_l8(&image);
     }
 }
@@ -197,15 +205,19 @@ void EpdSetContentRole(lv_obj_t* object,EpdContentRole role) {
     lv_obj_invalidate(object);
 }
 namespace {
-bool EpdContentUsesGray(lv_obj_t* object) {
-    bool found=false,gray=false;
+EpdContentRole ContentRole(lv_obj_t* object) {
+    bool found=false;
+    auto role=EpdContentRole::Monochrome;
     for(auto* node=object;node;node=lv_obj_get_parent(node))
         for(const auto& entry:entries) if(entry.object==node) {
-            if(entry.role==EpdContentRole::FastMonochrome) return false;
-            if(!found) { gray=GrayRole(entry.role);found=true; }
+            if(entry.role==EpdContentRole::FastMonochrome) return entry.role;
+            if(!found) { role=entry.role;found=true; }
             break;
         }
-    return gray;
+    return role;
+}
+bool EpdContentUsesGray(lv_obj_t* object) {
+    return GrayRole(ContentRole(object));
 }
 } // namespace
 

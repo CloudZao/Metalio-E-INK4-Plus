@@ -29,7 +29,6 @@ void SetReadStatusVisible(bool visible) {
             lv_obj_set_style_bg_color(st.reader.status_bar, lv_color_white(), 0);
             lv_obj_set_style_bg_opa(st.reader.status_bar, LV_OPA_COVER, 0);
             lv_obj_clear_flag(st.reader.status_bar, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_move_foreground(st.reader.status_bar);
         } else {
             lv_obj_add_flag(st.reader.status_bar, LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_style_bg_opa(st.reader.status_bar, LV_OPA_TRANSP, 0);
@@ -40,7 +39,6 @@ void SetReadStatusVisible(bool visible) {
         if (visible) {
             lv_obj_set_style_bg_opa(st.reader.status_overlay, LV_OPA_TRANSP, 0);
             lv_obj_clear_flag(st.reader.status_overlay, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_move_foreground(st.reader.status_overlay);
         } else {
             lv_obj_add_flag(st.reader.status_overlay, LV_OBJ_FLAG_HIDDEN);
         }
@@ -71,13 +69,6 @@ void SetReadSettingsSheetVisible(bool visible) {
     if (visible) {
         ApplyReaderChromeSize();
         lv_obj_clear_flag(st.settings.settings_sheet, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(st.settings.settings_sheet);
-        if (st.reader.status_bar != nullptr && lv_obj_is_valid(st.reader.status_bar)) {
-            lv_obj_move_foreground(st.reader.status_bar);
-        }
-        if (st.reader.status_overlay != nullptr && lv_obj_is_valid(st.reader.status_overlay)) {
-            lv_obj_move_foreground(st.reader.status_overlay);
-        }
     } else {
         lv_obj_add_flag(st.settings.settings_sheet, LV_OBJ_FLAG_HIDDEN);
     }
@@ -113,20 +104,17 @@ void HideReadChrome() {
         ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
         RenderReaderPage();
     } else if (was_settings) {
-        // 关卡：落盘未完成的 ± 排版，并重绘正文
+        // 仅提交尚未应用的排版；未改设置时保留当前正文。
         FlushLayoutDebounce();
-        // Long TOC/font lists can own hundreds of widgets. Release them before
-        // rendering the page instead of retaining an invisible card in RAM.
+        // 目录与字体列表可持有大量控件，关闭后释放卡片内容。
         CancelListCoverFill();
         ClearSettingsSheetWidgetRefs();
         if (st.settings.settings_sheet && lv_obj_is_valid(st.settings.settings_sheet))
             lv_obj_clean(st.settings.settings_sheet);
         st.settings.reader_sheet_cover.Reset();
         ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
-        StartChapterPageWorker();
-        if (st.reader.session && st.reader.session->IsOpen() && st.reader.content != nullptr) {
-            RenderReaderPage();
-        }
+        // 打开漫画设置时已取消图片解码，关闭后恢复当前页及预取。
+        if (ReaderPageImagesHint()) RenderReaderPage();
     }
 }
 
@@ -290,7 +278,7 @@ void RefreshSettingsSheetFontList() {
         lv_obj_add_flag(fr.row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_user_data(fr.row, reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
 
-        char name_buf[40];
+        char name_buf[SD_FILE_NAME_CAPACITY];
         FormatFontListName(fe.file, name_buf, sizeof(name_buf));
         if (fr.name != nullptr && lv_obj_is_valid(fr.name)) {
             lv_label_set_text(fr.name, name_buf);
@@ -360,6 +348,7 @@ void ShowReadSettingsSheet(bool default_duration) {
     if (st.reader.read_scr == nullptr || st.reader.opening.load() || !st.reader.session || !st.reader.session->IsOpen()) {
         return;
     }
+    if (ReaderPageImagesHint()) CancelPageImageLoad();
     if (default_duration) {
         // A fresh reader tap starts at duration, never resurrecting an import subpanel.
         TtfPanelClose();
@@ -371,9 +360,8 @@ void ShowReadSettingsSheet(bool default_duration) {
     if (st.settings.reader_tab == 0 || st.settings.reader_tab == 1)
         st.settings.reader_scroll[st.settings.reader_tab] = -1;
     TapZonesPanelClose();
-    s_reader_page_delta.store(0, std::memory_order_release);
     st.reader.read_chrome = BookUiState::ReadChrome::kSettings;
-    SyncReaderAaForImmersion(false);
+    SyncReaderAaForImmersion(true);
     SetReadStatusCenterTitle(nullptr);
     SetReadStatusVisible(true);
     SetReadSettingsSheetVisible(true);

@@ -190,6 +190,7 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     lv_obj_set_scrollbar_mode(out.bar, LV_SCROLLBAR_MODE_OFF);
     lv_obj_align(out.bar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_clear_flag(out.bar, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(out.bar, LV_OBJ_FLAG_SCROLLABLE);
 
     // 底边横线挂 bar 下（FLOATING 不进 flex）；藏 bar 时一并隐藏。左右让出 pad。
     constexpr lv_coord_t kStatusRuleH = 2;
@@ -202,6 +203,7 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     // content 坐标贴外底：越过 pad_bottom
     lv_obj_align(rule, LV_ALIGN_BOTTOM_MID, 0, kStatusPadV);
     lv_obj_clear_flag(rule, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(rule, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* net_hit = lv_obj_create(out.bar);
     lv_obj_remove_style_all(net_hit);
@@ -231,6 +233,7 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     lv_obj_set_flex_flow(right_icons, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(right_icons, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(right_icons, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(right_icons, LV_OBJ_FLAG_SCROLLABLE);
 
     out.mute_label = lv_label_create(right_icons);
     lv_label_set_text(out.mute_label, "");
@@ -265,6 +268,7 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     lv_obj_set_style_layout(out.overlay, LV_LAYOUT_NONE, 0);
     lv_obj_align(out.overlay, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_clear_flag(out.overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(out.overlay, LV_OBJ_FLAG_SCROLLABLE);
 
     const lv_coord_t status_text_w = LV_HOR_RES - kStatusTextReserveW;
 
@@ -290,6 +294,7 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     lv_obj_clear_flag(out.status_label, LV_OBJ_FLAG_CLICKABLE);
 
     out.low_battery_popup = lv_obj_create(scr);
+    lv_obj_clear_flag(out.low_battery_popup, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(out.low_battery_popup, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_size(out.low_battery_popup, LV_HOR_RES * 9 / 10, status_line_h * 2);
     lv_obj_align(out.low_battery_popup, LV_ALIGN_BOTTOM_MID, 0, -kLowBatteryBottom);

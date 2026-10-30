@@ -23,7 +23,7 @@ private:
     std::string base_; // 图片相对路径基准
     ContentBlockSink sink_; // 同步内容消费者
     std::string text_, tag_, entity_; // 有界段落片段、标签及实体缓冲
-    bool in_tag_ = false, in_script_ = false, in_style_ = false, comment_ = false; // 解析状态
+    bool in_tag_ = false, in_head_ = false, in_script_ = false, in_style_ = false, comment_ = false; // 解析状态
     bool continuation_ = false; // 当前段是否已输出过前序片段
     bool last_space_ = true; // 跨输出片段保留空白合并状态
     char quote_ = 0; // 标签属性引号

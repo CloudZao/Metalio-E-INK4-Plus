@@ -35,7 +35,6 @@ ScreenPaintCoalesce s_shelf_check_paint{};
 ScreenPaintCoalesce s_toc_paint{};
 ScreenPaintCoalesce s_settings_sheet_paint{}; // 设置卡：连点只记状态，抬起后一次刷控件
 // 盖板键/长按定时器只累加；真正 Next/Prev 在 LVGL 绘制里做，避免跨章重建 pages_ 时 UAF
-std::atomic<int> s_reader_page_delta{0};
 
 BookUiState& Book_State() {
     static BookUiState s;
@@ -43,72 +42,8 @@ BookUiState& Book_State() {
 }
 
 static lv_obj_t* CreateBookHome(bool continue_latest) {
-    StopReaderAutoOrient();
-    CancelReadFontScan();
     auto& st = Book_State();
-    const bool workers_busy = st.reader.opening.load() || st.reader.layout_busy.load() ||
-                              st.reader.chapter_pages_busy.load() || st.reader.page_image_busy.load();
-    if (workers_busy) {
-        st.reader.open_token.fetch_add(1);
-        st.reader.layout_token.fetch_add(1);
-        st.reader.chapter_pages_token.fetch_add(1);
-        CancelPageImageLoad();
-        if (st.reader.session) {
-            st.reader.session->InvalidateChapterPageTable();
-            st.reader.session->AbortTxtPaginate();
-        }
-        StopReadTimeCheckpointTimer();
-        st.reader.deferred_cleanup = true;
-    } else {
-        // 收尾：含 worker 投递失败后留下的 deferred_cleanup
-        if (st.reader.deferred_cleanup) {
-            FinishDeferredCleanup();
-        } else {
-            EndReadingTimeTracking();
-            st.reader.session.reset();
-            ReleaseBookFont();
-        }
-    }
-    // 封面由详情屏 DELETE 释放；此处不 Reset，避免旧屏仍引用时 UAF
-    st.reader.read_scr = nullptr;
-    st.reader.content = nullptr;
-    st.reader.footer_host = nullptr;
-    st.reader.page_label = nullptr;
-    st.reader.title_label = nullptr;
-    st.reader.status_label = nullptr;
-    st.reader.status_bar = nullptr;
-    st.reader.status_overlay = nullptr;
-    st.reader.status_h = 0;
-    st.settings.settings_sheet = nullptr;
-    ClearSettingsSheetWidgetRefs();
-    StopTtfPollTimer();
-    st.ttf.ttf_mode = BookUiState::TtfMode::kNone;
-    st.ttf.ttf_pick.clear();
-    st.ttf.ttf_page = 0;
-    st.ttf.ttf_size_px = kTtfConvertSizeDefault;
-    st.tap.tap_zone_ui = BookUiState::TapZoneUi::kClosed;
-    st.tap.tap_zone_pick_cell = -1;
-    st.reader.viewport_w = 0;
-    st.reader.viewport_h = 0;
-    st.settings.font_entries.clear();
-    st.settings.font_list_page = 0;
-    st.settings.font_multi = false;
-    st.settings.font_selected.clear();
-    st.settings.font_suppress_click_until_us = 0;
-    st.settings.font_suppress_click_idx = -1;
-    st.settings.font_suppress_next_click = false;
-    st.reader.read_chrome = BookUiState::ReadChrome::kReading;
-    st.reader.settings_resume_after_open = false;
-    st.reader.layout_again = false;
-    st.reader.layout_reload_font = false;
-    st.reader.layout_anchor = {};
-    st.reader.chapter_pages_again = false;
-    CancelLayoutDebounce();
-    StopLayoutHintTimer();
-    StopFooterClockTimer();
-    st.reader.layout_hint_done_until_us = 0;
-    st.reader.open_bar = nullptr;
-    st.reader.open_pct_lbl = nullptr;
+    ReleaseReaderSessionForLeave();
     st.shelf.shelf_multi = false;
     st.shelf.shelf_selected.clear();
     st.shelf.shelf_suppress_click_until_us = 0;
@@ -121,7 +56,7 @@ static lv_obj_t* CreateBookHome(bool continue_latest) {
 
     ScreenSetIsHome(false);
 
-    if (continue_latest && !workers_busy && SdCardManager::GetInstance().IsMounted()) {
+    if (continue_latest && !ReaderWorkersBusy() && !st.reader.deferred_cleanup && SdCardManager::GetInstance().IsMounted()) {
         const std::string latest = reader::book_home_snapshot::LoadLatestAbsPath();
         if (!latest.empty()) {
             reader::LoadBookLibrary(reader::kDefaultBooksDir, st.shelf.books);

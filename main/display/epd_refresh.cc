@@ -18,7 +18,11 @@
 #include "sd_log_writer.h"
 #include "settings.h"
 #include "my_waveform.h"
+extern "C" {
+#include "output_lcd/lcd_driver.h"
+}
 #include <atomic>
+#include <cassert>
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
@@ -58,13 +62,16 @@ std::atomic<bool> ui_scrolling{false}, next_scroll_settle{false};
 int pending_turn;
 int pending_orient = 0;
 uint32_t submitted;
+uint32_t drawing_sequence; // 仅刷新任务写入，用于关联一次提交中的多次绘制
 std::atomic<uint32_t> completed{0}, updates{0}, errors{0}, coalesced{0}, last_ms{0};
 std::atomic<int> last_error{0}, last_mode{0}, partials{0}, effect{1}, next_turn{0};
 // Testing an animation must not enable it for ordinary book navigation.
 std::atomic<int> reader_effect{static_cast<int>(EpdEffect::None)};
-std::atomic<bool> next_screen_change{false};
+constexpr unsigned kScreenChange = 1;
+constexpr unsigned kFullGc = 2;
+std::atomic<unsigned> next_screen_change{0};
 void (*after_submit)() = nullptr; // 下一次提交后的单次回调
-bool pending_screen_change=false;
+unsigned pending_screen_change=0;
 int64_t pending_at=0;
 std::atomic<bool> busy{false}, test_active{false}, stop_test{false};
 std::atomic<uint32_t> cancel_generation{0};
@@ -78,6 +85,7 @@ int pattern_mode = MODE_GC16;
 int pattern_phase;
 bool state_unknown;
 bool gray_on_panel; // Worker-owned: native gray must not become a new baseline.
+bool startup_frame=true; // 首帧先完成白屏 GC 清理，再推白显示界面
 
 void KeepWhiteBorder(uint8_t* fb) {
     constexpr int border=DISPLAY_WHITE_BORDER_PIXELS;
@@ -194,7 +202,18 @@ EpdDrawError Draw(EpdiyHighlevelState* hl, int mode, bool full, bool clean, bool
     const EpdWaveform* ordinary = (profile>=2 || ota_progress) && mode==MODE_DU
         ? (profile==2 && !ota_progress ? my_waveform_fast_du() : my_waveform_short_du())
         : ProfileWaveform(profile,mode,gray.reader_aa && !cleanup);
-    epd_hl_waveform(hl,complete_waveform ? &MY_WAVEFORM : (spatial ? spatial : ordinary));
+    const EpdWaveform* waveform=complete_waveform ? &MY_WAVEFORM : (spatial ? spatial : ordinary);
+    const char* path=complete_waveform ? "full" : (spatial ? (gray_reveal ? "wipe-gray" : "wipe-bw") :
+        (ota_progress && mode==MODE_DU ? "ota-du" : "normal"));
+    int phases=0;
+    for (int i=0;i<waveform->num_modes;++i) {
+        if (waveform->mode_data[i]->type==mode) {
+            phases=waveform->mode_data[i]->range_data[0]->phases;
+            break;
+        }
+    }
+    if (gray_reveal && !complete_waveform) phases+=9;
+    epd_hl_waveform(hl,waveform);
     KeepWhiteBorder(hl->front_fb);
     // Serialize the complete waveform (including recovery clears) with OTA flash
     // writes; holding only the log storage lock does not protect against OTA.
@@ -212,6 +231,10 @@ EpdDrawError Draw(EpdiyHighlevelState* hl, int mode, bool full, bool clean, bool
     if (!panel_powered) {
         epd_poweron();
         panel_powered=true;
+    }
+    if (startup_frame) {
+        assert(epd_lcd_white_border_pixels()==DISPLAY_WHITE_BORDER_PIXELS);
+        epd_lcd_prime_white_border(true);
     }
     metalio_touch_set_feed_paused(false);
     EpdDrawError result = EPD_DRAW_SUCCESS;
@@ -246,7 +269,9 @@ EpdDrawError Draw(EpdiyHighlevelState* hl, int mode, bool full, bool clean, bool
             result = epd_hl_update_screen(hl, static_cast<EpdDrawMode>(mode), 25);
         }
     }
-    if ((result & EPD_DRAW_EMPTY_LINE_QUEUE) && epd_board_metalio_eink4_plus_tps_ok()) {
+    const auto initial_result=result;
+    const bool recovered=(result & EPD_DRAW_EMPTY_LINE_QUEUE) && epd_board_metalio_eink4_plus_tps_ok();
+    if (recovered) {
         // An interrupted waveform leaves the optical state unknown. Recover
         // once while flash is still excluded; another differential update cannot
         // safely use the old framebuffer as its physical baseline.
@@ -271,6 +296,10 @@ EpdDrawError Draw(EpdiyHighlevelState* hl, int mode, bool full, bool clean, bool
             ESP_LOGE(TAG, "scan recovery failed: 0x%x", static_cast<unsigned>(result));
         }
     }
+    if (startup_frame) {
+        epd_lcd_prime_white_border(false);
+        if (result==EPD_DRAW_SUCCESS) startup_frame=false;
+    }
     metalio_touch_set_feed_paused(true);
     if (!keep_power || result!=EPD_DRAW_SUCCESS) {
         epd_poweroff();
@@ -284,8 +313,26 @@ EpdDrawError Draw(EpdiyHighlevelState* hl, int mode, bool full, bool clean, bool
     last_mode.store(mode);
     last_ms.store((esp_timer_get_time()-start)/1000);
     ++updates;
-    ESP_LOGI(TAG, "mode=%d full=%d clean=%d cost=%ums err=0x%x", mode, full, clean,
-             (unsigned)last_ms.load(), (unsigned)result);
+    ESP_LOGI(TAG, "seq=%u profile=%d/%d path=%s phases=%d orient=%d aa=%d "
+             "mode=%d full=%d clean=%d recover=%d first_err=0x%x cost=%ums err=0x%x",
+             (unsigned)drawing_sequence,profile,refresh_profile.load(),path,phases,orient,
+             gray.reader_aa,mode,full,clean,recovered,(unsigned)initial_result,
+             (unsigned)last_ms.load(),(unsigned)result);
+    return result;
+}
+EpdDrawError FullRefreshBeforeFrame(EpdiyHighlevelState* hl) {
+    if (!effect_fb) {
+        last_error.store(EPD_DRAW_FAILED_ALLOC);
+        ++errors;
+        ESP_LOGE(TAG, "screen cleaning failed: no transition buffer");
+        return EPD_DRAW_FAILED_ALLOC;
+    }
+    uint8_t* target=hl->front_fb;
+    memset(effect_fb,255,fb_bytes);
+    hl->front_fb=effect_fb;
+    const auto result=Draw(hl,MODE_GC16,true,false,true);
+    hl->front_fb=target;
+    if (result==EPD_DRAW_SUCCESS) gray_on_panel=false;
     return result;
 }
 void Transition(EpdiyHighlevelState* hl, int direction, EpdEffect selected_effect, int orient = 0,
@@ -333,14 +380,14 @@ void Worker(void*) {
     uint32_t consumed=0;
     int applied_profile=refresh_profile.load();
     epd_hl_waveform(hl,ProfileWaveform(applied_profile));
-    bool profile_full=false;
+    bool profile_full=true;
     int applied_depth=black_depth.load();
     epd_set_vcom(kBlackDepthMv[applied_depth]);
     int64_t last_full=esp_timer_get_time();
     for (;;) {
         ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(100));
         bool full=false, stream=false, light=false, frame=false, test=false, screen_change=false;
-        bool scrolling=false, scroll_settle=false, reader_aa=false;
+        bool scrolling=false, scroll_settle=false, reader_aa=false, full_gc=false;
         int turn=0, orient=0;
         uint32_t sequence=consumed;
         TestJob job{};
@@ -355,13 +402,15 @@ void Worker(void*) {
             light=pending_light; turn=pending_turn; orient=pending_orient;
             reader_aa=pending_reader_aa;
             scrolling=pending_scroll; scroll_settle=pending_scroll_settle; pending_scroll_settle=false;
-            screen_change=pending_screen_change; pending_screen_change=false;
+            screen_change=(pending_screen_change & kScreenChange)!=0;
+            full_gc=(pending_screen_change & kFullGc)!=0; pending_screen_change=0;
             pending_full=pending_light=false; pending_turn=0;
             frame=true;
         }
         if (test_pending) { job=test_job; test_pending=false; test=true; }
         if (frame || test) busy.store(true);
         xSemaphoreGive(mailbox);
+        drawing_sequence=sequence;
         const bool persist_profile=save_profile.exchange(false);
         const int selected_profile=refresh_profile.load();
         if (selected_profile!=applied_profile) {
@@ -418,20 +467,24 @@ void Worker(void*) {
         }
         if (frame) {
             if (pattern>=0) Pattern(hl->front_fb,pattern,pattern_phase);
+            const uint32_t draws_before=updates.load();
+            const bool clean_reveal=full_gc || startup_frame;
+            const auto preparation=clean_reveal ? FullRefreshBeforeFrame(hl) : EPD_DRAW_SUCCESS;
             const auto analysis=EpdAnalyzeChanges(hl->back_fb,hl->front_fb,fb_bytes);
             const int changed=analysis.changed;
             const bool binary_pages=analysis.binary,gray_changed=analysis.gray_changed;
             const bool gray_page_turn=turn && !analysis.binary;
-            // Ordinary app navigation erases the physical old page to white
-            // before drawing the target. Required GC cleaning retains priority.
+            const int partials_before=partials.load();
+            const int64_t full_age_ms=(esp_timer_get_time()-last_full)/1000;
+            // 开机、待机和关机先对白屏全刷，再推白显现目标；普通切页沿用现有动画。
             // 小范围状态更新同样累计局刷次数，避免长期刷新却无法触发清屏。
-            bool promote=profile_full || full || state_unknown || (pattern<0 && !stream && !scrolling && !scroll_settle && changed>0 &&
-                partials.load()>=24 && esp_timer_get_time()-last_full>=60000000);
+            bool promote=!clean_reveal && (profile_full || full || state_unknown || (pattern<0 && !stream && !scrolling && !scroll_settle && changed>0 &&
+                partials.load()>=24 && esp_timer_get_time()-last_full>=60000000));
             const auto page_effect=static_cast<EpdEffect>(pattern<0 ? reader_effect.load() : effect.load());
             const bool wipe_turn=turn && page_effect==EpdEffect::Wipe;
-            const int wipe_orient=screen_change ? orient : EpdWipeOrient(orient,turn);
+            const int wipe_orient=screen_change || clean_reveal ? orient : EpdWipeOrient(orient,turn);
             bool combined=false;
-            if ((screen_change || wipe_turn) && !promote) {
+            if ((screen_change || wipe_turn || clean_reveal) && !promote && preparation==EPD_DRAW_SUCCESS) {
                 if (pattern<0 && !gray_on_panel && binary_pages && effect_fb) {
                     combined=Draw(hl,MODE_DU,false,false,false,PageDraw::Binary,wipe_orient)==EPD_DRAW_SUCCESS;
                     if (!combined) promote=true;
@@ -440,7 +493,7 @@ void Worker(void*) {
                     if (!combined) promote=true;
                 } else promote=true;
             }
-            if (!promote && !screen_change && !wipe_turn) Transition(hl,turn,page_effect,orient,gray_page_turn,reader_aa);
+            if (!promote && !screen_change && !wipe_turn && !clean_reveal) Transition(hl,turn,page_effect,orient,gray_page_turn,reader_aa);
             // A failed intermediate frame invalidates the physical baseline.
             promote |= state_unknown;
             // A status/button redraw must not recondition unchanged native gray bars.
@@ -448,14 +501,22 @@ void Worker(void*) {
             // explicit GC/GL pattern updates and deep cleaning.
             const bool quality_turn=turn && page_effect==EpdEffect::Page;
             int mode=promote ? MODE_GC16 : ((gray_changed || scroll_settle || (!scrolling && (quality_turn || gray_page_turn))) ? MODE_GL16 : MODE_DU);
-            const bool reset_gray=gray_on_panel &&
+            const bool reset_gray=!full_gc && gray_on_panel &&
                 (pattern!=static_cast<int>(EpdPattern::Gray) || promote || turn);
-            const auto result=!combined && (changed || promote || reset_gray || screen_change || turn || scroll_settle)
-                ? Draw(hl,mode,promote,reset_gray,false,PageDraw::None,orient,{!scroll_settle,reader_aa}) : EPD_DRAW_SUCCESS;
+            const auto result=preparation!=EPD_DRAW_SUCCESS ? preparation :
+                (!combined && (changed || promote || reset_gray || screen_change || turn || scroll_settle)
+                ? Draw(hl,mode,promote,reset_gray,false,PageDraw::None,orient,{!scroll_settle,reader_aa}) : EPD_DRAW_SUCCESS);
+            // 每个实际上屏的目标帧只记录一次，扫描期间不打印或遍历额外像素。
+            if (updates.load()!=draws_before || result!=EPD_DRAW_SUCCESS) {
+                ESP_LOGI(TAG,"route seq=%u merged=%u screen=%d full_gc=%d turn=%d stream=%d scroll=%d settle=%d "
+                         "changed=%d binary=%d gray=%d promote=%d combined=%d partials=%d gc_age=%lldms",
+                         (unsigned)sequence,(unsigned)(sequence-consumed-1),screen_change,full_gc,turn,stream,scrolling,scroll_settle,
+                         changed,binary_pages,gray_changed,promote,combined,partials_before,(long long)full_age_ms);
+            }
             if (result==EPD_DRAW_SUCCESS) {
                 profile_full=false;
                 gray_on_panel=pattern==static_cast<int>(EpdPattern::Gray);
-                if (mode==MODE_GC16) { partials.store(0); last_full=esp_timer_get_time(); }
+                if (mode==MODE_GC16 || clean_reveal) { partials.store(0); last_full=esp_timer_get_time(); }
                 else if (changed>0) ++partials;
                 if (light) Frontlight::GetInstance().RestoreBrightness();
             }
@@ -556,7 +617,9 @@ void EpdCancelPageTurn() {
         xSemaphoreGive(mailbox);
     }
 }
-void EpdRequestScreenChange() { next_screen_change.store(true); }
+void EpdRequestScreenChange(bool full_gc) {
+    next_screen_change.fetch_or(kScreenChange | (full_gc ? kFullGc : 0));
+}
 void EpdSetTestActive(bool active) { test_active.store(active); if (!active) EpdTestStop(); }
 bool EpdTestRequest(EpdPattern p,int mode,bool clean,int repeats) {
     if (!worker || !test_active.load() || repeats<1 || repeats>20 ||

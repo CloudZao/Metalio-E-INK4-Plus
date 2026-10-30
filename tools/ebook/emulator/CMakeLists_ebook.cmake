@@ -18,11 +18,14 @@ set(EBOOK_INCLUDES
 
 set(EBOOK_READER_SRC
     ${ESP_MAIN}/reader/book_session.cc
+    ${ESP_MAIN}/reader/book_session_nav.cc
     ${ESP_MAIN}/reader/book_disk_cache.cc
     ${ESP_MAIN}/reader/book_bookmarks.cc
     ${ESP_MAIN}/reader/ebook_document.cc
     ${ESP_MAIN}/reader/epub_document.cc
     ${ESP_MAIN}/reader/html_content.cc
+    ${ESP_MAIN}/reader/image_geometry.cc
+    ${ESP_MAIN}/reader/image_tone.cc
     ${ESP_MAIN}/reader/text_encoding.cc
     ${ESP_MAIN}/reader/txt_chapter.cc
     ${ESP_MAIN}/reader/zip_reader.cc

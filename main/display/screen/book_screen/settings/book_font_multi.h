@@ -17,7 +17,7 @@ int CurrentFontIndex();
 int FontListPageCount();
 /** @brief 钳制字体列表页码 */
 void ClampFontListPage();
-/** @brief 列表主文案：去掉 .ef；过长截断 */
+/** @brief 格式化字体列表名称，仅去掉 .ef 并保证 UTF-8 完整；显示省略由控件处理。 */
 void FormatFontListName(const std::string& file, char* out, size_t out_len);
 /** @brief 退出字体多选模式 */
 void ExitFontMultiMode(bool paint);

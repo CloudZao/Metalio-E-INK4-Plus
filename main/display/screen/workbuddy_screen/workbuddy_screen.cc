@@ -1,3 +1,6 @@
+#include "assets/lang_screen.h"
+#include "assets/lang_workbuddy.h"
+#include "assets/lang_config.h"
 #include "workbuddy_screen.h"
 #include "workbuddy_chat.h"
 #include "metalio_audio.h"
@@ -41,7 +44,6 @@ LV_FONT_DECLARE(font_awesome_30_1);
 namespace {
 constexpr const char* kTag = "WorkBuddyScreen";
 constexpr size_t kRate = 16000;
-constexpr size_t kMaxSamples = kRate * 15;
 constexpr size_t kMinSamples = kRate / 2;
 constexpr int64_t kLocalReplyWaitUs = 180LL * 1000000;
 constexpr int32_t kContentPad = UiSx(8);
@@ -94,11 +96,11 @@ enum class ConnectionState {
 
 const char* ConnectionText(ConnectionState state) {
     switch (state) {
-        case ConnectionState::Querying: return "（状态查询中）";
-        case ConnectionState::Failed: return "（查询失败）";
-        case ConnectionState::Online: return "（在线）";
-        case ConnectionState::Offline: return "（离线）";
-        default: return "（未知）";
+        case ConnectionState::Querying: return Lang::Strings::WB_STATUS_QUERYING;
+        case ConnectionState::Failed: return Lang::Strings::WB_STATUS_FAILED;
+        case ConnectionState::Online: return Lang::Strings::WB_STATUS_ONLINE;
+        case ConnectionState::Offline: return Lang::Strings::WB_STATUS_OFFLINE;
+        default: return Lang::Strings::WB_STATUS_UNKNOWN;
     }
 }
 
@@ -165,7 +167,7 @@ struct Authorization {
     std::mutex view_mutex; // 保护授权显示快照
     uint32_t revision = 1; // 授权显示快照版本
     std::string verification_url; // 用于二维码显示的手机授权地址
-    std::string message = "正在检查 WorkBuddy 授权…"; // 可直接显示的授权状态说明
+    std::string message = Lang::Strings::WB_AUTH_CHECKING; // 可直接显示的授权状态说明
 };
 
 /** @brief 一轮对话的共享状态；音频和网络任务不持有任何 LVGL 对象。 */
@@ -179,7 +181,7 @@ struct Turn {
     std::atomic<bool> held{true}; // 屏触或 BOOT 是否保持录音意图
     std::atomic<bool> finish_requested{false}; // 采集端请求结束本轮录音
     std::atomic<bool> finish_scheduled{false}; // 是否已经安排串行收尾
-    std::atomic<size_t> samples{0}; // 本轮已接收的单声道采样数
+    std::atomic<size_t> samples{0}; // 已接收的单声道采样数，仅累计到最短录音门槛
     DownloadGate gate; // 请求取消与 HTTP 绑定门闩
     // 音频任务先创建、再启动网络任务，此后只读该引用，录音数据由内部有界队列承载。
     std::shared_ptr<workbuddy::VoiceStream> stream; // 本轮实时语音连接及有界缓冲
@@ -422,11 +424,11 @@ void UpdateInputActions(Page* page) {
         if (disabled) lv_obj_add_state(button, LV_STATE_DISABLED);
         else lv_obj_remove_state(button, LV_STATE_DISABLED);
     };
-    SetLabelIfChanged(page->action_label, "同步消息");
+    SetLabelIfChanged(page->action_label, Lang::Strings::WB_SYNC_MESSAGES);
     set_disabled(page->local_messages_button, !authorized || busy || running || page->reauthorization_required);
     set_disabled(page->switch_account_button, busy || running);
     set_disabled(page->menu_button, busy || authorizing);
-    SetLabelIfChanged(page->refresh_label, refreshing ? "刷新中" : "刷新");
+    SetLabelIfChanged(page->refresh_label, refreshing ? Lang::Strings::WB_REFRESHING : Lang::Strings::CLOUD_REFRESH);
     if (Board::GetInstance().IsNetworkReady()) lv_obj_remove_flag(page->refresh_button, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(page->refresh_button, LV_OBJ_FLAG_HIDDEN);
     set_disabled(page->refresh_button, authorizing || refreshing);
@@ -487,19 +489,19 @@ bool WaitAuthorizationRefresh(const std::shared_ptr<Authorization>& authorizatio
  * @return 无；保留已经保存的设备授权，电脑离线时仍允许手动重试读取消息。
  */
 void VerifyLocalAssistant(const std::shared_ptr<Authorization>& authorization) {
-    SetAuthorizationView(authorization, AuthPhase::Checking, "设备授权已保存，正在确认电脑连接…");
+    SetAuthorizationView(authorization, AuthPhase::Checking, Lang::Strings::WB_AUTH_SAVED_CHECKING);
     auto status = workbuddy::GetLocalStatus(authorization->gate);
     if (authorization->gate.IsCancelled()) return;
     authorization->connection.store(ConnectionResult(status));
     authorization->reauthorization_required.store(status.code == 401 || status.code == 403);
     std::string message;
     if (status.ok) {
-        message = status.online ? "电脑已连接，可以开始使用。" :
-                "设备已绑定，电脑暂未连接。\n请在电脑打开对应账号的 WorkBuddy，连接后从菜单“同步消息”重试。";
+        message = status.online ? Lang::Strings::WB_CONNECTED :
+                Lang::Strings::WB_BOUND_OFFLINE;
     } else {
-        message = "设备已绑定，暂时无法连接电脑：\n" + status.error;
-        if (status.code == 401 || status.code == 403) message += "\n\n处理提示中的问题后，再点击右上角菜单“重新绑定”。";
-        else message += "\n\n无需重复扫码，可从菜单“同步消息”重试。";
+        message = Lang::Strings::WB_BOUND_CONNECT_FAILED + status.error;
+        if (status.code == 401 || status.code == 403) message += Lang::Strings::WB_RELINK_HINT;
+        else message += Lang::Strings::WB_SYNC_RETRY_HINT;
     }
     SetAuthorizationView(authorization, AuthPhase::Authorized, message);
 }
@@ -513,7 +515,7 @@ void RunAuthorization(const std::shared_ptr<Authorization>& authorization) {
     while (!authorization->gate.IsCancelled()) {
         auto awake = std::make_unique<PowerNeedHold>(PowerNeed::ForegroundNetwork);
         SetAuthorizationView(authorization, AuthPhase::Checking,
-                             create_new ? "正在生成新的授权二维码…" : "正在检查 WorkBuddy 授权…");
+                             create_new ? Lang::Strings::WB_QR_GENERATING : Lang::Strings::WB_AUTH_CHECKING);
         // 先恢复待处理会话：旧凭证在重新授权期间仍有效，先查询旧凭证会掩盖即将轮换的新凭证。
         auto session = create_new ? workbuddy::AuthorizationSession{} : workbuddy::LoadPendingSession();
         if (session.ok) authorization->switch_account.store(session.account_switch_allowed);
@@ -544,7 +546,7 @@ void RunAuthorization(const std::shared_ptr<Authorization>& authorization) {
             continue;
         }
         authorization->expires_in.store(session.expires_in);
-        const char* scan_hint = session.account_switch_allowed ? "请朋友扫码，用自己的账号完成授权" : "请用手机扫码登录并授权";
+        const char* scan_hint = session.account_switch_allowed ? Lang::Strings::WB_SCAN_FRIEND : Lang::Strings::WB_SCAN_AUTHORIZE;
         SetAuthorizationView(authorization, AuthPhase::Waiting, scan_hint, session.verification_url);
         const int64_t deadline = esp_timer_get_time() + static_cast<int64_t>(session.expires_in) * 1000000;
         int failures = 0;
@@ -571,7 +573,7 @@ void RunAuthorization(const std::shared_ptr<Authorization>& authorization) {
                     }
                 }
                 SetAuthorizationView(authorization, AuthPhase::Expired,
-                                     status.status == "failed" ? "授权未完成，请刷新二维码重试" : "二维码已过期，请点击刷新");
+                                     status.status == "failed" ? Lang::Strings::WB_AUTH_INCOMPLETE : Lang::Strings::WB_QR_EXPIRED);
                 awake.reset();
                 if (!WaitAuthorizationRefresh(authorization)) return;
                 break;
@@ -585,12 +587,12 @@ void RunAuthorization(const std::shared_ptr<Authorization>& authorization) {
                     break;
                 }
                 SetAuthorizationView(authorization, AuthPhase::Waiting,
-                                     "网络暂时中断，正在重新查询授权…", session.verification_url);
+                                     Lang::Strings::WB_AUTH_RECONNECTING, session.verification_url);
             } else {
                 failures = 0;
                 const bool authorizing = status.status == "authorizing";
                 SetAuthorizationView(authorization, authorizing ? AuthPhase::Authorizing : AuthPhase::Waiting,
-                                     authorizing ? "请在手机上完成腾讯 WorkBuddy 授权" : scan_hint,
+                                     authorizing ? Lang::Strings::WB_AUTHORIZE_PHONE : scan_hint,
                                      session.verification_url);
             }
             WaitAuthorization(authorization, session.poll_interval * 1000);
@@ -632,7 +634,7 @@ void TryStartAuthorization(Page* page) {
         s_authorization_workers.fetch_sub(1);
         authorization->running.store(false);
         page->authorization_retry_at_us = esp_timer_get_time() + 1000000;
-        SetAuthorizationView(authorization, AuthPhase::Checking, "正在等待上一次连接关闭…");
+        SetAuthorizationView(authorization, AuthPhase::Checking, Lang::Strings::WB_WAIT_CLOSE);
         return;
     }
     auto* argument = new (std::nothrow) std::shared_ptr<Authorization>(authorization);
@@ -643,7 +645,7 @@ void TryStartAuthorization(Page* page) {
         s_authorization_workers.fetch_sub(1);
         authorization->running.store(false);
         page->authorization_retry_at_us = esp_timer_get_time() + 2000000;
-        SetAuthorizationView(authorization, AuthPhase::Error, "内存不足，正在等待资源释放…");
+        SetAuthorizationView(authorization, AuthPhase::Error, Lang::Strings::WB_WAIT_MEMORY);
     }
 }
 
@@ -687,7 +689,7 @@ void StartAuthorization(Page* page, bool create_new, bool switch_account = false
     lv_obj_add_flag(page->binding_dialog, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(page->qr_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(page->content, LV_OBJ_FLAG_HIDDEN);
-    ShowIntro(page, switching ? "正在准备重新绑定…" : "正在检查绑定，请稍候…");
+    ShowIntro(page, switching ? Lang::Strings::WB_RELINK_PREPARING : Lang::Strings::WB_LINK_CHECKING);
     TryStartAuthorization(page);
 }
 
@@ -759,8 +761,8 @@ void WatchLocalReplies(const std::shared_ptr<Turn>& turn, workbuddy::TurnResult 
             const bool transient = reply.error_code <= 0 || reply.error_code == 429 || reply.error_code >= 500;
             if (transient && failures < 3) continue;
             reply.transcript = accepted.transcript;
-            reply.error = "助理指令已受理，但自动读取中断：\n" + reply.error +
-                    "\n\n助理任务可能继续执行。可从菜单“同步消息”查看，请勿重复发送同一指令。";
+            reply.error = Lang::Strings::WB_REPLY_INTERRUPTED + reply.error +
+                    Lang::Strings::WB_TASK_CONTINUES_HINT;
             if (received) {
                 // 移动已显示文字，错误时保留最后读到的回复，不复制另一份长文本。
                 std::lock_guard<std::mutex> lock(turn->result_mutex);
@@ -784,7 +786,7 @@ void WatchLocalReplies(const std::shared_ptr<Turn>& turn, workbuddy::TurnResult 
     if (turn->gate.IsCancelled()) return;
     if (!received) {
         accepted.reply =
-                "助理指令已受理，三分钟内暂未读到回复。助理任务仍可能继续执行，稍后可从菜单“同步消息”查看，请勿重复发送同一指令。";
+                Lang::Strings::WB_REPLY_TIMEOUT;
         PublishTurnResult(turn, std::move(accepted), Phase::Done);
     }
 }
@@ -813,22 +815,22 @@ void LogRequestMemory(const char* stage, const char* task_name, uint32_t stack_b
 workbuddy::TurnResult RecognizeTurn(const std::shared_ptr<Turn>& turn) {
     workbuddy::TurnResult result;
     if (turn->gate.IsCancelled() || !turn->held.load()) {
-        result.error = "录音已取消";
+        result.error = Lang::Strings::WB_RECORDING_CANCELLED;
         return result;
     }
     PowerNeedHold preparing_audio(PowerNeed::LocalMic);
     if (!MetalioAudio_WaitModeReady(kMetalioAudioInitWaitMs, [turn]() {
             return !turn->gate.IsCancelled() && turn->held.load();
         })) {
-        result.error = turn->gate.IsCancelled() || !turn->held.load() ? "录音已取消" :
+        result.error = turn->gate.IsCancelled() || !turn->held.load() ? Lang::Strings::WB_RECORDING_CANCELLED :
                 (MetalioAudio_GetState() == MetalioAudioState::Failed ?
-                 "音频模块初始化失败，请检查模块连接后重启设备" : "音频模块尚未就绪，请稍后重试");
+                 Lang::Strings::AUDIO_MODULE_INIT_FAILED : Lang::Strings::AUDIO_MODULE_NOT_READY);
     } else if (turn->gate.IsCancelled() || !turn->held.load()) {
-        result.error = "录音已取消";
+        result.error = Lang::Strings::WB_RECORDING_CANCELLED;
     } else result = turn->stream->Recognize(turn->gate,
             [turn]() {
                 if (!Application::GetInstance().Schedule([turn]() { StartCapture(turn); }, Application::TaskDomain::Audio)) {
-                    Fail(turn, "录音任务暂忙，请稍后重试");
+                    Fail(turn, Lang::Strings::WB_RECORDING_TASK_BUSY);
                     turn->stream->Cancel();
                 }
             },
@@ -877,12 +879,12 @@ void RequestTask(void* arg) {
                     result = workbuddy::PostText(transcript, turn->gate);
                     result.transcript = transcript;
                     if (!result.ok && (result.error_code <= 0 || result.error_code >= 500)) {
-                        result.error += "\n\n发送结果尚未确认，请先查看助理消息，避免重复发送同一指令。";
+                        result.error += Lang::Strings::WB_SEND_UNCONFIRMED_HINT;
                     }
                 } else {
                     std::lock_guard<std::mutex> lock(turn->result_mutex);
                     result.transcript = turn->result.transcript;
-                    result.error += "\n\n本次识别未完成，指令未发送到电脑。";
+                    result.error += Lang::Strings::WB_RECOGNITION_INCOMPLETE_HINT;
                 }
             } else {
                 // 采音失败或短录音错误优先于随后触发的网络取消错误，保留用户已经看到的文字。
@@ -921,13 +923,13 @@ const char* StartRequestTask(const std::shared_ptr<Turn>& turn, const char* name
     if (s_request_workers.fetch_add(1) >= 2) {
         s_request_workers.fetch_sub(1);
         LogRequestMemory("previous_workers_closing", name, stack_bytes);
-        return "上一轮连接正在关闭，请稍后再试";
+        return Lang::Strings::WB_PREVIOUS_CLOSING;
     }
     auto* argument = new (std::nothrow) std::shared_ptr<Turn>(turn);
     if (!argument) {
         s_request_workers.fetch_sub(1);
         LogRequestMemory("argument_allocation_failed", name, stack_bytes);
-        return "请求上下文内存不足，请稍后再试";
+        return Lang::Strings::WB_CONTEXT_MEMORY;
     }
     // TCB仍由IDF放内部RAM；只有大块栈使用PSRAM。NVS由client调度至Application内部栈。
     if (xTaskCreateWithCaps(RequestTask, name, stack_bytes, argument, 4, nullptr,
@@ -935,7 +937,7 @@ const char* StartRequestTask(const std::shared_ptr<Turn>& turn, const char* name
         delete argument;
         s_request_workers.fetch_sub(1);
         LogRequestMemory("task_allocation_failed", name, stack_bytes);
-        return "语音或消息任务内存不足，请稍后再试";
+        return Lang::Strings::WB_TASK_MEMORY;
     }
     return "";
 }
@@ -954,7 +956,7 @@ void Finish(const std::shared_ptr<Turn>& turn) {
             return;
         }
         if (turn->samples.load() < kMinSamples) {
-            Fail(turn, "请持续按住，看到倾听波形后再说话（至少半秒）");
+            Fail(turn, Lang::Strings::WB_HOLD_TO_SPEAK_HINT);
             if (turn->stream) turn->stream->Cancel();
             return;
         }
@@ -962,7 +964,7 @@ void Finish(const std::shared_ptr<Turn>& turn) {
         if (turn->stream) turn->stream->FinishInput();
     }, Application::TaskDomain::Audio)) {
         turn->finish_scheduled.store(false);
-        Fail(turn, "录音收尾任务暂忙，请稍后重试");
+        Fail(turn, Lang::Strings::WB_RECORDING_FINISH_BUSY);
         if (turn->stream) turn->stream->Cancel();
     }
 }
@@ -993,25 +995,20 @@ void StartCapture(const std::shared_ptr<Turn>& turn) {
             return false;
         }
         if (!samples || count == 0) {
-            Fail(current, "麦克风读取失败，请重新进入应用");
+            Fail(current, Lang::Strings::WB_MIC_READ_FAILED);
             current->finish_requested.store(true);
             return false;
         }
-        const size_t offset = current->samples.load();
-        const size_t copy = std::min(count, kMaxSamples - offset);
-        if (!current->stream->PushPcm(samples, copy)) {
-            // 网络失败退出与末帧可能并发，正常收尾不应被覆盖为“队列已满”。
-            if (!current->held.load() || !current->stream_running.load() || current->gate.IsCancelled() ||
+        const char* input_error = nullptr;
+        if (!current->stream->PushPcm(samples, count, input_error)) {
+            // 正常取消、结束或网络收尾沿用原结果，只发布明确的采音写入错误。
+            if (!input_error || !current->held.load() || !current->stream_running.load() || current->gate.IsCancelled() ||
                 current->phase.load() != Phase::Recording) return false;
-            Fail(current, "实时语音队列已满或连接中断，请重新说话");
+            Fail(current, input_error);
             current->finish_requested.store(true);
             return false;
         }
-        current->samples.store(offset + copy);
-        if (offset + copy == kMaxSamples) {
-            current->finish_requested.store(true);
-            return false;
-        }
+        current->samples.store(std::min(kMinSamples, current->samples.load() + count));
         return true;
     }, [turn]() {
         return !turn->gate.IsCancelled() && turn->held.load() &&
@@ -1066,7 +1063,7 @@ void Begin(Page* page) {
         }
     }, Application::TaskDomain::Audio)) {
         turn->held.store(false);
-        Fail(turn, "录音任务暂忙，请稍后重试");
+        Fail(turn, Lang::Strings::WB_RECORDING_TASK_BUSY);
     }
 }
 
@@ -1445,18 +1442,18 @@ bool PaintAuthorization(Page* page) {
         lv_obj_add_flag(page->content, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(page->qr_panel, LV_OBJ_FLAG_HIDDEN);
         const int seconds = authorization->expires_in.load();
-        const std::string validity = seconds % 60 == 0 ? std::to_string(seconds / 60) + " 分钟" :
-                std::to_string(seconds) + " 秒";
+        const std::string validity = seconds % 60 == 0 ? std::to_string(seconds / 60) + Lang::Strings::WB_MINUTE_SUFFIX :
+                std::to_string(seconds) + Lang::Strings::WB_SECOND_SUFFIX;
         const std::string hint = phase == AuthPhase::Expired || phase == AuthPhase::Error ? message :
-                (phase == AuthPhase::Authorizing ? "请在手机上确认绑定" : "手机扫码绑定助理\n二维码有效期 " + validity);
+                (phase == AuthPhase::Authorizing ? Lang::Strings::WB_CONFIRM_PHONE : Lang::Strings::WB_QR_VALIDITY_PREFIX + validity);
         SetLabelIfChanged(page->qr_hint, hint.c_str());
         if (url.empty()) lv_obj_add_flag(page->qr_frame, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_remove_flag(page->qr_frame, LV_OBJ_FLAG_HIDDEN);
         if (page->painted_url != url && !url.empty()) {
             if (lv_qrcode_update(page->qr, url.data(), url.size()) != LV_RESULT_OK) {
                 lv_obj_add_flag(page->qr_frame, LV_OBJ_FLAG_HIDDEN);
-                SetLabelIfChanged(page->qr_hint, "二维码生成失败，请点击刷新重试。");
-                message = "二维码暂时无法显示";
+                SetLabelIfChanged(page->qr_hint, Lang::Strings::WB_QR_FAILED);
+                message = Lang::Strings::WB_QR_DISPLAY_FAILED;
             } else page->painted_url = url;
         }
     } else {
@@ -1469,7 +1466,7 @@ bool PaintAuthorization(Page* page) {
             if (page->reauthorization_required) ScreenShowToast(message.c_str());
         } else {
             ShowIntro(page, authorization->switch_account.load() ?
-                    "正在准备重新绑定，请稍候…" : "正在检查绑定，请稍候…");
+                    Lang::Strings::WB_RELINK_WAIT : Lang::Strings::WB_LINK_CHECKING);
         }
     }
     UpdateInputActions(page);
@@ -1541,18 +1538,18 @@ void OnTick(lv_timer_t* timer) {
         page->chat.SetMessage(turn->ui_id, true, result.transcript, follow);
         if (final_transcript) page->final_transcript_painted = true;
     }
-    if (phase == Phase::Preparing && !same_turn) ScreenShowToast("正在连接语音服务，请继续按住");
-    if (phase == Phase::Recognizing && (!same_turn || phase != previous_phase)) ScreenShowToast("正在识别…");
+    if (phase == Phase::Preparing && !same_turn) ScreenShowToast(Lang::Strings::ASSISTANT_CONNECTING_HOLD);
+    if (phase == Phase::Recognizing && (!same_turn || phase != previous_phase)) ScreenShowToast(Lang::Strings::WB_RECOGNIZING);
     if (phase == Phase::Sending && (!same_turn || phase != previous_phase))
-        ScreenShowToast(turn->is_local_refresh ? "正在同步消息…" : "正在发送…");
+        ScreenShowToast(turn->is_local_refresh ? Lang::Strings::WB_SYNCING : Lang::Strings::WB_SENDING);
     std::string reply;
-    if (phase == Phase::Waiting) reply = "助理正在处理…";
+    if (phase == Phase::Waiting) reply = Lang::Strings::WB_PROCESSING;
     else if (phase == Phase::Done && !turn->is_local_refresh) reply = result.reply;
     else if (phase == Phase::Error) reply = result.error;
     if (!reply.empty()) page->chat.SetMessage(turn->ui_id, false, reply, turn->is_local_refresh);
     if (phase == Phase::Done && turn->is_local_refresh && (!same_turn || previous_phase != Phase::Done)) {
-        if (result.messages.empty()) ScreenShowToast("暂无可同步的文本消息");
-        else ScreenShowToast(page->chat.ReplaceMessages(result.messages) ? "消息已同步" : "消息排版失败，请稍后重试");
+        if (result.messages.empty()) ScreenShowToast(Lang::Strings::WB_NO_MESSAGES);
+        else ScreenShowToast(page->chat.ReplaceMessages(result.messages) ? Lang::Strings::WB_SYNCED : Lang::Strings::WB_LAYOUT_FAILED);
     }
     page->last_result_paint_us = esp_timer_get_time();
 }
@@ -1620,7 +1617,14 @@ void CreateMenus(Page* page, lv_coord_t bar_height) {
     };
     page->menu_overlay = create_overlay();
     auto* list = lv_obj_create(page->menu_overlay);
-    lv_obj_set_size(list, UiSx(140), LV_SIZE_CONTENT);
+    lv_point_t sync_size, relink_size;
+    lv_text_get_size(&sync_size, Lang::Strings::WB_SYNC_MESSAGES, fontpack_lv_font_ui(), 0, 0,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_text_get_size(&relink_size, Lang::Strings::WB_RELINK, fontpack_lv_font_ui(), 0, 0,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    const int menu_width = std::min<int>(LV_HOR_RES - UiSx(32),
+        std::max<int>(UiSx(140), std::max(sync_size.x, relink_size.x) + UiSx(56)));
+    lv_obj_set_size(list, menu_width, LV_SIZE_CONTENT);
     lv_obj_align(list, LV_ALIGN_TOP_RIGHT, -UiSx(16), bar_height + UiSy(54));
     lv_obj_set_style_bg_color(list, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(list, LV_OPA_COVER, 0);
@@ -1643,11 +1647,13 @@ void CreateMenus(Page* page, lv_coord_t bar_height) {
         lv_obj_set_style_text_font(icon, &font_awesome_30_1, 0);
         lv_obj_remove_flag(icon, LV_OBJ_FLAG_CLICKABLE);
         auto* label = Label(button, text, LV_SIZE_CONTENT);
+        lv_obj_set_width(label, 0);
+        lv_obj_set_flex_grow(label, 1);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_remove_flag(label, LV_OBJ_FLAG_CLICKABLE);
         return button;
     };
-    page->local_messages_button = action("同步消息", FONT_AWESOME_ARROWS_ROTATE);
+    page->local_messages_button = action(Lang::Strings::WB_SYNC_MESSAGES, FONT_AWESOME_ARROWS_ROTATE);
     page->action_label = lv_obj_get_child(page->local_messages_button, 1);
     lv_obj_add_event_cb(page->local_messages_button, OnLocalMessages, LV_EVENT_CLICKED, page);
     auto* separator = lv_obj_create(list);
@@ -1656,7 +1662,7 @@ void CreateMenus(Page* page, lv_coord_t bar_height) {
     lv_obj_set_style_bg_color(separator, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(separator, LV_OPA_COVER, 0);
     lv_obj_remove_flag(separator, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
-    page->switch_account_button = action("重新绑定", FONT_AWESOME_LINK);
+    page->switch_account_button = action(Lang::Strings::WB_RELINK, FONT_AWESOME_LINK);
     lv_obj_add_event_cb(page->switch_account_button, OnSwitchAccount, LV_EVENT_CLICKED, page);
 
     page->binding_dialog = create_overlay();
@@ -1671,9 +1677,9 @@ void CreateMenus(Page* page, lv_coord_t bar_height) {
     lv_obj_set_style_pad_row(dialog, UiSy(20), 0);
     lv_obj_set_flex_flow(dialog, LV_FLEX_FLOW_COLUMN);
     lv_obj_remove_flag(dialog, LV_OBJ_FLAG_SCROLLABLE);
-    auto* heading = Label(dialog, "重新绑定助理账号？", UiSx(376));
+    auto* heading = Label(dialog, Lang::Strings::WB_RELINK_TITLE, UiSx(376));
     lv_obj_set_style_text_align(heading, LV_TEXT_ALIGN_CENTER, 0);
-    Label(dialog, "新账号授权成功前，保留原绑定。已提交的任务可能继续执行。", UiSx(376));
+    Label(dialog, Lang::Strings::WB_RELINK_WARNING, UiSx(376));
     auto* row = lv_obj_create(dialog);
     lv_obj_remove_style_all(row);
     lv_obj_set_size(row, UiSx(376), UiSy(48));
@@ -1684,7 +1690,7 @@ void CreateMenus(Page* page, lv_coord_t bar_height) {
         auto* button = lv_button_create(row);
         StyleActionButton(button, i == 1);
         lv_obj_set_size(button, UiSx(182), UiSy(48));
-        auto* label = Label(button, i == 0 ? "暂不更换" : "继续绑定", UiSx(168));
+        auto* label = Label(button, i == 0 ? Lang::Strings::WB_RELINK_CANCEL : Lang::Strings::WB_RELINK_CONTINUE, UiSx(168));
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_center(label);
         lv_obj_add_event_cb(button, i == 0 ? OnCloseOverlay : OnConfirmSwitch, LV_EVENT_CLICKED, page);
@@ -1787,7 +1793,7 @@ lv_obj_t* WorkBuddyScreen::Create() {
             LV_OBJ_FLAG_SCROLL_MOMENTUM | LV_OBJ_FLAG_SCROLL_ELASTIC));
     lv_obj_remove_flag(page->content, LV_OBJ_FLAG_CLICKABLE);
     page->chat.Create(page->content);
-    ShowIntro(page, "正在检查绑定，请稍候…");
+    ShowIntro(page, Lang::Strings::WB_LINK_CHECKING);
     page->qr_panel = lv_obj_create(page->root);
     lv_obj_set_pos(page->qr_panel, UiSx(16), bar.height + UiSy(64));
     lv_obj_set_size(page->qr_panel, LV_HOR_RES - UiSx(32), LV_VER_RES - bar.height - UiSy(128));
@@ -1804,12 +1810,12 @@ lv_obj_t* WorkBuddyScreen::Create() {
     lv_qrcode_set_dark_color(page->qr, lv_color_black());
     lv_qrcode_set_light_color(page->qr, lv_color_white());
     lv_qrcode_set_quiet_zone(page->qr, true);
-    page->qr_hint = Label(page->qr_panel, "请使用手机扫码绑定", LV_HOR_RES - UiSx(48));
+    page->qr_hint = Label(page->qr_panel, Lang::Strings::WB_SCAN_LINK, LV_HOR_RES - UiSx(48));
     lv_obj_set_style_text_align(page->qr_hint, LV_TEXT_ALIGN_CENTER, 0);
     page->refresh_button = lv_button_create(page->qr_panel);
     StyleActionButton(page->refresh_button, false);
     lv_obj_set_size(page->refresh_button, UiSx(112), UiSy(48));
-    page->refresh_label = Label(page->refresh_button, "刷新", UiSx(96));
+    page->refresh_label = Label(page->refresh_button, Lang::Strings::CLOUD_REFRESH, UiSx(96));
     lv_obj_set_style_text_align(page->refresh_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(page->refresh_label);
     lv_obj_add_event_cb(page->refresh_button, OnRefresh, LV_EVENT_CLICKED, page);
@@ -1867,14 +1873,14 @@ void WorkBuddyScreen::SetStandby(bool standby) {
         if (page->turn && IsBusy(page)) {
             if (!page->turn->is_local_refresh) {
                 page->chat.SetMessage(page->turn->ui_id, false,
-                        "本次录音或等待已停止。已提交的任务可能继续执行，可同步消息查看。", false);
+                        Lang::Strings::WB_STOPPED_HINT, false);
             }
             page->turn.reset();
             page->painted_turn.reset();
             page->painted_phase = Phase::Idle;
             page->painted_result_revision = 0;
             ShowIntro(page, "");
-            ScreenShowToast("已停止录音或等待，可继续对话");
+            ScreenShowToast(Lang::Strings::WB_STOPPED);
         }
         if (page->authorization) {
             auto authorization = page->authorization;

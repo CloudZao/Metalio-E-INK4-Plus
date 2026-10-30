@@ -160,10 +160,6 @@ bool BookScreen::OnVkKeyPressUp(const char* key_name) {
     if (!VkPageRepeatOnPressUp(key_name)) {
         return false;
     }
-    // 松手时若还有未画的 delta，补一帧（通常定时器已停、积压很小）
-    if (s_reader_page_delta.load(std::memory_order_acquire) != 0) {
-        RequestRenderReaderPage();
-    }
     return true;
 }
 
@@ -207,7 +203,10 @@ bool BookScreen::OnVkKey(const char* key_name) {
             if (std::strcmp(key_name, "vk_prev") == 0) {
                 if (st.ttf.ttf_mode != BookUiState::TtfMode::kNone) {
                     BookLvAsync([](void*) {
-                        if (Book_State().ttf.ttf_mode == BookUiState::TtfMode::kList) SelectReadingSheetTab(1);
+                        if (!Book_State().ttf.ttf_selected.empty()) {
+                            Book_State().ttf.ttf_selected.clear();
+                            RebuildSettingsSheet();
+                        } else if (Book_State().ttf.ttf_mode == BookUiState::TtfMode::kList) SelectReadingSheetTab(1);
                         else ReturnToTtfList();
                     });
                 } else if (st.tap.tap_zone_ui == BookUiState::TapZoneUi::kPick) {
@@ -350,6 +349,7 @@ void BookScreen::OnEnterStandby() {
     PauseReadingTimeForStandby();
     auto& st = Book_State();
     if (st.reader.standby_paused) return;
+    CancelReaderPageWork();
     st.reader.standby_paused = true;
     s_reader_standby_hold.emplace();
     st.reader.layout_token.fetch_add(1);
@@ -364,7 +364,6 @@ void BookScreen::OnEnterStandby() {
     ScreenPaintCoalesceReset(&s_reader_paint);
     ScreenPaintCoalesceReset(&s_toc_paint);
     ScreenPaintCoalesceReset(&s_settings_sheet_paint);
-    s_reader_page_delta.store(0);
     PollStandbyWork();
 }
 
@@ -375,7 +374,7 @@ void BookScreen::PollStandbyWork() {
     if (StandbyScreen::IsActive()) {
         if (!st.reader.standby_detached) {
             if (st.reader.session) st.reader.session->DetachSdHandles();
-            ReleaseBookFont();
+            ReleaseBookFont(false);
             st.reader.standby_detached = true;
             s_reader_standby_hold.reset();
         }
@@ -384,7 +383,7 @@ void BookScreen::PollStandbyWork() {
     if (st.reader.session && st.reader.session->IsOpen()) {
         EnsureBookFont();
         if (st.reader.standby_detached) st.reader.session->ReattachSdHandles();
-        st.reader.session->SetFont(BookFont());
+        st.reader.session->SetFont(BookLayoutFont());
         st.reader.session->SetBackgroundPaused(false);
     }
     st.reader.standby_paused = st.reader.standby_detached = false;
@@ -402,16 +401,6 @@ void BookScreen::PollStandbyWork() {
         if (auto* disp = LVAdapterDisplay::Instance()) disp->RequestFullOnNextCommit();
     }
     SyncReaderAutoOrient();
-    if (st.reader.layout_again) {
-        const bool reload = st.reader.layout_reload_font;
-        st.reader.layout_again = st.reader.layout_reload_font = false;
-        ApplyReaderLayoutLive(reload);
-    } else if (st.reader.session->LiveRelayoutPending()) {
-        st.reader.layout_anchor = st.reader.session->CaptureLayoutAnchor();
-        StartLayoutWorker();
-    } else {
-        StartChapterPageWorker();
-    }
     RequestRenderReaderPage();
     if (return_to_ttf && st.reader.read_chrome == BookUiState::ReadChrome::kSettings) {
         ReturnToTtfList();

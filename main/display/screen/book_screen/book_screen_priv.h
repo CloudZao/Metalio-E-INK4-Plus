@@ -28,14 +28,12 @@ constexpr const char* kBookFontPath = SD_PATH_BOOK_FONT;
 constexpr const char* kBookFontPathAlt = SD_PATH_BOOK_FONT_ALT;
 // 源值对齐 397 book_screen；经 UiSx/UiSy 同比例到 470
 constexpr lv_coord_t kListPad = UiSx(16);   // 首页/书架外边距
-constexpr lv_coord_t kFooterH = UiSy(36);   // 阅读底栏槽高（397=36）
-// 分页高度相对正文区再收一点：末行字形/下划线(+4)可能略超 line_height，避免钻进底栏
-constexpr lv_coord_t kReadViewportBottomSlack = UiSy(4);
+constexpr lv_coord_t kFooterH = UiSy(36);   // 书架页码栏及阅读信息栏的基准槽高
 constexpr lv_coord_t kCoverSpineInset = UiSx(6);  // 书脊竖线相对左边框内缩
 constexpr lv_coord_t kRowBorderW = UiSx(2);
 constexpr lv_coord_t kRowRadius = UiSx(8);
 constexpr lv_coord_t kReadPadTop = kListPad;  // 与左右边距一致
-constexpr int kFontListPageSize = 5;         // 设置卡字体列表每页固定行数
+constexpr int kFontListPageSize = 6;         // 设置卡字体列表每页固定行数
 constexpr uint32_t kLayoutDebounceMs = 300;   // 抬起且停顿后再排版（定时器内仍会等手指）
 constexpr uint32_t kLayoutHintTickMs = 2000;  // 分阶段编排结果发布与提示到期检查
 constexpr int64_t kLayoutHintDoneUs = 1500 * 1000;  // 「完成」显示时长
@@ -136,6 +134,8 @@ struct BookUiState {
 
         // 异步打开：worker 解析，经 ScreenLvAsync 回 LVGL（禁止 worker 裸 lv_async_call）
         std::atomic<bool> opening{false};
+        int background_mode = 0, background_left = 0, background_width = 0, background_height = 0;
+        int background_screen_width = 0, background_top = 0; // 已发布背景层的几何
         std::atomic<uint32_t> open_token{0};
         bool prefs_reopen_pending = false; // LVGL: wait for all session/font users before reopen
         lv_timer_t* prefs_reopen_timer = nullptr;
@@ -154,7 +154,6 @@ struct BookUiState {
         // 章节全书页表后台重建：不挡翻页（与 layout_busy 分离）
         std::atomic<bool> chapter_pages_busy{false};
         std::atomic<uint32_t> chapter_pages_token{0};
-        bool chapter_pages_again = false;
         // 正文插图流式解码：不挡翻页；token 作废翻页/离页迟到回调
         std::atomic<bool> page_image_busy{false};
         std::atomic<uint32_t> page_image_token{0};
@@ -232,6 +231,7 @@ struct BookUiState {
         enum class TtfMode : uint8_t { kNone, kList, kConfirm, kProgress, kResult };
         TtfMode ttf_mode = TtfMode::kNone;
         std::vector<std::string> ttf_files;
+        std::vector<uint8_t> ttf_selected; // 非空时处于源字体多选模式
         int ttf_page = 0;
         std::string ttf_pick;      // 选中的字体文件名（fonts_ttf 内）
         int ttf_size_px = 40;      // 确认页步进器：20–80，默认 40；只输出一档
@@ -277,7 +277,6 @@ extern ScreenPaintCoalesce s_library_paint;
 extern ScreenPaintCoalesce s_shelf_check_paint;
 extern ScreenPaintCoalesce s_toc_paint;
 extern ScreenPaintCoalesce s_settings_sheet_paint;
-extern std::atomic<int> s_reader_page_delta;
 
 /** @brief 书库 UI 单例状态 */
 BookUiState& Book_State();

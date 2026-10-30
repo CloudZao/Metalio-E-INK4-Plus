@@ -1,12 +1,19 @@
 #include "cloudzao_endpoints.h"
 
+#include "sdkconfig.h"
+
 // Open-source build: leave blank; fill in for a private backend.
 const char cloudzao_host[] = "";
 const char cloudzao_ota_url[] = "";
 const char xiaozhi_ota_url[] = "";
+#if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
 const char yunxin_ota_url[] = "";
-const char yunxin_websocket_url[] = "";
 const char yunxin_app_key[] = "";
+#else
+const char yunxin_ota_url[] = "";
+const char yunxin_app_key[] = "";
+#endif
+const char yunxin_websocket_url[] = "";
 const char yunxin_token[] = "";
 const char cloudzao_book_tools_url[] = "";
 const char cloudzao_path_sinicloud_token[] = "";

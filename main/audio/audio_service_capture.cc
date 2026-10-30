@@ -1,3 +1,5 @@
+#include "assets/lang_screen.h"
+#include "assets/lang_config.h"
 #include "audio_service.h"
 #include "processors/no_audio_processor.h"
 #include <new>
@@ -12,15 +14,15 @@ bool AudioService::StartPcmCapture(std::function<bool(const int16_t*, size_t)> c
         if (error) *error = message;
         return false;
     };
-    if (service_stopped_) return fail("音频服务尚未就绪，请稍后重试");
-    if (!callback) return fail("录音回调不可用，请重新进入应用");
-    if (capture_processor_) return fail("上一轮录音尚未结束，请稍后重试");
+    if (service_stopped_) return fail(Lang::Strings::AUDIO_SERVICE_NOT_READY);
+    if (!callback) return fail(Lang::Strings::AUDIO_CALLBACK_UNAVAILABLE);
+    if (capture_processor_) return fail(Lang::Strings::AUDIO_RECORDING_BUSY);
     if (xEventGroupGetBits(event_group_) & busy)
-        return fail("麦克风正被其他功能使用，请结束后重试");
+        return fail(Lang::Strings::AUDIO_MIC_BUSY);
     auto processor = std::unique_ptr<AudioProcessor>(new (std::nothrow) NoAudioProcessor());
-    if (!processor) return fail("录音内存不足，请稍后重试");
+    if (!processor) return fail(Lang::Strings::AUDIO_RECORDING_MEMORY);
     processor->Initialize(codec_, OPUS_FRAME_DURATION_MS, nullptr);
-    if (processor->GetFeedSize() == 0) return fail("录音处理器初始化失败，请重新进入应用");
+    if (processor->GetFeedSize() == 0) return fail(Lang::Strings::AUDIO_PROCESSOR_FAILED);
     processor->OnOutput([this](std::vector<int16_t>&& data) { HandleCapturedAudio(std::move(data)); });
     processor->Start();
     {

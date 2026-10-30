@@ -51,6 +51,14 @@ public:
     }
     /** @brief 查询是否已建立工作索引。 */
     bool IsOpen() const { return !path_.empty(); }
+    /** @brief 按实际记录数建立独立只读窗口；源索引须已完成写入。 */
+    bool CloneReadOnly(BookDiskArray& out, size_t count) const {
+        if (count > count_) {
+            out.Reset(); out.good_ = false; out.error_ = BookReadError::kCacheIo;
+            return false;
+        }
+        return out.OpenReadOnly(path_, offset_, count);
+    }
     /** @brief 查询工作缓存是否仍可用。 */
     bool Good() const { return good_; }
     /** @brief 获取内存分配或 SD 缓存错误。 */
@@ -141,6 +149,10 @@ public:
     bool Push(Page&& page);
     /** @brief 同步正文及偏移索引，完成分页缓存。 */
     bool Finish();
+    /** @brief 建立独立只读句柄和窗口，不取得源工作文件的删除权。 */
+    bool CloneReadOnly(BookPageStore& out) const;
+    /** @brief 发布同一分页文件的读取缓存，不更换文件所有权或执行 I/O。 */
+    bool TakeReadCache(BookPageStore& other);
     /** @brief 查询工作缓存是否仍可用。 */
     bool Good() const { return good_ && offsets_.Good(); }
     /** @brief 获取内存分配或 SD 缓存错误。 */
@@ -161,6 +173,7 @@ private:
     BookDiskArray<uint32_t> offsets_; // 页记录偏移，固定窗口访问
     size_t count_ = 0; // 当前章页数
     bool count_only_ = false; // 后台仅计页时不写正文
+    bool read_only_ = false; // 借用工作文件，不随游标销毁删除
     mutable bool good_ = true; // 分页缓存 I/O 状态
     mutable BookReadError error_ = BookReadError::kNone; // 页面物化失败原因
     mutable Page cache_[2]; // 当前页和相邻页，避免书签扫描使当前指针失效

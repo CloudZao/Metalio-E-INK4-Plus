@@ -208,38 +208,12 @@ static void AsyncOpenDone(void* user_data) {
         }
     }
 
-    if (st.reader.settings_resume_after_open) {
-        st.reader.settings_resume_after_open = false;
-        st.reader.read_chrome = BookUiState::ReadChrome::kReading;
-        const int64_t t0 = esp_timer_get_time();
-        RenderReaderPage();
-        ESP_LOGI(TAG, "AsyncOpenDone RenderReaderPage cost=%lldms",
-                 static_cast<long long>((esp_timer_get_time() - t0) / 1000));
-        ShowReadSettingsSheet(false);
-        BeginReadingTimeTracking();
-        if (st.reader.session->LiveRelayoutPending() && st.reader.session->NeedsTxtIndexRebuild()) {
-            st.reader.layout_anchor = st.reader.session->CaptureLayoutAnchor();
-            StartLayoutWorker();
-        } else if (st.reader.session->NeedsChapterPageRebuild()) {
-            StartChapterPageWorker();
-        }
-        delete msg;
-        return;
-    }
-
-    {
-        const int64_t t0 = esp_timer_get_time();
-        RenderReaderPage();
-        ESP_LOGI(TAG, "AsyncOpenDone RenderReaderPage cost=%lldms",
-                 static_cast<long long>((esp_timer_get_time() - t0) / 1000));
-    }
+    const bool show_settings = st.reader.settings_resume_after_open;
+    st.reader.settings_resume_after_open = false;
+    st.reader.read_chrome = BookUiState::ReadChrome::kReading;
+    RenderReaderPage();
+    if (show_settings) ShowReadSettingsSheet(false);
     BeginReadingTimeTracking();
-    if (st.reader.session->LiveRelayoutPending() && st.reader.session->NeedsTxtIndexRebuild()) {
-        st.reader.layout_anchor = st.reader.session->CaptureLayoutAnchor();
-        StartLayoutWorker();
-    } else if (st.reader.session->NeedsChapterPageRebuild()) {
-        StartChapterPageWorker();
-    }
     delete msg;
 }
 

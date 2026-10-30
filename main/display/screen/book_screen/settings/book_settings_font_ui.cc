@@ -1,3 +1,4 @@
+#include "assets/lang_reader.h"
 #pragma GCC optimize("O1")
 
 #include "book_screen/book_screen_priv.h"
@@ -65,7 +66,7 @@ lv_obj_set_style_bg_opa(import_wrap, LV_OPA_TRANSP, 0);
 Book_DisableScroll(import_wrap);
 lv_obj_clear_flag(import_wrap, LV_OBJ_FLAG_CLICKABLE);
 lv_obj_t* import_lbl = lv_label_create(import_wrap);
-lv_label_set_text(import_lbl, "导入 TTF");
+lv_label_set_text(import_lbl, Lang::Strings::BOOK_IMPORT_TTF);
 lv_obj_set_style_text_font(import_lbl, Book_ItemFont(), 0);
 lv_obj_set_style_text_color(import_lbl, lv_color_black(), 0);
 lv_obj_clear_flag(import_lbl, LV_OBJ_FLAG_CLICKABLE);
@@ -159,11 +160,7 @@ lv_obj_clear_flag(font_list, LV_OBJ_FLAG_CLICKABLE);
 Book_DisableScroll(font_list);
 
 if (font_n <= 0) {
-    lv_obj_t* empty = lv_label_create(font_list);
-    lv_label_set_text(empty, Lang::Strings::BOOK_FONT_EMPTY);
-    lv_obj_set_style_text_font(empty, Book_ItemFont(), 0);
-    lv_obj_set_style_pad_all(empty, 12, 0);
-    lv_obj_clear_flag(empty, LV_OBJ_FLAG_CLICKABLE);
+    Book_ShowMessage(font_list, Lang::Strings::BOOK_FONT_EMPTY, Book_ItemFont());
 } else {
     for (int i = 0; i < kFontListPageSize; ++i) {
         const int idx = font_page_start + i;
@@ -181,7 +178,8 @@ if (font_n <= 0) {
 
         lv_obj_t* name = lv_label_create(row);
         lv_obj_set_flex_grow(name, 1);
-        lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(name, 0);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_clear_flag(name, LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_t* px = lv_label_create(row);
@@ -246,7 +244,7 @@ if (font_n <= 0) {
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_user_data(row, reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
 
-        char name_buf[40];
+        char name_buf[SD_FILE_NAME_CAPACITY];
         FormatFontListName(fe.file, name_buf, sizeof(name_buf));
         lv_label_set_text(name, name_buf);
         lv_obj_set_style_text_font(name, on ? Book_ListFont() : Book_ItemFont(), 0);

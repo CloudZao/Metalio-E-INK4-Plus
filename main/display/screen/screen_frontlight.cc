@@ -1,7 +1,10 @@
+#include "assets/lang_screen.h"
+#include "assets/lang_config.h"
 #pragma GCC optimize("O1")
 
 #include "screen_frontlight.h"
 #include "screen_common.h"
+#include "screen_text.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
 #include "standby_screen/standby_screen.h"
 #include "cloud_screen/ap/ap_transfer.h"
@@ -13,6 +16,7 @@
 #include "lv_adapter_epdiy.h"
 #include "power_policy.h"
 #include "settings.h"
+#include "settings_screen/settings_frontlight_tab.h"
 #include "ui_scale.h"
 
 #include <algorithm>
@@ -111,7 +115,7 @@ void RefreshLightSwitch() {
     lv_obj_set_style_bg_color(s_ui.light_switch, on ? lv_color_black() : lv_color_white(), 0);
     for (auto* label : {s_ui.light_title, s_ui.light_status})
         lv_obj_set_style_text_color(label, on ? lv_color_white() : lv_color_black(), 0);
-    lv_label_set_text(s_ui.light_status, on ? "已开启" : "已关闭");
+    lv_label_set_text(s_ui.light_status, on ? Lang::Strings::QUICK_ENABLED : Lang::Strings::QUICK_DISABLED);
     for (auto* slider : {s_ui.brightness, s_ui.warmth})
         lv_obj_set_style_bg_color(slider, on ? lv_color_black() : lv_color_white(), LV_PART_INDICATOR);
     lv_image_set_src(s_ui.light_icon, on ? &kQuickBrightnessImage : &kQuickBrightnessMask);
@@ -181,8 +185,12 @@ void RefreshWifi(lv_timer_t*) {
     // 网络状态不变时不改对象，避免周期性触发墨水屏刷新。
     if (state == s_ui.wifi_state) return;
     s_ui.wifi_state = state;
-    static constexpr const char* status[] = {"切换中", "操作失败，请重试", "已关闭", "已开启", "已连接", "连接中", "未连接"};
+    const char* status[] = {Lang::Strings::QUICK_SWITCHING, Lang::Strings::QUICK_FAILED, Lang::Strings::QUICK_DISABLED, Lang::Strings::QUICK_ENABLED, Lang::Strings::QUICK_CONNECTED, Lang::Strings::QUICK_CONNECTING, Lang::Strings::QUICK_DISCONNECTED};
     lv_label_set_text(s_ui.wifi_status, status[static_cast<int>(state)]);
+    lv_obj_update_layout(s_ui.wifi);
+    ScreenFitLabel(s_ui.wifi_status, lv_obj_get_width(s_ui.wifi_status),
+                   lv_obj_get_height(s_ui.wifi) * 2 / 5 - 4, fontpack_lv_font_get(25, 2));
+    lv_obj_set_style_text_align(s_ui.wifi_status, LV_TEXT_ALIGN_LEFT, 0);
     const auto foreground = enabled ? lv_color_white() : lv_color_black();
     lv_obj_set_style_bg_color(s_ui.wifi, enabled ? lv_color_black() : lv_color_white(), 0);
     for (auto* label : {s_ui.wifi_icon, s_ui.wifi_title, s_ui.wifi_status})
@@ -333,6 +341,7 @@ void ScreenFrontlightHide() {
     SaveLight();
     if (auto* display = LvAdapterEpdiy::Instance()) display->RequestFullOnNextCommit();
     lv_obj_delete(s_ui.root);
+    SettingsFrontlightTab_Refresh();
 }
 
 void ScreenFrontlightShow() {
@@ -379,7 +388,8 @@ void ScreenFrontlightShow() {
     const int slider_w = width * 122 / kDesignWidth;
     const int wifi_h = height * 107 / kDesignHeight;
     const auto* status_font = fontpack_lv_font_get(25, 2);
-    s_ui.wifi = Box(panel, width * 58 / kDesignWidth, top, width * 283 / kDesignWidth, wifi_h);
+    const int switch_w = width * 310 / kDesignWidth;
+    s_ui.wifi = Box(panel, width * 58 / kDesignWidth, top, switch_w, wifi_h);
     lv_obj_set_style_bg_opa(s_ui.wifi, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_ui.wifi, 2, 0);
     lv_obj_set_style_border_color(s_ui.wifi, lv_color_black(), 0);
@@ -393,14 +403,14 @@ void ScreenFrontlightShow() {
     s_ui.wifi_title = Label(s_ui.wifi, "Wi-Fi");
     lv_obj_set_pos(s_ui.wifi_title, width * 100 / kDesignWidth, wifi_h / 5);
     s_ui.wifi_status = Label(s_ui.wifi, "");
-    lv_obj_set_width(s_ui.wifi_status, width * 283 / kDesignWidth - kQuickCatPawImage.header.w + 15 - width * 100 / kDesignWidth - 8);
+    lv_obj_set_width(s_ui.wifi_status, switch_w - kQuickCatPawImage.header.w - 4 - width * 100 / kDesignWidth - 8);
     lv_obj_set_style_text_font(s_ui.wifi_status, status_font, 0);
     lv_obj_set_height(s_ui.wifi_status, status_font->line_height);
     lv_label_set_long_mode(s_ui.wifi_status, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(s_ui.wifi_status, width * 100 / kDesignWidth, wifi_h * 3 / 5);
     s_ui.wifi_paw = NativeIcon(s_ui.wifi, &kQuickCatPawImage);
     lv_obj_align(s_ui.wifi_paw, LV_ALIGN_RIGHT_MID, -4, 0);
-    s_ui.light_switch = Box(panel, width * 58 / kDesignWidth, top + slider_h - wifi_h, width * 283 / kDesignWidth, wifi_h);
+    s_ui.light_switch = Box(panel, width * 58 / kDesignWidth, top + slider_h - wifi_h, switch_w, wifi_h);
     lv_obj_set_style_bg_opa(s_ui.light_switch, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_ui.light_switch, 2, 0);
     lv_obj_set_style_border_color(s_ui.light_switch, lv_color_black(), 0);
@@ -409,7 +419,7 @@ void ScreenFrontlightShow() {
     lv_obj_add_event_cb(s_ui.light_switch, ToggleLight, LV_EVENT_CLICKED, nullptr);
     s_ui.light_icon = NativeIcon(s_ui.light_switch, &kQuickBrightnessImage);
     lv_obj_align(s_ui.light_icon, LV_ALIGN_LEFT_MID, 6, -16);
-    s_ui.light_title = Label(s_ui.light_switch, "前光");
+    s_ui.light_title = Label(s_ui.light_switch, Lang::Strings::SETTINGS_FRONTLIGHT_TITLE);
     lv_obj_set_pos(s_ui.light_title, width * 100 / kDesignWidth, wifi_h / 5);
     s_ui.light_status = Label(s_ui.light_switch, "");
     lv_obj_set_style_text_font(s_ui.light_status, status_font, 0);

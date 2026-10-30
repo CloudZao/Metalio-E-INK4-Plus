@@ -444,6 +444,10 @@ void SettingsTestAudio_BuildRow(lv_obj_t* parent, lv_obj_t* root_scr) {
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, lv_pct(100));
     lv_obj_set_height(row, kRowH);
+    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(row, 1, 0);
+    lv_obj_set_style_border_color(row, lv_color_black(), 0);
+    lv_obj_set_style_pad_hor(row, 4, 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, 6, 0);
@@ -453,11 +457,6 @@ void SettingsTestAudio_BuildRow(lv_obj_t* parent, lv_obj_t* root_scr) {
     lv_obj_add_event_cb(row, OnRecordPressed, LV_EVENT_PRESSED, nullptr);
     lv_obj_add_event_cb(row, OnRecordReleased, LV_EVENT_RELEASED, nullptr);
     lv_obj_add_event_cb(row, OnRecordReleased, LV_EVENT_PRESS_LOST, nullptr);
-
-    s_icon = lv_image_create(row);
-    lv_obj_set_size(s_icon, kIconSz, kIconSz);
-    lv_obj_clear_flag(s_icon, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(s_icon, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t* title_lbl = lv_label_create(row);
     lv_label_set_text(title_lbl, Lang::Strings::SETTINGS_TEST_AUDIO_TITLE);
@@ -471,7 +470,13 @@ void SettingsTestAudio_BuildRow(lv_obj_t* parent, lv_obj_t* root_scr) {
     lv_obj_remove_style_all(spacer);
     lv_obj_set_flex_grow(spacer, 1);
     lv_obj_set_height(spacer, 1);
+    lv_obj_clear_flag(spacer, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(spacer, LV_OBJ_FLAG_CLICKABLE);
+
+    s_icon = lv_image_create(row);
+    lv_obj_set_size(s_icon, kIconSz, kIconSz);
+    lv_obj_clear_flag(s_icon, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_icon, LV_OBJ_FLAG_HIDDEN);
 
     s_record_btn = lv_obj_create(row);
     lv_obj_remove_style_all(s_record_btn);
@@ -481,6 +486,7 @@ void SettingsTestAudio_BuildRow(lv_obj_t* parent, lv_obj_t* root_scr) {
     lv_obj_set_style_border_color(s_record_btn, lv_color_black(), 0);
     lv_obj_set_style_border_width(s_record_btn, kSettingsBorderW, 0);
     lv_obj_set_style_radius(s_record_btn, kSettingsOptionRadius, 0);
+    lv_obj_clear_flag(s_record_btn, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(s_record_btn, LV_OBJ_FLAG_CLICKABLE);
 
     s_record_lbl = lv_label_create(s_record_btn);

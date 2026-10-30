@@ -112,6 +112,7 @@ void PresentAppendUi(bool jump_to_new, int reflow_from_page, bool show_content) 
         return;
     }
     DisplayLockGuard lock(display);
+    if (!lock) return;
     if (!AssistantScreen::IsActive() || Assistant_State().chrome.content == nullptr || !lv_obj_is_valid(Assistant_State().chrome.content)) {
         return;
     }
@@ -210,6 +211,7 @@ bool Assistant_ReplaceYunxinSpeech(FlowList&& chunk) {
     auto* display = Board::GetInstance().GetDisplay();
     if (display != nullptr) {
         DisplayLockGuard lock(display);
+        if (!lock) return true;
         if (AssistantScreen::IsActive()) {
             if (repaint) { Assistant_RequestRenderCurrentPage(); }
             else { Assistant_UpdatePageIndicator(); }

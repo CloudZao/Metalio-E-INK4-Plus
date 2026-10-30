@@ -395,4 +395,24 @@ bool EpubDocument::StreamChapterBlocks(int spine_index, const ContentBlockSink& 
     return true;
 }
 
+bool EpubDocument::DetectPageImages() {
+    if (spine_.empty()) return false;
+    size_t markup_bytes = 0;
+    for (int index = 0; index < SpineCount(); ++index) {
+        size_t size = 0;
+        // 一页一图的标记文档应很小；大型或复杂文档保留普通图文排版。
+        if (!GetItemUncompressedSize(spine_[index].href.c_str(), &size) || size > 128 * 1024 ||
+            size > 4 * 1024 * 1024 - markup_bytes) return false;
+        markup_bytes += size;
+        int images = 0;
+        const bool ok = StreamChapterBlocks(index, [&](ContentBlock&& block) {
+            if (block.kind == ContentKind::kImage) return ++images <= 1;
+            for (unsigned char c : block.text) if (!std::isspace(c)) return false;
+            return true;
+        });
+        if (!ok || images != 1) return false;
+    }
+    return true;
+}
+
 }  // namespace reader

@@ -24,16 +24,21 @@ constexpr int kKeyPower = 3;
 
 int MeasureKeyHoldMs(int key_index)
 {
+    const int64_t started = esp_timer_get_time();
     int held_ms = 0;
-    while (MetalioKeys_IsDown(key_index) && held_ms < 10000) {
-        vTaskDelay(pdMS_TO_TICKS(20));
-        held_ms += 20;
+    for (;;) {
+        if (key_index == kKeyPower && MetalioKeys_TakeShutdownPulse()) {
+            return kPowerLongPressMs;
+        }
+        if (!MetalioKeys_IsDown(key_index)) break;
+        held_ms = static_cast<int>((esp_timer_get_time() - started) / 1000);
         if (key_index == kKeyBoot && held_ms >= kBootLongPressMs) {
             break;
         }
         if (key_index == kKeyPower && held_ms >= kPowerLongPressMs) {
             break;
         }
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
     return held_ms;
 }
@@ -65,9 +70,6 @@ void RunStandbyPowerKeyGesture(int held_ms)
         ESP_LOGW(TAG, "POWER standby long %d ms -> power off", held_ms);
         pwr::BeginPowerOffLocked();
         xSemaphoreGive(pwr::mu);
-        while (MetalioKeys_IsDown(kKeyPower)) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
     } else {
         ESP_LOGI(TAG, "POWER standby short %d ms -> dismiss", held_ms);
         pwr::RequestDismissStandbyOverlay();
@@ -76,17 +78,22 @@ void RunStandbyPowerKeyGesture(int held_ms)
 
 bool DispatchStandbyPowerKey(int held_ms)
 {
-    xSemaphoreTake(pwr::mu, portMAX_DELAY);
-    pwr::WakeTouchLocked();
-    pwr::ResetStandbyElapsedLocked();
-    pwr::last_user_activity_us = esp_timer_get_time();
-    xSemaphoreGive(pwr::mu);
+    if (held_ms < kPowerLongPressMs) {
+        xSemaphoreTake(pwr::mu, portMAX_DELAY);
+        pwr::WakeTouchLocked();
+        pwr::ResetStandbyElapsedLocked();
+        pwr::last_user_activity_us = esp_timer_get_time();
+        xSemaphoreGive(pwr::mu);
+    }
     RunStandbyPowerKeyGesture(held_ms);
     return true;
 }
 
 bool PollStandbyPhysicalKeys()
 {
+    if (MetalioKeys_TakeShutdownPulse()) {
+        return DispatchStandbyPowerKey(kPowerLongPressMs);
+    }
     if (StandbyScreen::HasWakeRequest()) {
         pwr::RequestDismissStandbyOverlay();
         return true;
@@ -120,6 +127,9 @@ bool PollStandbyPhysicalKeys()
  */
 bool HandleGpioWakeFromLightSleep()
 {
+    if (MetalioKeys_TakeShutdownPulse()) {
+        return DispatchStandbyPowerKey(kPowerLongPressMs);
+    }
     bool latch_boot = false;
     bool latch_power = false;
     power_hw_gpio_wake_latch_get(&latch_boot, &latch_power);
@@ -136,7 +146,7 @@ bool HandleGpioWakeFromLightSleep()
     ESP_LOGI(TAG, "EXT1 wake (POWER/P17) latch_power=%d", saw_power ? 1 : 0);
 
     if (saw_power) {
-        const int held = MetalioKeys_IsDown(kKeyPower) ? MeasureKeyHoldMs(kKeyPower) : 0;
+        const int held = MeasureKeyHoldMs(kKeyPower);
         return DispatchStandbyPowerKey(held);
     }
     // 脚已松开：仍是 POWER 唤醒事件 → 短按 dismiss（勿再 Poll BOOT）

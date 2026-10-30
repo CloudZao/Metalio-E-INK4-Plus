@@ -59,9 +59,18 @@ void VkKey_AttachScreen(lv_obj_t* scr, const char* name);
  */
 void VkKey_AttachScreen(lv_obj_t* scr, const char* name, const VkKeyScreenDesc& desc);
 
-/** @brief 分发虚拟键短按 */
+/** @brief 在 UI 任务分发虚拟键短按 */
 void VkKey_Dispatch(const char* key_name);
-/** @brief 分发虚拟键长按；true=已消费 */
+/** @brief 在 UI 任务分发虚拟键长按；true=已消费 */
 bool VkKey_OnLongPress(const char* key_name);
-/** @brief 分发虚拟键抬起；true=已消费 */
+/** @brief 在 UI 任务分发虚拟键抬起；true=已消费 */
 bool VkKey_OnPressUp(const char* key_name);
+enum class VkTouchPhase {
+    kDown, // 按下
+    kLong, // 达到长按阈值
+    kUp, // 抬起
+};
+/** @brief 触摸采样任务投递盖板键边沿；不访问 LVGL，也不等待 UI。 */
+void VkKey_PostTouch(VkTouchPhase phase, const char* key_name);
+/** @brief 在 UI 任务按序处理盖板键边沿，保持长按与抬起配对。 */
+void VkKey_DrainTouch();

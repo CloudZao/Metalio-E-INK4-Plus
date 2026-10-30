@@ -53,13 +53,28 @@ void FormatBookReadPctLabel(char* out, size_t out_sz, int pct_x10) {
     std::snprintf(out, out_sz, fmt, pct_x10 / 10, pct_x10 % 10);
 }
 
-// 首页统计：不再全库 Peek .pos。 - 最近/继续：book_home_snapshot MRU（写进度时维护）；空则不展示
+// 首页统计从单书内存缓存汇总；缓存未就绪时使用持久化快照。
 HomeStats CollectHomeStats(const std::vector<reader::BookInfo>& books) {
     HomeStats out;
-    const auto agg = reader::book_home_snapshot::LoadAggregateStats();
-    if (agg.valid) {
-        out.total_seconds = agg.total_seconds;
-        out.finished_count = agg.finished_count;
+    if (reader::book_progress_cache::IsReady()) {
+        for (const auto& book : books) {
+            reader::BookSession::ProgressPeek peek;
+            if (!reader::book_progress_cache::TryGet(book.path.c_str(), peek)) {
+                continue;
+            }
+            out.total_seconds = UINT32_MAX - out.total_seconds < peek.reading_seconds
+                                    ? UINT32_MAX
+                                    : out.total_seconds + peek.reading_seconds;
+            if (peek.progress_x10 >= 1000) {
+                ++out.finished_count;
+            }
+        }
+    } else {
+        const auto agg = reader::book_home_snapshot::LoadAggregateStats();
+        if (agg.valid) {
+            out.total_seconds = agg.total_seconds;
+            out.finished_count = agg.finished_count;
+        }
     }
 
     if (books.empty()) {

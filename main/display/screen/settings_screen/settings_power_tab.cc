@@ -6,6 +6,7 @@
 #include "power_policy.h"
 #include "settings_common.h"
 #include "ui_scale.h"
+#include "screen_text.h"
 
 namespace {
 
@@ -201,6 +202,7 @@ lv_obj_t* CreateCompactOption(lv_obj_t* row, const char* title, lv_event_cb_t cb
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(lbl);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn, ScreenFitButtonLabelOnSize, LV_EVENT_SIZE_CHANGED, lbl);
 
     SettingsStyleSelectable(btn, lbl, false);
     return btn;

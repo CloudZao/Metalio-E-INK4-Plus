@@ -41,6 +41,8 @@ public:
 
     /** @brief 流式解压章节 HTML 并同步消费正文，不受整章内存大小限制。 */
     bool StreamChapterBlocks(int spine_index, const ContentBlockSink& sink);
+    /** @brief 有界检查所有阅读顺序条目是否均为单图页面，正文文字或复杂页面返回 false */
+    bool DetectPageImages();
     /** @brief 获取最近一次读取失败的原因。 */
     BookReadError Error() const { return error_; }
 

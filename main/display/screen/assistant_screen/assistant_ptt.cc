@@ -1,3 +1,5 @@
+#include "assets/lang_screen.h"
+#include "assets/lang_config.h"
 // assistant_ptt.cc — split from assistant_screen.cc
 #include "assistant_screen_priv.h"
 
@@ -337,7 +339,7 @@ void AsyncSyncPttOverlay(void* /*arg*/) {
     const bool connecting = AssistantScreen::IsActive() && Assistant_IsAnyPttHeld() &&
         Application::GetInstance().GetDeviceState() == kDeviceStateConnecting;
     if (connecting && !Assistant_State().ptt.ptt_connecting_hint_shown) {
-        ScreenShowToast("正在连接语音服务，请继续按住");
+        ScreenShowToast(Lang::Strings::ASSISTANT_CONNECTING_HOLD);
     }
     Assistant_State().ptt.ptt_connecting_hint_shown = connecting;
     Assistant_ApplyPttWave(Assistant_IsPttWaveWanted());

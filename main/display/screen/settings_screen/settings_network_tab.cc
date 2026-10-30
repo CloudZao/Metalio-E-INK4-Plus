@@ -11,6 +11,7 @@
 #include "screen_common.h"
 #include "wifi_board.h"
 #include "network_screen/network_screen.h"
+#include "sdkconfig.h"
 
 
 #include <atomic>
@@ -279,7 +280,7 @@ void SwitchNetworkTask(void* arg) {
     vTaskDelete(nullptr);
 }
 
-void OnNetworkOptionClicked(lv_event_t* e) {
+[[maybe_unused]] void OnNetworkOptionClicked(lv_event_t* e) {
     const auto target = static_cast<NetworkType>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
     if (CurrentNetworkType() == target) {
         // 点已选中的 4G：确保 SIM 区可见；点已选中的 WiFi：确保配网区可见
@@ -560,7 +561,7 @@ void AsyncRefreshSimUi(void* /*user_data*/) {
     }
 }
 
-void ScheduleLoadSimSlotFromNvs() {
+[[maybe_unused]] void ScheduleLoadSimSlotFromNvs() {
     Application::GetInstance().Schedule([]() {
         Settings settings("network", false);
         SetCachedSimSlot(settings.GetInt("sim_slot", kSimSlotExternal));
@@ -583,12 +584,15 @@ void BuildWifiConfigSection(lv_obj_t* page) {
     lv_obj_clear_flag(s_ui.wifi_cfg_box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(s_ui.wifi_cfg_box, LV_OBJ_FLAG_CLICKABLE);
 
+    #if !CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
     lv_obj_t* split = lv_obj_create(s_ui.wifi_cfg_box);
     lv_obj_remove_style_all(split);
     lv_obj_set_size(split, lv_pct(100), 2);
     lv_obj_set_style_bg_color(split, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(split, LV_OPA_COVER, 0);
     lv_obj_clear_flag(split, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(split, LV_OBJ_FLAG_SCROLLABLE);
+    #endif
 
     lv_obj_t* title = lv_label_create(s_ui.wifi_cfg_box);
     lv_label_set_text(title, Lang::Strings::SETTINGS_NET_WIFI_CFG_TITLE);
@@ -611,7 +615,7 @@ void BuildWifiConfigSection(lv_obj_t* page) {
     SetWifiConfigSectionVisible(false);
 }
 
-void BuildSimSection(lv_obj_t* page) {
+[[maybe_unused]] void BuildSimSection(lv_obj_t* page) {
     s_ui.sim_box = lv_obj_create(page);
     lv_obj_remove_style_all(s_ui.sim_box);
     lv_obj_set_width(s_ui.sim_box, lv_pct(100));
@@ -684,6 +688,10 @@ void SettingsNetworkTab_Build(lv_obj_t* page) {
     s_sim_switch_pending = false;
     s_ui.root_scr = lv_obj_get_screen(page);
 
+    #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
+    BuildWifiConfigSection(page);
+    SetWifiConfigSectionVisible(true);
+    #else
     lv_obj_t* title = lv_label_create(page);
     lv_label_set_text(title, Lang::Strings::SETTINGS_NET_MODE_TITLE);
     lv_obj_set_style_text_font(title, fontpack_lv_font_ui(), 0);
@@ -717,4 +725,5 @@ void SettingsNetworkTab_Build(lv_obj_t* page) {
     if (IsCellNetwork()) {
         ScheduleSimSlotQuery();
     }
+    #endif
 }

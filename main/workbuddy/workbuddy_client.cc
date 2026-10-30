@@ -1,3 +1,5 @@
+#include "assets/lang_workbuddy.h"
+#include "assets/lang_config.h"
 #include "workbuddy_client.h"
 #include "workbuddy_voice_stream.h"
 
@@ -112,7 +114,7 @@ Result OnStorageStack(Action action, Result fallback, std::string* error = nullp
         pending->value = action();
         pending->stage.store(StorageStage::Done, std::memory_order_release);
     }, Application::TaskDomain::Storage)) {
-        if (error) *error = "设备存储任务暂忙，请稍后重试";
+        if (error) *error = Lang::Strings::WB_STORAGE_TASK_BUSY;
         return fallback;
     }
     const int64_t deadline = esp_timer_get_time() + 5000000;
@@ -121,7 +123,7 @@ Result OnStorageStack(Action action, Result fallback, std::string* error = nullp
             StorageStage expected = StorageStage::Queued;
             if (pending->stage.compare_exchange_strong(expected, StorageStage::Cancelled)) {
                 ESP_LOGW(kTag, "NVS dispatch timed out: task=%s", pcTaskGetName(nullptr));
-                if (error) *error = "设备存储暂忙，请稍后重试";
+                if (error) *error = Lang::Strings::WB_STORAGE_BUSY;
                 return fallback;
             }
         }
@@ -256,16 +258,16 @@ JsonReply Request(const char* method, const std::string& path, std::string conte
     if (gate.IsCancelled() || StandbyScreen::IsActive()) return reply;
     PowerNeedHold network_hold(PowerNeed::ForegroundNetwork);
     const std::string endpoint = api::WorkBuddyUrl(path.c_str());
-    if (endpoint.empty()) { reply.error = "尚未配置 WorkBuddy 服务地址"; return reply; }
+    if (endpoint.empty()) { reply.error = Lang::Strings::WB_ENDPOINT_MISSING; return reply; }
     if (gate.IsCancelled()) return reply;
     if (!EnsureNetworkReady(gate)) {
-        reply.error = "网络未连接，请先在设置中连接网络";
+        reply.error = Lang::Strings::WB_NETWORK_SETTINGS_HINT;
         return reply;
     }
     if (gate.IsCancelled()) return reply;
     auto* network = Board::GetInstance().GetNetwork();
     auto http = network ? network->CreateHttp(4) : nullptr;
-    if (!http) { reply.error = "无法创建网络连接，请稍后再试"; return reply; }
+    if (!http) { reply.error = Lang::Strings::WB_CONNECTION_CREATE_FAILED; return reply; }
     Http* raw = http.get();
     raw->SetTimeout(timeout_ms);
     api::ApplyCommonHeaders(raw);
@@ -282,12 +284,12 @@ JsonReply Request(const char* method, const std::string& path, std::string conte
         ~HttpScope() { gate.CloseHttp(); }
     } scope{gate};
     if (!raw->Open(method, endpoint)) {
-        reply.error = "服务连接失败或请求超时，请稍后重试";
+        reply.error = Lang::Strings::WB_SERVICE_TIMEOUT;
         return reply;
     }
     const int status = raw->GetStatusCode();
     if (status < 0) {
-        reply.error = "等待服务响应超时，请稍后重试";
+        reply.error = Lang::Strings::WB_RESPONSE_TIMEOUT;
         return reply;
     }
     std::string body;
@@ -295,12 +297,12 @@ JsonReply Request(const char* method, const std::string& path, std::string conte
     while (!gate.IsCancelled()) {
         const int count = raw->Read(buffer, sizeof(buffer));
         if (count < 0) {
-            reply.error = "服务响应读取失败，请稍后重试";
+            reply.error = Lang::Strings::WB_RESPONSE_READ_FAILED;
             return reply;
         }
         if (count == 0) break;
         if (body.size() + count > kMaxResponseBytes) {
-            reply.error = "服务响应过长，请稍后重试";
+            reply.error = Lang::Strings::WB_RESPONSE_TOO_LONG;
             return reply;
         }
         body.append(buffer, count);
@@ -317,8 +319,8 @@ JsonReply Request(const char* method, const std::string& path, std::string conte
     if (status < 200 || status >= 300 || !cJSON_IsNumber(code) || code->valueint != 0) {
         reply.error = StringField(reply.root.get(), "msg");
         if (reply.error.empty()) reply.error = StringField(reply.root.get(), "message");
-        if (reply.error.empty()) reply.error = "服务暂时不可用（HTTP " + std::to_string(status) + "）";
-        if (reply.error.size() > 600) reply.error = "服务返回异常，请稍后重试";
+        if (reply.error.empty()) reply.error = Lang::Strings::WB_HTTP_ERROR_PREFIX + std::to_string(status) + ")";
+        if (reply.error.size() > 600) reply.error = Lang::Strings::WB_RESPONSE_INVALID;
         return reply;
     }
     reply.ok = true;
@@ -346,7 +348,7 @@ TurnResult ParseTurnReply(const JsonReply& reply) {
     result.message_id = StringField(data, "messageId");
     result.status = StringField(data, "status");
     if (result.reply.empty() && !(result.execution_mode == "local" && result.status == "waiting")) {
-        result.error = "服务没有返回回复，请稍后重试";
+        result.error = Lang::Strings::WB_NO_REPLY;
         return result;
     }
     result.ok = true;
@@ -372,15 +374,15 @@ bool EnsureNetworkReady(DownloadGate& gate) {
 std::shared_ptr<VoiceStream> VoiceStream::Create(std::string& error) {
     error.clear();
     std::string url = api::WorkBuddyUrl(api::kWorkBuddyAsrStream);
-    if (url.empty()) { error = "尚未配置实时语音服务地址"; return {}; }
+    if (url.empty()) { error = Lang::Strings::WB_VOICE_ENDPOINT_MISSING; return {}; }
     const std::string token = DeviceToken(&error);
     if (!error.empty()) return {};
-    if (token.empty()) { error = "设备授权凭证缺失，请重新扫码授权"; return {}; }
+    if (token.empty()) { error = Lang::Strings::WB_TOKEN_MISSING_SCAN; return {}; }
     if (url.rfind("https://", 0) == 0) url.replace(0, 8, "wss://");
     else if (url.rfind("http://", 0) == 0) url.replace(0, 7, "ws://");
-    else { error = "实时语音服务地址格式无效"; return {}; }
+    else { error = Lang::Strings::WB_VOICE_ENDPOINT_INVALID; return {}; }
     auto stream = std::shared_ptr<VoiceStream>(new (std::nothrow) VoiceStream(std::move(url), token));
-    if (!stream || !stream->ring_) { error = "录音缓存内存不足，请稍后再试"; return {}; }
+    if (!stream || !stream->ring_) { error = Lang::Strings::WB_RECORDING_BUFFER_MEMORY; return {}; }
     return stream;
 }
 
@@ -393,13 +395,13 @@ LocalAssistantStatus GetLocalStatus(DownloadGate& gate) {
     LocalAssistantStatus result;
     const std::string token = DeviceToken(&result.error);
     if (!result.error.empty()) return result;
-    if (token.empty()) { result.code = 401; result.error = "设备尚未保存授权凭证"; return result; }
+    if (token.empty()) { result.code = 401; result.error = Lang::Strings::WB_TOKEN_NOT_SAVED; return result; }
     auto reply = Request("GET", api::kWorkBuddyLocalStatus, {}, token, gate, 35000);
     result.code = reply.code;
     if (!reply.ok) { result.error = std::move(reply.error); return result; }
     const cJSON* data = cJSON_GetObjectItemCaseSensitive(reply.root.get(), "data");
     const cJSON* online = cJSON_GetObjectItemCaseSensitive(data, "online");
-    if (!cJSON_IsBool(online)) { result.error = "服务没有返回有效的电脑在线状态"; return result; }
+    if (!cJSON_IsBool(online)) { result.error = Lang::Strings::WB_ONLINE_STATUS_INVALID; return result; }
     result.ok = true;
     result.online = cJSON_IsTrue(online);
     return result;
@@ -416,7 +418,7 @@ AuthorizationStatus GetAuthorization(DownloadGate& gate) {
     if (!reply.ok) { result.error = std::move(reply.error); return result; }
     const cJSON* data = cJSON_GetObjectItemCaseSensitive(reply.root.get(), "data");
     const cJSON* authorized = cJSON_GetObjectItemCaseSensitive(data, "authorized");
-    if (!cJSON_IsBool(authorized)) { result.error = "服务未返回设备授权状态"; return result; }
+    if (!cJSON_IsBool(authorized)) { result.error = Lang::Strings::WB_AUTH_STATUS_MISSING; return result; }
     result.ok = true;
     result.authorized = cJSON_IsTrue(authorized);
     result.status = result.authorized ? "authorized" : "pending";
@@ -457,11 +459,11 @@ AuthorizationSession CreateAuthorizationSession(DownloadGate& gate, bool switch_
     const std::string path = std::string(api::kWorkBuddyAuthorizationSessions) + (switch_account ? "?switchAccount=true" : "");
     auto reply = Request("POST", path, "{}", DeviceToken(), gate, 20000);
     if (!reply.ok) { session.error = std::move(reply.error); return session; }
-    if (gate.IsCancelled()) { session.error = "扫码请求已取消"; return session; }
+    if (gate.IsCancelled()) { session.error = Lang::Strings::WB_SCAN_CANCELLED; return session; }
     const cJSON* data = cJSON_GetObjectItemCaseSensitive(reply.root.get(), "data");
     session.account_switch_allowed = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(data, "accountSwitchAllowed"));
     if (switch_account && !session.account_switch_allowed) {
-        session.error = "服务暂不支持重新绑定，请联系管理员更新服务";
+        session.error = Lang::Strings::WB_RELINK_UNSUPPORTED;
         return session;
     }
     session.session_id = StringField(data, "sessionId");
@@ -473,11 +475,11 @@ AuthorizationSession CreateAuthorizationSession(DownloadGate& gate, bool switch_
         session.session_id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != std::string::npos ||
         session.device_token.empty() || session.device_token.size() > 512 ||
         session.verification_url.rfind("https://", 0) != 0 || session.verification_url.size() > 1024) {
-        session.error = "服务返回的扫码信息无效";
+        session.error = Lang::Strings::WB_QR_RESPONSE_INVALID;
         return session;
     }
     if (gate.IsCancelled()) return session;
-    if (!SaveSession(session)) { session.error = "无法保存设备授权，请释放存储空间后重试"; return session; }
+    if (!SaveSession(session)) { session.error = Lang::Strings::WB_AUTH_SAVE_FAILED; return session; }
     session.ok = true;
     return session;
 }
@@ -490,7 +492,7 @@ AuthorizationSession CreateAuthorizationSession(DownloadGate& gate, bool switch_
  */
 AuthorizationStatus PollAuthorizationSession(const AuthorizationSession& session, DownloadGate& gate) {
     AuthorizationStatus result;
-    if (!session.ok || session.session_id.empty()) { result.error = "扫码会话无效，请刷新二维码"; return result; }
+    if (!session.ok || session.session_id.empty()) { result.error = Lang::Strings::WB_SCAN_SESSION_INVALID; return result; }
     auto reply = Request("GET", std::string(api::kWorkBuddyAuthorizationSessions) + "/" + session.session_id, {},
                          session.device_token, gate, 15000);
     if (!reply.ok) {
@@ -502,14 +504,14 @@ AuthorizationStatus PollAuthorizationSession(const AuthorizationSession& session
     result.status = StringField(data, "status");
     if (result.status != "pending" && result.status != "authorizing" && result.status != "authorized" &&
         result.status != "expired" && result.status != "failed") {
-        result.error = "服务返回的授权状态无效，请刷新二维码";
+        result.error = Lang::Strings::WB_AUTH_STATUS_INVALID;
         return result;
     }
     if (gate.IsCancelled()) return result;
     result.authorized = result.status == "authorized";
     if (result.authorized && !PromoteSession(session)) {
         result.authorized = false;
-        result.error = "授权成功但设备凭证保存失败，请重新进入应用重试";
+        result.error = Lang::Strings::WB_TOKEN_SAVE_FAILED;
         return result;
     }
     result.ok = true;
@@ -526,27 +528,27 @@ AuthorizationStatus PollAuthorizationSession(const AuthorizationSession& session
 TurnResult PostText(const std::string& text, DownloadGate& gate) {
     TurnResult result;
     const size_t first = text.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) { result.error = "请先输入问题"; return result; }
+    if (first == std::string::npos) { result.error = Lang::Strings::WB_ENTER_QUESTION; return result; }
     const size_t last = text.find_last_not_of(" \t\r\n");
     if (last - first + 1 > 2000 || text.find('\0') != std::string::npos) {
-        result.error = "问题过长或包含无效字符，请缩短后重试";
+        result.error = Lang::Strings::WB_QUESTION_INVALID;
         return result;
     }
     const std::string token = DeviceToken(&result.error);
     if (!result.error.empty()) return result;
     if (token.empty()) {
         result.authorization_required = true;
-        result.error = "请先扫码登录并授权 WorkBuddy";
+        result.error = Lang::Strings::WB_AUTHORIZE_FIRST;
         return result;
     }
     Json payload(cJSON_CreateObject(), cJSON_Delete);
     const std::string question = text.substr(first, last - first + 1);
     if (!payload || !cJSON_AddStringToObject(payload.get(), "text", question.c_str())) {
-        result.error = "内存不足，暂时无法发送文字";
+        result.error = Lang::Strings::WB_TEXT_MEMORY;
         return result;
     }
     std::unique_ptr<char, decltype(&cJSON_free)> content(cJSON_PrintUnformatted(payload.get()), cJSON_free);
-    if (!content) { result.error = "内存不足，暂时无法发送文字"; return result; }
+    if (!content) { result.error = Lang::Strings::WB_TEXT_MEMORY; return result; }
     result = ParseTurnReply(Request("POST", api::kWorkBuddyTextTurn, content.get(), token, gate, 210000));
     return result;
 }
@@ -562,7 +564,7 @@ TurnResult GetLocalMessages(DownloadGate& gate) {
     if (!result.error.empty()) return result;
     if (token.empty()) {
         result.authorization_required = true;
-        result.error = "请先扫码登录并授权 WorkBuddy";
+        result.error = Lang::Strings::WB_AUTHORIZE_FIRST;
         return result;
     }
     const auto reply = Request("GET", std::string(api::kWorkBuddyLocalMessages) +
@@ -577,7 +579,7 @@ TurnResult GetLocalMessages(DownloadGate& gate) {
     const auto* data = cJSON_GetObjectItemCaseSensitive(reply.root.get(), "data");
     const auto* messages = cJSON_GetObjectItemCaseSensitive(data, "messages");
     if (!cJSON_IsArray(messages)) {
-        result.error = "消息格式不正确，请更新服务后重试";
+        result.error = Lang::Strings::WB_MESSAGE_INVALID;
         return result;
     }
     const cJSON* item = nullptr;
@@ -625,7 +627,7 @@ TurnResult GetLocalReply(const std::string& message_id, DownloadGate& gate, int 
     TurnResult result;
     if (message_id.empty() || message_id.size() > 2048 || message_id.find('\0') != std::string::npos) {
         result.error_code = 400;
-        result.error = "电脑受理编号无效，无法自动读取回复";
+        result.error = Lang::Strings::WB_REQUEST_ID_INVALID;
         return result;
     }
     const std::string token = DeviceToken(&result.error);
@@ -633,17 +635,17 @@ TurnResult GetLocalReply(const std::string& message_id, DownloadGate& gate, int 
     if (token.empty()) {
         result.authorization_required = true;
         result.error_code = 401;
-        result.error = "设备授权凭证缺失，请重新授权";
+        result.error = Lang::Strings::WB_TOKEN_MISSING;
         return result;
     }
     const std::string path = std::string(api::kWorkBuddyLocalReply) + "?messageId=" + EncodeQuery(message_id);
     result = ParseTurnReply(Request("GET", path, {}, token, gate, std::clamp(timeout_ms, 1000, 35000)));
-    if (result.error_code == 404) result.error = "自动回复接口尚不可用，请先更新Java服务；可点电脑消息手动查看";
+    if (result.error_code == 404) result.error = Lang::Strings::WB_AUTO_REPLY_UNAVAILABLE;
     if (result.ok && (result.execution_mode != "local" || result.message_id != message_id ||
                       (result.status != "waiting" && result.status != "messages"))) {
         result.ok = false;
         result.error_code = 502;
-        result.error = "自动回复数据与本次受理编号不匹配，请稍后手动查看电脑消息";
+        result.error = Lang::Strings::WB_AUTO_REPLY_MISMATCH;
     }
     return result;
 }

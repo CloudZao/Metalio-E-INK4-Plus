@@ -505,7 +505,7 @@ bool EbookDocument::InflateBlock(const uint8_t* comp, size_t comp_len, uint8_t* 
 }
 
 bool EbookDocument::ReadOneBlockAt(uint32_t offset, uint8_t& type, std::vector<uint8_t>& raw_out,
-                                   uint32_t* next_offset) {
+                                   uint32_t* next_offset, bool read_payload) {
     if (fp_ == nullptr) {
         return false;
     }
@@ -530,6 +530,11 @@ bool EbookDocument::ReadOneBlockAt(uint32_t offset, uint8_t& type, std::vector<u
     if (!RegionWithinFile(offset, static_cast<uint32_t>(kBlockHeaderSize + comp_size), file_size_)) {
         ESP_LOGW(TAG, "block payload out of file @%u", static_cast<unsigned>(offset));
         return false;
+    }
+    if (!read_payload) {
+        raw_out.clear();
+        if (next_offset) *next_offset = payload_end;
+        return true;
     }
     if (comp_buf_.size() < comp_size) {
         comp_buf_.resize(comp_size);
@@ -596,7 +601,7 @@ bool EbookDocument::ImagePayloadToBytes(const uint8_t* raw, size_t raw_len,
     return false;
 }
 
-bool EbookDocument::StreamChapterBlocks(int chapter_index, const ContentBlockSink& sink) {
+bool EbookDocument::StreamChapterBlocks(int chapter_index, const ContentBlockSink& sink, bool image_refs_only) {
     error_ = BookReadError::kInvalidData;
     if (!IsOpen() || chapter_index < 0 ||
         static_cast<size_t>(chapter_index) >= chapters_.size()) {
@@ -615,15 +620,24 @@ bool EbookDocument::StreamChapterBlocks(int chapter_index, const ContentBlockSin
         std::vector<uint8_t> raw;
         uint32_t next = 0;
         const uint32_t block_off = cursor;
-        if (!ReadOneBlockAt(cursor, type, raw, &next)) {
+        if (!ReadOneBlockAt(cursor, type, raw, &next, !image_refs_only)) {
             ESP_LOGW(TAG, "block read fail ch=%d bi=%u", chapter_index, static_cast<unsigned>(bi));
                     return false;
         }
         if (next > end || next <= cursor) return false;
         cursor = next;
-#ifndef EBOOK_EMULATOR
-        vTaskDelay(1);
-#endif
+        #ifndef EBOOK_EMULATOR
+        if (!image_refs_only || (bi & 63) == 63) vTaskDelay(1);
+        #endif
+        if (image_refs_only) {
+            if (type == kBlockImage) {
+                ContentBlock block;
+                block.kind = ContentKind::kImage;
+                block.image_href = std::string(kImgHrefPrefix) + std::to_string(block_off);
+                if (!sink(std::move(block))) return false;
+            }
+            continue;
+        }
         if (type == kBlockText) {
             size_t begin = 0;
             for (size_t i = 0; i <= raw.size(); ++i) {
@@ -636,8 +650,11 @@ bool EbookDocument::StreamChapterBlocks(int chapter_index, const ContentBlockSin
                 begin = i + 1;
             }
         } else if (type == kBlockImage) {
+            if (raw.size() < 12) return false;
             ContentBlock b;
             b.kind = ContentKind::kImage;
+            b.image_width = RdU16(raw.data() + 2);
+            b.image_height = RdU16(raw.data() + 4);
             b.image_href = std::string(kImgHrefPrefix) + std::to_string(block_off);
             if (!sink(std::move(b))) return false;
         } else {

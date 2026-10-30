@@ -154,6 +154,9 @@ void lcd_do_update(RenderContext_t* ctx) {
     int64_t previous_phase_start=0, period_total=0;
     int period_min=INT32_MAX, period_max=0, periods=0;
     int completed_frames=0;
+    // 复用驱动已有扫描计时，停止扫描后汇总；不在 ISR 内增加日志。
+    int64_t scan_total=0;
+    int scan_min=INT32_MAX,scan_max=0,eof_gap_max=0,eof_work_max=0;
     ctx->fault_reason=0;
     epd_set_mode(1);
     ESP_LOGD("epd_lcd", "update %d frames, lines=%d (stream pace=%dus)", ctx->cycle_frames,
@@ -225,6 +228,14 @@ void lcd_do_update(RenderContext_t* ctx) {
         }
 
         ++completed_frames;
+        const int scan_us=epd_lcd_get_scan_time_us();
+        scan_total+=scan_us;
+        if (scan_us<scan_min) scan_min=scan_us;
+        if (scan_us>scan_max) scan_max=scan_us;
+        int eof_gap=0,eof_work=0;
+        epd_lcd_get_stream_stats(&eof_gap,&eof_work);
+        if (eof_gap>eof_gap_max) eof_gap_max=eof_gap;
+        if (eof_work>eof_work_max) eof_work_max=eof_work;
         ctx->current_frame++;
     }
 
@@ -236,9 +247,12 @@ void lcd_do_update(RenderContext_t* ctx) {
         __atomic_store_n(&last_phase_average,(int)(period_total/periods),__ATOMIC_RELAXED);
         __atomic_store_n(&last_phase_minimum,period_min,__ATOMIC_RELAXED);
         __atomic_store_n(&last_phase_maximum,period_max,__ATOMIC_RELAXED);
-        ESP_LOGI("EpdTiming","phase cadence us: avg=%d min=%d max=%d frames=%d completed=%d cycle=%dms",
+        ESP_LOGI("EpdTiming","phase cadence us: avg=%d min=%d max=%d frames=%d completed=%d cycle=%dms "
+        "scan_us=%d/%d/%d eof_gap_max=%d eof_work_max=%d",
         (int)(period_total/periods),period_min,period_max,ctx->cycle_frames,
-        completed_frames,(int)((esp_timer_get_time()-cycle_start)/1000));
+        completed_frames,(int)((esp_timer_get_time()-cycle_start)/1000),
+        completed_frames ? (int)(scan_total/completed_frames) : 0,completed_frames ? scan_min : 0,scan_max,
+        eof_gap_max,eof_work_max);
     }
 }
 

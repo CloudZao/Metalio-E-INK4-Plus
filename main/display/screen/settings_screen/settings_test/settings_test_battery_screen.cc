@@ -372,9 +372,8 @@ lv_obj_t* SettingsTestBatteryScreen::Create() {
     lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(body, 0, 0);
-    lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_scroll_dir(body, LV_DIR_VER);
 
     lv_obj_t* title = lv_label_create(body);
     lv_label_set_text(title, Lang::Strings::SETTINGS_TEST_BATTERY);

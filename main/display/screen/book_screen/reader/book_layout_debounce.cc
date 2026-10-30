@@ -9,6 +9,7 @@
 #include "book_screen/reader/book_toc_footer.h"
 #include "book_screen/reader/book_reader_body.h"
 #include "book_screen/settings/book_settings_sheet.h"
+#include "assets/lang_reader.h"
 
 #include <lvgl.h>
 #include <esp_log.h>
@@ -32,23 +33,26 @@ void ApplyReaderLayoutLive(bool reload_font) {
     if (st.reader.viewport_w <= 0 || st.reader.viewport_h <= 0) {
         return;
     }
-    const bool layout_running = st.reader.layout_busy.load();
     // 先停止旧编排，再应用新参数，避免两个后台任务并行或共享 font_ 被释放。
-    if (layout_running || st.reader.chapter_pages_busy.load() || st.reader.page_image_busy.load()) {
+    if (ReaderWorkersBusy()) {
+        CancelReaderPageWork();
         st.reader.layout_again = true;
         st.reader.layout_reload_font = st.reader.layout_reload_font || reload_font;
         st.reader.session->AbortTxtPaginate();
-        st.reader.session->InvalidateChapterPageTable();
+        st.reader.session->AbortChapterPageTable();
         st.reader.page_image_abort.store(true);
         return;
     }
 
-    s_reader_page_delta.store(0, std::memory_order_release);
+    CancelReaderPageWork();
     if (reload_font) {
-        ReleaseBookFont();
-        EnsureBookFont();
+        if (!ReloadBookFont()) {
+            ScreenShowToast(Lang::Strings::TTF_APPLY_FAILED);
+            return;
+        }
     }
     BindSessionLayoutPrefs(*st.reader.session);
+    if (reload_font && DeferComicTextSetting()) return;
     ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
     st.reader.session->SetViewport(st.reader.viewport_w, st.reader.viewport_h);
 
@@ -66,15 +70,6 @@ void ApplyReaderLayoutLive(bool reload_font) {
         EnsureSettingsSheetAfterLayout();
     } else {
         UpdateReadFooter();
-    }
-
-    if (st.reader.session->LiveRelayoutPending()) {
-        st.reader.layout_anchor = anchor;
-        st.reader.layout_again = false;
-        st.reader.layout_reload_font = false;
-        StartLayoutWorker();
-    } else if (st.reader.session->NeedsChapterPageRebuild()) {
-        StartChapterPageWorker();
     }
 }
 
@@ -112,14 +107,8 @@ void OnLayoutHintTick(lv_timer_t* /*t*/) {
         return;
     }
     if (TouchUiFingerIsDown() || TouchUiHasPendingEdges() ||
-        s_reader_page_delta.load() != 0 || s_reader_paint.seq.load() != s_reader_paint.done.load()) return;
+        ReaderPageWorkPending() || s_reader_paint.seq.load() != s_reader_paint.done.load()) return;
     if (EpdGetStats().busy) return;
-    if (st.reader.session && st.reader.session->IsOpen() && !st.reader.opening.load() &&
-        !st.reader.layout_again && !st.reader.prefs_reopen_pending &&
-        st.reader.session->PollLayoutProgress()) {
-        if (st.reader.read_chrome == BookUiState::ReadChrome::kToc) RequestRenderTocList();
-        else if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings) RequestSettingsSheetPaint();
-    }
     // 沉浸阅读时只接收状态，底栏随翻页绘制，避免周期更新另占一次刷屏。
     if (IsLayoutHintBusy()) return;
     if (esp_timer_get_time() < st.reader.layout_hint_done_until_us) {

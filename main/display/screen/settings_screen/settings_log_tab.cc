@@ -10,6 +10,8 @@
 #include "settings_common.h"
 #include "settings_log_upload.h"
 
+#include <atomic>
+
 struct SettingsLogOption {
     bool enabled; // 是否写 SD 日志
     const char* (*title)(); // 选项标题
@@ -36,7 +38,7 @@ struct SettingsLogUi {
 };
 
 static SettingsLogUi s_ui;
-static bool s_clearing = false; // Accessed only while holding the display lock.
+static std::atomic<bool> s_clearing{false}; // UI 与后台任务共享的清理状态
 
 static const char* CurrentText(bool enabled) {
     for (int i = 0; i < kOptionCount; ++i) {
@@ -51,7 +53,7 @@ static void RefreshOptions() {
     const bool enabled = SdLogWriter_IsEnabled();
     auto refresh_button = [](lv_obj_t* button, bool selected) {
         if (button == nullptr) return;
-        if (s_clearing) lv_obj_add_state(button, LV_STATE_DISABLED);
+        if (s_clearing.load()) lv_obj_add_state(button, LV_STATE_DISABLED);
         else lv_obj_remove_state(button, LV_STATE_DISABLED);
         SettingsStyleSelectable(button, lv_obj_get_child(button, 0), selected);
     };
@@ -66,7 +68,7 @@ static void RefreshOptions() {
 }
 
 static void OnOptionClicked(lv_event_t* e) {
-    if (s_clearing || SettingsLogUpload_IsActive()) {
+    if (s_clearing.load() || SettingsLogUpload_IsActive()) {
         return;
     }
     const bool enable = (reinterpret_cast<intptr_t>(lv_event_get_user_data(e)) != 0);
@@ -78,17 +80,17 @@ static void OnOptionClicked(lv_event_t* e) {
 }
 
 static void OnUploadClicked(lv_event_t* e) {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED || s_clearing) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED || s_clearing.load()) {
         return;
     }
     SettingsLogUpload_Start();
 }
 
 static void OnClearClicked(lv_event_t* e) {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED || s_clearing || SettingsLogUpload_IsActive()) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED || s_clearing.load() || SettingsLogUpload_IsActive()) {
         return;
     }
-    s_clearing = true;
+    s_clearing.store(true);
     lv_label_set_text(s_ui.clear_status, Lang::Strings::SETTINGS_LOG_CLEARING);
     RefreshOptions();
     // The LVGL task uses a PSRAM stack. Perform SD I/O on the application's
@@ -97,7 +99,8 @@ static void OnClearClicked(lv_event_t* e) {
         const bool ok = SdLogWriter_Clear();
         auto* display = Board::GetInstance().GetDisplay();
         DisplayLockGuard lock(display);
-        s_clearing = false;
+        s_clearing.store(false);
+        if (!lock) return;
         RefreshOptions();
         // Reset clears the pointers on page deletion; a rebuilt log tab should
         // receive this result too rather than remaining stuck on "Clearing".
@@ -106,7 +109,7 @@ static void OnClearClicked(lv_event_t* e) {
                                                    : Lang::Strings::SETTINGS_LOG_CLEAR_FAIL);
         }
     }, Application::TaskDomain::Storage)) {
-        s_clearing = false;
+        s_clearing.store(false);
         RefreshOptions();
         lv_label_set_text(s_ui.clear_status, Lang::Strings::SETTINGS_LOG_CLEAR_FAIL);
     }
@@ -161,7 +164,7 @@ void SettingsLogTab_Build(lv_obj_t* page) {
                                                     OnClearClicked, 0);
     s_ui.clear_status = lv_label_create(page);
     lv_obj_set_width(s_ui.clear_status, lv_pct(100));
-    lv_label_set_text(s_ui.clear_status, s_clearing ? Lang::Strings::SETTINGS_LOG_CLEARING : "");
+    lv_label_set_text(s_ui.clear_status, s_clearing.load() ? Lang::Strings::SETTINGS_LOG_CLEARING : "");
     lv_obj_set_style_text_font(s_ui.clear_status, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(s_ui.clear_status, lv_color_black(), 0);
     lv_obj_clear_flag(s_ui.clear_status, LV_OBJ_FLAG_CLICKABLE);

@@ -32,7 +32,11 @@ void EpdSetEffect(EpdEffect effect);
 void EpdSetReaderEffect(EpdEffect effect);
 void EpdRequestPageTurn(int direction);
 void EpdCancelPageTurn();
-void EpdRequestScreenChange();
+/**
+ * @brief 请求切换画面，下一次提交时执行推白。
+ * @param full_gc 先使用完整 GC16 全刷清理白屏，再推白显示目标画面。
+ */
+void EpdRequestScreenChange(bool full_gc = false);
 /** @brief 下一次 EpdSubmit 完成投递后调用一次。用于等进页帧提交后再启动解码。 */
 void EpdAfterNextSubmit(void (*fn)());
 void EpdSetTestActive(bool active);

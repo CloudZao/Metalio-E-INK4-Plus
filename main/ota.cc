@@ -1,7 +1,7 @@
 #include "sdkconfig.h"
 #include "ota.h"
 #include "display/epd_flash_guard.h"
-#ifdef CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS
+#if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
 #include "boards/common/sensor/pcf8563.h"
 #include "boards/metalio-e-ink4-plus/bus/metalio_i2c1.h"
 #endif
@@ -41,7 +41,7 @@ namespace {
 template <typename Operation>
 auto WithOtaFlashAccess(Operation operation) {
     EpdFlashGuard guard;
-#ifdef CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS
+    #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
     // Lock order: waveform/flash gate -> I2C1. The display uses the same order.
     // Block new touch/gauge/TPS commands only during the actual flash operation,
     // never during network waits or while posting LVGL callbacks.
@@ -51,7 +51,7 @@ auto WithOtaFlashAccess(Operation operation) {
     struct ReleaseI2c {
         ~ReleaseI2c() { metalio_i2c1_unlock(); }
     } release_i2c;
-#endif
+    #endif
     return operation();
 }
 } // namespace
@@ -292,11 +292,11 @@ esp_err_t Ota::CheckResponseOnce(bool chat_only, int64_t deadline_us) {
                 tv.tv_sec = (time_t)(ts / 1000);  // 转换毫秒为秒
                 tv.tv_usec = (suseconds_t)((long long)ts % 1000) * 1000;  // 剩余的毫秒转换为微秒
                 has_server_time_ = settimeofday(&tv, NULL) == 0;
-#ifdef CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS
+                #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
                 if (has_server_time_ && !Pcf8563::GetInstance().SyncSystemToRtc()) {
                     ESP_LOGW(TAG, "Server time applied but RTC writeback failed");
                 }
-#endif
+                #endif
             }
         } else {
             ESP_LOGW(TAG, "No server_time section found!");

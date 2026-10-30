@@ -104,7 +104,7 @@ static void OnCloudClicked(lv_event_t* e) {
         auto* display = Board::GetInstance().GetDisplay();
         if (display != nullptr) {
             DisplayLockGuard lock(display);
-            if (s_ui.alive && s_ui.cloud_status) {
+            if (lock && s_ui.alive && s_ui.cloud_status) {
                 lv_label_set_text(s_ui.cloud_status, CloudText("已保存，正在重启…", "Saved. Restarting..."));
             }
         }
@@ -362,6 +362,7 @@ static void OnOptionClicked(lv_event_t* e) {
             if (display != nullptr) {
                 DisplayLockGuard lock(display);
                 s_busy.store(false);
+                if (!lock) return;
                 if (s_ui.alive && !s_cloud_busy.load() && generation == s_ui_generation) {
                     s_ui.known = true;
                     s_ui.enabled = chat_cloud::LocalTtsEnabled();
@@ -462,7 +463,7 @@ void SettingsConversationTab_Build(lv_obj_t* page) {
     lv_label_set_text(s_ui.status_lbl, "");
     lv_obj_add_flag(s_ui.status_lbl, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_width(s_ui.status_lbl, lv_pct(100));
-    lv_label_set_long_mode(s_ui.status_lbl, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(s_ui.status_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.status_lbl, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(s_ui.status_lbl, lv_color_black(), 0);
     lv_obj_clear_flag(s_ui.status_lbl, LV_OBJ_FLAG_CLICKABLE);

@@ -25,7 +25,7 @@ bool BookPageStore::Open(const std::string& book_path, bool count_only) {
 }
 
 bool BookPageStore::EnsureFile() const {
-    if (!fp_ && !path_.empty()) fp_ = std::fopen(path_.c_str(), "r+b");
+    if (!fp_ && !path_.empty()) fp_ = std::fopen(path_.c_str(), read_only_ ? "rb" : "r+b");
     return fp_ != nullptr;
 }
 
@@ -52,7 +52,26 @@ bool BookPageStore::Push(Page&& page) {
 
 bool BookPageStore::Finish() {
     if (count_only_) return Good();
-    return good_ = Good() && fp_ && std::fflush(fp_) == 0 && offsets_.Flush();
+    // FatFS 在关闭写句柄时发布文件长度，独立读句柄才能看到完整分页及索引。
+    return good_ = Good() && fp_ && Detach();
+}
+
+bool BookPageStore::CloneReadOnly(BookPageStore& out) const {
+    out.clear();
+    out.read_only_ = true;
+    out.path_ = path_;
+    out.count_ = count_;
+    out.good_ = Good() && offsets_.CloneReadOnly(out.offsets_, count_) && out.EnsureFile();
+    return out.Good();
+}
+
+bool BookPageStore::TakeReadCache(BookPageStore& other) {
+    if (path_ != other.path_ || count_ != other.count_ || !other.Good()) return false;
+    for (int i = 0; i < 2; ++i) {
+        cache_[i].items.swap(other.cache_[i].items);
+        std::swap(cached_[i], other.cached_[i]);
+    }
+    return true;
 }
 
 const Page& BookPageStore::operator[](size_t index) const {
@@ -91,14 +110,15 @@ const Page& BookPageStore::operator[](size_t index) const {
 bool BookPageStore::Detach() const {
     bool ok = offsets_.Detach();
     if (fp_) { if (std::fclose(fp_) != 0) ok = false; fp_ = nullptr; }
-    return ok;
+    if (!ok) good_ = false;
+    return ok && good_;
 }
 
 void BookPageStore::clear() {
     if (fp_) std::fclose(fp_);
     fp_ = nullptr;
-    if (!path_.empty()) std::remove(path_.c_str());
-    path_.clear(); offsets_.Reset(); count_ = 0; good_ = true; error_ = BookReadError::kNone; count_only_ = false;
+    if (!read_only_ && !path_.empty()) std::remove(path_.c_str());
+    path_.clear(); offsets_.Reset(); count_ = 0; good_ = true; error_ = BookReadError::kNone; count_only_ = false; read_only_ = false;
     for (int i = 0; i < 2; ++i) { cache_[i] = Page{}; cached_[i] = SIZE_MAX; }
 }
 
@@ -106,6 +126,7 @@ void BookPageStore::swap(BookPageStore& other) noexcept {
     using std::swap;
     swap(fp_, other.fp_); swap(path_, other.path_); offsets_.Swap(other.offsets_);
     swap(count_, other.count_); swap(good_, other.good_); swap(error_, other.error_); swap(count_only_, other.count_only_);
+    swap(read_only_, other.read_only_);
     for (int i = 0; i < 2; ++i) { swap(cache_[i], other.cache_[i]); swap(cached_[i], other.cached_[i]); }
 }
 } // namespace reader

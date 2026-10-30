@@ -1,3 +1,4 @@
+#include "assets/lang_screen.h"
 #include "cloud_screen/cloud_dialogs.h"
 #include "cloud_screen/cloud_screen_priv.h"
 #include "cloud_screen/download/cloud_download.h"
@@ -394,8 +395,7 @@ static void ShowResourceDialog(int cloud_index, bool conflict) {
     lv_obj_t* lbl = lv_label_create(card);
     lv_label_set_text(lbl, title_buf);
     lv_obj_set_width(lbl, lv_pct(100));
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_max_height(lbl, lv_font_get_line_height(Cloud_UiFont()) * 3, 0);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(lbl, Cloud_UiFont(), 0);
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
@@ -501,7 +501,7 @@ void ShowStorageErrorDialog() {
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* text = lv_label_create(card);
-    lv_label_set_text(text, "内存卡状态异常，请重启设备后再试");
+    lv_label_set_text(text, Lang::Strings::STORAGE_RESTART_REQUIRED);
     lv_obj_set_width(text, lv_pct(100));
     lv_obj_set_style_text_font(text, Cloud_UiFont(), 0);
     lv_obj_set_style_text_color(text, lv_color_black(), 0);
@@ -522,7 +522,7 @@ void ShowStorageErrorDialog() {
         Cloud_RebootAfterStorageError();
     }, LV_EVENT_CLICKED, nullptr);
     lv_obj_t* label = lv_label_create(button);
-    lv_label_set_text(label, "重启");
+    lv_label_set_text(label, Lang::Strings::COMMON_RESTART);
     lv_obj_set_style_text_font(label, Cloud_UiFont(), 0);
     lv_obj_set_style_text_color(label, lv_color_black(), 0);
     lv_obj_center(label);

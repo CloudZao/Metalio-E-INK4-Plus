@@ -1,4 +1,5 @@
 #include "image_stream.h"
+#include "image_geometry.h"
 #include "image_util.h"
 
 // xtensa-g++：本文件在 -Os 下可能 ICE（cfgcleanup try_forward_edges）
@@ -128,20 +129,6 @@ bool StreamSkip(ZipReader& zip, size_t n) {
     return true;
 }
 
-void FitSize(int src_w, int src_h, int max_w, int max_h, int* dst_w, int* dst_h) {
-    int w = src_w;
-    int h = src_h;
-    if (w > max_w || h > max_h) {
-        const float sx = static_cast<float>(max_w) / static_cast<float>(w);
-        const float sy = static_cast<float>(max_h) / static_cast<float>(h);
-        const float s = sx < sy ? sx : sy;
-        w = std::max(1, static_cast<int>(w * s));
-        h = std::max(1, static_cast<int>(h * s));
-    }
-    *dst_w = w;
-    *dst_h = h;
-}
-
 bool AbortRequested(const std::atomic<bool>* abort) {
     return abort != nullptr && abort->load(std::memory_order_relaxed);
 }
@@ -245,7 +232,7 @@ bool DecodeJpegStream(ZipReader& zip, int max_w, int max_h, RasterImage& out,
     // 先算目标拟合框，再选仍能盖住该框的最大 tjpgd scale（避免 1/8 解得比槽位还小）
     int fit_w = 0;
     int fit_h = 0;
-    FitSize(ctx.src_w, ctx.src_h, max_w, max_h, &fit_w, &fit_h);
+    FitImageSize(ctx.src_w, ctx.src_h, max_w, max_h, &fit_w, &fit_h);
     int scale = 0;
     for (int s = 0; s <= 3; ++s) {
         const int ow = std::max(1, ctx.src_w >> s);
@@ -259,7 +246,7 @@ bool DecodeJpegStream(ZipReader& zip, int max_w, int max_h, RasterImage& out,
     ctx.scale = scale;
     ctx.dec_w = std::max(1, ctx.src_w >> scale);
     ctx.dec_h = std::max(1, ctx.src_h >> scale);
-    FitSize(ctx.dec_w, ctx.dec_h, max_w, max_h, &ctx.out_w, &ctx.out_h);
+    FitImageSize(ctx.dec_w, ctx.dec_h, max_w, max_h, &ctx.out_w, &ctx.out_h);
     if (!AllocRasterL8(out, ctx.out_w, ctx.out_h)) {
         heap_caps_free(pool);
         return false;
@@ -680,7 +667,7 @@ bool DecodePngRows(PngReadFn read, PngSkipFn skip, void* ctx, int max_w, int max
 
             int dst_w = 0;
             int dst_h = 0;
-            FitSize(static_cast<int>(s.width), static_cast<int>(s.height),
+            FitImageSize(static_cast<int>(s.width), static_cast<int>(s.height),
                     original_size ? static_cast<int>(s.width) : max_w,
                     original_size ? static_cast<int>(s.height) : max_h, &dst_w,
                     &dst_h);

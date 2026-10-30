@@ -1,3 +1,4 @@
+#include "book_screen/book_nav.h"
 #include "book_screen/reader/book_reader_orient.h"
 
 #include "book_screen/book_screen_priv.h"
@@ -63,7 +64,7 @@ void OnAutoOrientTick(lv_timer_t*) {
         return;
     }
     if (TouchUiFingerIsDown() || TouchUiHasPendingEdges() || EpdGetStats().busy ||
-        st.reader.layout_debounce_timer || s_reader_page_delta.load() != 0 ||
+        st.reader.layout_debounce_timer || ReaderPageWorkPending() ||
         s_reader_paint.seq.load() != s_reader_paint.done.load()) {
         return;
     }

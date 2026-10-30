@@ -300,6 +300,7 @@ bool ShowPage(const LogUploadSessionPtr& session) {
     lv_obj_clear_flag(s_ui.page, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(s_ui.page, PageDeleted, LV_EVENT_DELETE, nullptr);
     lv_obj_t* card = lv_obj_create(s_ui.page);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(card, LV_HOR_RES - UiSx(48), LV_SIZE_CONTENT);
     lv_obj_center(card);
     lv_obj_set_style_bg_color(card, lv_color_white(), 0);
@@ -333,6 +334,7 @@ bool ShowPage(const LogUploadSessionPtr& session) {
     s_ui.percent = lv_label_create(card);
     lv_obj_set_style_text_font(s_ui.percent, fontpack_lv_font_ui(), 0);
     lv_obj_t* cancel = lv_obj_create(card);
+    lv_obj_clear_flag(cancel, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(cancel, UiSx(160), UiSy(44));
     lv_obj_add_flag(cancel, LV_OBJ_FLAG_CLICKABLE);
     HapticAttachClick(cancel);

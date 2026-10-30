@@ -8,7 +8,8 @@ extern "C" {
 #endif
 
 // 阅读偏好（NVS namespace "reader"）：
-// - font：SD fonts 目录下 .ef 文件名
+// - font：SD fonts 目录下 .ef 或 fonts_ttf 目录下 TTF/OTF 文件名
+// - font_size：直接加载 TTF/OTF 的像素字号；.ef 为 0
 // - spacing：行距档位（行距为主；段距随档略高于行距，不随档大幅跳变）
 // - margin：页边距档位（左右/上下成套）
 // - foot_msk：正文底栏展示位图（0=整条隐藏；兼容旧 hide_prog）
@@ -17,6 +18,7 @@ extern "C" {
 // - shelf_view：书架封面网格 / 文件夹列表
 // - shelf_pct：书架/首页封面与列表是否显示进度角标（默认关）
 // - orient：正文方向 -1自动 / 0竖屏 / 1左横 / 2右横 / 3倒置竖屏（仅阅读页；离开后恢复竖屏）
+// - text_dir：竖排列序 0从左往右 / 1从右往左
 // 读走 RAM 缓存；首次 Ensure 须在 DRAM 栈；落盘在内部 RAM 栈任务。
 
 enum {
@@ -54,8 +56,10 @@ void BookReaderPrefsEnsureLoaded(void);
 
 /** @brief 当前字体文件名（仅 basename）；未 Ensure 时返回默认值。永不返回 NULL。 */
 const char* BookReaderPrefsFontFile(void);
-/** @brief 设置正文字体文件名并写入 NVS */
-void BookReaderPrefsSetFontFile(const char* filename);
+/** @brief 设置正文字体并写入 NVS；TTF/OTF 需指定 20–80px 字号，.ef 使用默认值 0。 */
+void BookReaderPrefsSetFontFile(const char* filename, int size_px = 0);
+/** @brief 当前 TTF/OTF 的像素字号；.ef 返回 0。 */
+int BookReaderPrefsFontSize(void);
 /** @brief 正文字体完整路径 */
 char* BookReaderPrefsFontFullPath(char* out, size_t out_len);
 
@@ -65,12 +69,10 @@ int BookReaderPrefsSpacingPreset(void);
 void BookReaderPrefsSetSpacingPreset(int preset);
 /** @brief 行距档位文案 */
 const char* BookReaderPrefsSpacingLabel(int preset);
-/** @brief 行距像素 */
-int BookReaderPrefsLineGap(void);
+/** @brief 行间留白占字体行框的首选百分比，实际间距按内容区自适应。 */
+int BookReaderPrefsLineSpacingPercent(void);
 /** @brief 段距像素 */
 int BookReaderPrefsParaGap(void);
-/** @brief 同时取行距与段距 */
-void BookReaderPrefsSpacingGaps(int preset, int* line_gap, int* para_gap);
 
 /** @brief 页边距档位 0..N-1 */
 int BookReaderPrefsMarginPreset(void);
@@ -104,10 +106,9 @@ int BookReaderPrefsAntialias(void);
 /** @brief 设置并保存阅读抗锯齿开关 */
 void BookReaderPrefsSetAntialias(int enabled);
 /**
- * @brief 按是否正文沉浸同步 epd 字形 AA（偏好且 immersive 才开）
- * @return 运行时 AA 相对同步前是否变化（1=变，用于双平面 seed）
+ * @brief 按正文是否可见及阅读偏好同步 EPD 字形 AA 波形提示
  */
-int BookReaderPrefsSyncGlyphAa(int immersive_reading);
+void BookReaderPrefsSyncGlyphAa(int text_visible);
 
 /** @brief 正文下划线：kBookReaderUnderlineOff / Solid / Dashed */
 int BookReaderPrefsUnderlineMode(void);
@@ -146,10 +147,23 @@ enum {
 int BookReaderPrefsPageTurn();
 void BookReaderPrefsSetPageTurn(int mode);
 
-// Text writing direction, independent of screen orientation.
-enum { kBookReaderWritingHorizontal = 0, kBookReaderWritingVertical = 1 };
+enum {
+    kBookReaderWritingHorizontal = 0, // 横排
+    kBookReaderWritingVertical = 1, // 竖排
+};
+/** @brief 正文横排或竖排模式，与屏幕旋转方向独立 */
 int BookReaderPrefsWritingMode();
+/** @brief 设置并保存正文排版模式 */
 void BookReaderPrefsSetWritingMode(int mode);
+
+enum {
+    kBookReaderTextLeftToRight = 0, // 从左往右
+    kBookReaderTextRightToLeft = 1, // 从右往左
+};
+/** @brief 竖排文字的列方向，默认从左往右 */
+int BookReaderPrefsTextDirection();
+/** @brief 设置并保存竖排列方向 */
+void BookReaderPrefsSetTextDirection(int direction);
 
 // Auto page-turn interval in seconds (5..45); enabling is session-local.
 int BookReaderPrefsAutoTurnSeconds();

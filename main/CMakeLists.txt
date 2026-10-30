@@ -1,6 +1,12 @@
 # Metalio-E-Ink4-Plus：百问 AI + 首页/设置 + EPDiy
 set(AP_FILEMAN_GZ "${CMAKE_CURRENT_BINARY_DIR}/ap_fileman.html.gz")
+set(AP_FILEMAN_EN_GZ "${CMAKE_CURRENT_BINARY_DIR}/ap_fileman_en.html.gz")
 set(BOARD_DIR "boards/metalio-e-ink4-plus")
+if(CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS)
+    set(BOARD_TYPE "metalio-e-ink4-plus")
+elseif(CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL)
+    set(BOARD_TYPE "metalio-e-ink4-plus-global")
+endif()
 
 # Storage sources include the runtime log writer.
 file(GLOB BOARD_COMMON_SRCS
@@ -145,6 +151,8 @@ idf_component_register(
         "display/font/fontpack_lvgl.cc"
         "display/font/epdfont.cc"
         "display/font/ttf_convert.cc"
+        "display/font/ttf_face.cc"
+        "display/font/ttf_runtime.cc"
         "display/font/font_misans_regular_160_2.c"
         "display/font/font_awesome_30_1.c"
         "display/lvgl_display/emoji_collection.cc"
@@ -304,10 +312,13 @@ target_link_options(${COMPONENT_LIB} INTERFACE
     "-Wl,--wrap=lv_malloc_core" "-Wl,--wrap=lv_realloc_core")
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    BOARD_TYPE="metalio-e-ink4-plus"
-    BOARD_NAME="metalio-e-ink4-plus"
+    BOARD_TYPE="${BOARD_TYPE}"
+    BOARD_NAME="${BOARD_TYPE}"
     LV_LVGL_H_INCLUDE_SIMPLE
 )
+if(CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE LANG_DEFAULT_CODE="en-US")
+endif()
 
 # I1 is the default fast UI path; native L8 is used only for opted-in content.
 # Keep both blend kernels optimized, with the original binary fill/copy helpers.
@@ -372,3 +383,15 @@ add_custom_command(OUTPUT "${AP_FILEMAN_GZ}"
         "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/cloudzao-logo.png"
     VERBATIM)
 target_add_binary_data(${COMPONENT_LIB} "${AP_FILEMAN_GZ}" BINARY)
+
+add_custom_command(OUTPUT "${AP_FILEMAN_EN_GZ}"
+    COMMAND "${PYTHON}" "${PROJECT_DIR}/scripts/pack_ap_fileman.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/fileman.html"
+        "${AP_FILEMAN_EN_GZ}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/fileman.en.json"
+    DEPENDS "${PROJECT_DIR}/scripts/pack_ap_fileman.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/fileman.html"
+        "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/fileman.en.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/cloudzao-logo.png"
+    VERBATIM)
+target_add_binary_data(${COMPONENT_LIB} "${AP_FILEMAN_EN_GZ}" BINARY)

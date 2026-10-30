@@ -1,3 +1,5 @@
+#include "assets/lang_reader.h"
+#include "assets/lang_config.h"
 #pragma GCC optimize("O1")
 
 #include "book_screen/settings/book_ttf_panel.h"
@@ -33,7 +35,7 @@ lv_obj_t* MakeTtfFileInfo(lv_obj_t* parent) {
         Book_DisableScroll(row);
         auto* title = lv_label_create(row);
         lv_obj_set_style_text_font(title, Book_ItemFont(), 0);
-        lv_obj_set_width(title, UiSx(64));
+        lv_obj_set_width(title, std::max<int>(UiSx(64), Book_MeasureTextWidth(Book_ItemFont(), caption)));
         lv_label_set_text(title, caption);
         auto* name = lv_label_create(row);
         lv_obj_set_style_text_font(name, Book_ItemFont(), 0);
@@ -43,11 +45,11 @@ lv_obj_t* MakeTtfFileInfo(lv_obj_t* parent) {
         lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
         return name;
     };
-    make_row("源字体", Book_State().ttf.ttf_pick.c_str());
+    make_row(Lang::Strings::TTF_SOURCE, Book_State().ttf.ttf_pick.c_str());
     const uint16_t size = static_cast<uint16_t>(Book_State().ttf.ttf_size_px);
-    char output[80];
+    char output[SD_FILE_NAME_CAPACITY + 10];
     ttf_convert::FormatOutputFileList(Book_State().ttf.ttf_pick.c_str(), &size, 1, output, sizeof(output));
-    return make_row("输出", output);
+    return make_row(Lang::Strings::TTF_OUTPUT, output);
 }
 
 lv_obj_t* MakeTtfTip(lv_obj_t* parent, const char* text) {
@@ -96,7 +98,7 @@ lv_obj_t* MakeTtfTip(lv_obj_t* parent, const char* text) {
 } // namespace
 
 void TtfShowSuccessNotice() {
-    auto* text = MakeTtfTip(lv_layer_top(), "字体转换成功，已加入字体列表");
+    auto* text = MakeTtfTip(lv_layer_top(), Lang::Strings::TTF_SUCCESS);
     auto* box = lv_obj_get_parent(text);
     lv_obj_set_width(box, std::min<int>(LV_HOR_RES, LV_VER_RES) * 2 / 3);
     lv_obj_set_style_text_align(text, LV_TEXT_ALIGN_CENTER, 0);
@@ -121,26 +123,18 @@ bool IsTtfFileName(const char* name) {
     return strcasecmp(name + n - 4, ".ttf") == 0 || strcasecmp(name + n - 4, ".otf") == 0;
 }
 
-int TtfRowsPerPage() {
-    auto* body = Book_State().settings.reader_sheet_body;
-    if (body == nullptr || !lv_obj_is_valid(body)) return 1;
-    const int nav = std::max<int>(UiSy(44), Book_ItemFont()->line_height + 16);
-    return std::clamp<int>((lv_obj_get_content_height(body) - 6 - nav - 4) /
-                      std::max<int>(kFontListRowH, Book_ItemFont()->line_height + 12),
-                      1, kFontListPageSize);
-}
-
 int TtfPageCount() {
     const int n = static_cast<int>(Book_State().ttf.ttf_files.size());
     if (n <= 0) {
         return 1;
     }
-    return (n + TtfRowsPerPage() - 1) / TtfRowsPerPage();
+    return (n + kFontListPageSize - 1) / kFontListPageSize;
 }
 
 void TtfScanFiles() {
     auto& st = Book_State();
     st.ttf.ttf_files.clear();
+    st.ttf.ttf_selected.clear();
     DIR* dir = opendir(SD_PATH_FONT_SRC);
     if (dir == nullptr) {
         return;
@@ -177,6 +171,7 @@ void TtfPanelClose() {
 void StopTtfPollTimer() {
     ttf_convert::Cancel();
     auto& st = Book_State();
+    st.ttf.ttf_selected.clear();
     if (st.ttf.ttf_poll_timer != nullptr) {
         lv_timer_del(st.ttf.ttf_poll_timer);
         st.ttf.ttf_poll_timer = nullptr;
@@ -212,8 +207,7 @@ void TtfEnsurePanel() {
     lv_obj_set_flex_flow(st.ttf.ttf_sheet, LV_FLEX_FLOW_COLUMN);
     lv_obj_add_flag(st.ttf.ttf_sheet, LV_OBJ_FLAG_CLICKABLE);
     Book_DisableScroll(st.ttf.ttf_sheet);
-    lv_obj_set_scroll_dir(st.ttf.ttf_sheet, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(st.ttf.ttf_sheet, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scrollbar_mode(st.ttf.ttf_sheet, LV_SCROLLBAR_MODE_OFF);
     lv_obj_move_foreground(st.ttf.ttf_sheet);
     TtfRebuildContent();
 }
@@ -264,10 +258,10 @@ void TtfRebuildContent() {
     Book_DisableScroll(head);
     const char* title = "";
     switch (st.ttf.ttf_mode) {
-        case BookUiState::TtfMode::kList: title = "导入 TTF"; break;
-        case BookUiState::TtfMode::kConfirm: title = "导入 TTF"; break;
-        case BookUiState::TtfMode::kProgress: title = "转换中"; break;
-        case BookUiState::TtfMode::kResult: title = "转换失败"; break;
+        case BookUiState::TtfMode::kList: title = Lang::Strings::BOOK_IMPORT_TTF; break;
+        case BookUiState::TtfMode::kConfirm: title = Lang::Strings::BOOK_IMPORT_TTF; break;
+        case BookUiState::TtfMode::kProgress: title = Lang::Strings::TTF_CONVERTING; break;
+        case BookUiState::TtfMode::kResult: title = Lang::Strings::TTF_FAILED; break;
         default: break;
     }
     {
@@ -290,7 +284,13 @@ void TtfRebuildContent() {
         lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
     }
     lv_obj_t* title_lbl = lv_label_create(head);
-    lv_label_set_text(title_lbl, title);
+    if (!st.ttf.ttf_selected.empty()) {
+        char selected[48];
+        std::snprintf(selected, sizeof(selected), Lang::Strings::BOOK_SELECTED_FMT, TtfSelectedCount());
+        lv_label_set_text(title_lbl, selected);
+    } else {
+        lv_label_set_text(title_lbl, title);
+    }
     lv_obj_set_style_text_font(title_lbl, Book_ListFont(), 0);
     lv_obj_clear_flag(title_lbl, LV_OBJ_FLAG_CLICKABLE);
 
@@ -315,9 +315,9 @@ void TtfRebuildContent() {
                     std::max(1, frame_height - nav_height - 4));
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(content, st.ttf.ttf_mode == BookUiState::TtfMode::kList ? 0 : UiSx(12), 0);
-    lv_obj_set_style_pad_row(content, UiSy(10), 0);
-    lv_obj_set_scroll_dir(content, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(content, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_pad_row(content, UiSy(4), 0);
+    Book_DisableScroll(content);
+    lv_obj_set_scrollbar_mode(content, LV_SCROLLBAR_MODE_OFF);
     if (list_mode) {
         auto* pager = lv_obj_create(frame);
         lv_obj_remove_style_all(pager);
@@ -354,27 +354,26 @@ void TtfRebuildContent() {
     switch (st.ttf.ttf_mode) {
         case BookUiState::TtfMode::kList: {
             if (st.ttf.ttf_files.empty()) {
-                auto* empty = lv_label_create(content);
-                lv_label_set_text(empty, "未找到 TTF/OTF 字体\n请放入 SD 卡 metalio/e-ink/fonts_ttf 目录");
-                lv_obj_set_width(empty, lv_pct(100));
-                lv_label_set_long_mode(empty, LV_LABEL_LONG_WRAP);
-                lv_obj_set_style_text_font(empty, Book_ItemFont(), 0);
+                Book_ShowMessage(content, Lang::Strings::TTF_EMPTY, Book_ItemFont());
                 break;
             }
             auto* list = content;
             lv_obj_set_style_pad_row(list, 0, 0);
-            const int start = st.ttf.ttf_page * TtfRowsPerPage();
-            for (int i = 0; i < TtfRowsPerPage(); ++i) {
+            const int start = st.ttf.ttf_page * kFontListPageSize;
+            lv_obj_update_layout(list);
+            const int page_height = lv_obj_get_height(list);
+            for (int i = 0; i < kFontListPageSize; ++i) {
                 const int idx = start + i;
                 lv_obj_t* row = lv_obj_create(list);
                 lv_obj_remove_style_all(row);
                 lv_obj_set_width(row, lv_pct(100));
-                lv_obj_set_height(row, kFontListRowH);
+                lv_obj_set_height(row, (i + 1) * page_height / kFontListPageSize -
+                    i * page_height / kFontListPageSize);
                 lv_obj_set_style_pad_hor(row, 12, 0);
                 lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
                 lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                                       LV_FLEX_ALIGN_CENTER);
-                if (i + 1 < TtfRowsPerPage()) {
+                if (i + 1 < kFontListPageSize) {
                     lv_obj_set_style_border_width(row, kTocLineThin, 0);
                     lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
                     lv_obj_set_style_border_color(row, lv_color_black(), 0);
@@ -394,12 +393,27 @@ void TtfRebuildContent() {
                     continue;
                 }
                 HapticAttachClick(row);
-                lv_obj_add_event_cb(row, OnTtfRowClick, LV_EVENT_CLICKED, nullptr);
+                lv_obj_add_event_cb(row, OnTtfRowClick, LV_EVENT_SHORT_CLICKED, nullptr);
+                lv_obj_add_event_cb(row, OnTtfRowLongPressed, LV_EVENT_LONG_PRESSED, nullptr);
                 lv_obj_add_event_cb(
                     row, [](lv_event_t* ev) { lv_event_stop_bubbling(ev); }, LV_EVENT_CLICKED,
                     nullptr);
                 lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
                 lv_obj_set_user_data(row, reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
+                if (!st.ttf.ttf_selected.empty()) {
+                    auto* check = lv_obj_create(row);
+                    lv_obj_remove_style_all(check);
+                    lv_obj_set_size(check, UiSx(24), UiSx(24));
+                    lv_obj_set_style_border_width(check, 2, 0);
+                    lv_obj_set_style_border_color(check, lv_color_black(), 0);
+                    lv_obj_set_style_radius(check, UiSx(4), 0);
+                    lv_obj_set_style_bg_color(check, st.ttf.ttf_selected[idx] ?
+                        lv_color_black() : lv_color_white(), 0);
+                    lv_obj_set_style_bg_opa(check, LV_OPA_COVER, 0);
+                    Book_DisableScroll(check);
+                    lv_obj_clear_flag(check, LV_OBJ_FLAG_CLICKABLE);
+                    lv_obj_set_style_pad_column(row, UiSx(10), 0);
+                }
                 Book_SetFilenameMiddle(name, st.ttf.ttf_files[static_cast<size_t>(idx)].c_str());
             }
             break;
@@ -415,14 +429,14 @@ void TtfRebuildContent() {
             lv_obj_set_height(size_row, LV_SIZE_CONTENT);
             lv_obj_set_style_border_side(size_row, static_cast<lv_border_side_t>(LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM), 0);
             lv_obj_set_style_border_width(size_row, 1, 0);
-            lv_obj_set_style_pad_ver(size_row, UiSy(12), 0);
+            lv_obj_set_style_pad_ver(size_row, UiSy(8), 0);
             lv_obj_set_flex_flow(size_row, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(size_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
                                   LV_FLEX_ALIGN_CENTER);
             lv_obj_clear_flag(size_row, LV_OBJ_FLAG_CLICKABLE);
             Book_DisableScroll(size_row);
             lv_obj_t* size_lab = lv_label_create(size_row);
-            lv_label_set_text(size_lab, "字号（20–80px）");
+            lv_label_set_text(size_lab, Lang::Strings::TTF_SIZE_RANGE);
             lv_obj_set_style_text_font(size_lab, Book_ItemFont(), 0);
             lv_obj_clear_flag(size_lab, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_t* stepper = lv_obj_create(size_row);
@@ -436,7 +450,7 @@ void TtfRebuildContent() {
             lv_obj_clear_flag(stepper, LV_OBJ_FLAG_CLICKABLE);
             Book_DisableScroll(stepper);
             st.ttf.ttf_size_dec =
-                make_button(stepper, "-", OnTtfSizeDec, UiSx(60), true);
+                make_button(stepper, Lang::Strings::SETTINGS_FRONTLIGHT_BRIGHTNESS_DEC, OnTtfSizeDec, UiSx(60), true);
             lv_obj_t* size_val = lv_label_create(stepper);
             char size_txt[16];
             std::snprintf(size_txt, sizeof(size_txt), "%dpx", st.ttf.ttf_size_px);
@@ -445,9 +459,9 @@ void TtfRebuildContent() {
             lv_obj_clear_flag(size_val, LV_OBJ_FLAG_CLICKABLE);
             st.ttf.ttf_size_value = size_val;
             st.ttf.ttf_size_inc =
-                make_button(stepper, "+", OnTtfSizeInc, UiSx(60), true);
+                make_button(stepper, Lang::Strings::SETTINGS_FRONTLIGHT_BRIGHTNESS_INC, OnTtfSizeInc, UiSx(60), true);
 
-            MakeTtfTip(content, "同名 .ef 文件将被覆盖。离开页面或待机将取消转换，请勿拔卡。");
+            MakeTtfTip(content, Lang::Strings::TTF_OVERWRITE_HINT);
             RefreshTtfConfirmTexts();
 
             lv_obj_t* btns = lv_obj_create(content);
@@ -461,10 +475,24 @@ void TtfRebuildContent() {
             Book_DisableScroll(btns);
             lv_obj_set_style_pad_hor(btns, 0, 0);
             lv_obj_set_style_pad_column(btns, UiSx(18), 0);
-            auto* cancel = make_button(btns, "取消", OnTtfConfirmNo, 0);
-            auto* convert = make_button(btns, "开始转换", OnTtfConfirmYes, 0);
+            auto* cancel = make_button(btns, Lang::Strings::COMMON_CANCEL, OnTtfConfirmNo, 0);
+            auto* convert = make_button(btns, Lang::Strings::TTF_START, OnTtfConfirmYes, 0);
             lv_obj_set_flex_grow(cancel, 1);
             lv_obj_set_flex_grow(convert, 2);
+
+            lv_obj_update_layout(btns);
+            auto* apply_row = lv_obj_create(content);
+            lv_obj_remove_style_all(apply_row);
+            lv_obj_set_size(apply_row, lv_pct(100), LV_SIZE_CONTENT);
+            lv_obj_set_flex_flow(apply_row, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(apply_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER,
+                                  LV_FLEX_ALIGN_CENTER);
+            lv_obj_clear_flag(apply_row, LV_OBJ_FLAG_CLICKABLE);
+            Book_DisableScroll(apply_row);
+            auto* apply = make_button(apply_row, Lang::Strings::TTF_APPLY, OnTtfApply,
+                                      lv_obj_get_width(convert));
+            lv_obj_set_style_bg_color(apply, lv_color_black(), 0);
+            lv_obj_set_style_text_color(lv_obj_get_child(apply, 0), lv_color_white(), 0);
             break;
         }
         case BookUiState::TtfMode::kProgress: {
@@ -482,7 +510,7 @@ void TtfRebuildContent() {
             lv_obj_set_style_pad_top(progress_head, UiSy(12), 0);
             Book_DisableScroll(progress_head);
             auto* stage = lv_label_create(progress_head);
-            lv_label_set_text(stage, "正在生成字库");
+            lv_label_set_text(stage, Lang::Strings::TTF_GENERATING);
             lv_obj_set_style_text_font(stage, Book_ItemFont(), 0);
             lv_obj_t* pct = lv_label_create(progress_head);
             char pbuf[16];
@@ -514,12 +542,12 @@ void TtfRebuildContent() {
             Book_DisableScroll(separator);
             lv_obj_clear_flag(separator, LV_OBJ_FLAG_CLICKABLE);
 
-            MakeTtfTip(content, "转换完成后，字库将加入字体列表。离开页面或待机将取消转换，请勿拔卡。");
+            MakeTtfTip(content, Lang::Strings::TTF_PROGRESS_HINT);
             break;
         }
         case BookUiState::TtfMode::kResult: {
             char buf[96];
-            std::snprintf(buf, sizeof(buf), "转换失败：%.60s", ttf_convert::Error());
+            std::snprintf(buf, sizeof(buf), Lang::Strings::TTF_FAILED_FMT, ttf_convert::Error());
             st.ttf.ttf_msg_lbl = MakeTtfTip(content, buf);
             lv_obj_t* btns = lv_obj_create(content);
             lv_obj_remove_style_all(btns);
@@ -530,7 +558,7 @@ void TtfRebuildContent() {
                                   LV_FLEX_ALIGN_CENTER);
             lv_obj_clear_flag(btns, LV_OBJ_FLAG_CLICKABLE);
             Book_DisableScroll(btns);
-            make_button(btns, "返回导入列表", OnTtfConfirmNo, UiSx(180));
+            make_button(btns, Lang::Strings::TTF_BACK_TO_LIST, OnTtfConfirmNo, UiSx(180));
             break;
         }
         default:

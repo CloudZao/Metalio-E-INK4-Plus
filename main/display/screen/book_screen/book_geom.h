@@ -4,14 +4,14 @@
 
 #include "reader/reader.h"
 
-inline constexpr lv_coord_t kReaderVerticalLeftInset = 20; // 竖排正文在页边距之外增加的左留白，单位像素
+inline constexpr lv_coord_t kReaderVerticalSideInset = 20; // 竖排正文在列起始侧增加的留白，单位像素
 
-/** @brief 设置卡片盖在正文上：关掉即可，不必重绘；目录整页需恢复正文 */
-void SyncReaderAaForImmersion(bool immersive);
+/** @brief 按正文是否可见同步阅读 AA；设置卡片覆盖时正文仍可见 */
+void SyncReaderAaForImmersion(bool text_visible);
 /** @brief 把 NVS 排版偏好绑定到 BookSession */
 void BindSessionLayoutPrefs(reader::BookSession& session);
-/** @brief 正文内容区宽度（阅读页边距）；与沉浸态居中栏宽一致。 书库/详情继续用 Book_ContentWidth()（kListPad），互不影响。 */
-lv_coord_t ReadContentWidth();
+/** @brief 计算四边距内的正文可绘区域；方格模式只使用居中的完整网格范围 */
+lv_area_t ReadContentArea();
 /** @brief 打开进度 UI 用书库边距；避免阅读页边距档位导致 Book_ContentWidth 溢出 */
 void ApplyOverlayListContentPads(lv_coord_t top_pad);
 /** @brief 应用阅读方向并更新正文、阅读菜单和排版；须在 LVGL 任务调用 */

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <algorithm>
 #include <string>
 #include <functional>
 #include "book_read_error.h"
@@ -36,6 +37,7 @@ struct ContentBlock {
     ContentKind kind = ContentKind::kText;
     std::string text;       // kText
     std::string image_href; // kImage：相对 EPUB 根或绝对文件路径
+    int image_width = 0, image_height = 0; // kImage：已知原图尺寸，未知为 0
     bool chapter_title = false; // 章名段：分页后加粗居中；可含「第N章」换行接章节名
     bool continuation = false; // 同一段正文的后续片段
     bool continues = false; // 此片段之后同一段正文还有内容
@@ -64,13 +66,53 @@ struct Page {
     std::vector<PageItem> items;
 };
 
-// 阅读排版默认值（与 BookReaderPrefs 标准档一致；经 BookSession::SetGaps 注入）
-constexpr lv_coord_t kReaderLineGapDefault = 6;
+// 阅读排版默认值（与 BookReaderPrefs 标准档一致；经 BookSession::SetLineSpacing 注入）
+constexpr int kReaderLineSpacingPercentDefault = 10; // 标准行疏密，按字体行框比例计算
 constexpr lv_coord_t kReaderParaGapDefault = 0; // 普通段落不增加额外段距，保持正文页行数稳定
 constexpr lv_coord_t kReaderChapterTitleAfterGap = 10; // 章名与后文额外间距
-/** @deprecated 兼容旧引用；新代码用 Default 或 prefs */
-constexpr lv_coord_t kReaderLineGap = kReaderLineGapDefault;
-constexpr lv_coord_t kReaderParaGap = kReaderParaGapDefault;
+constexpr int kReaderUnderlineGap = 2; // 横排字形下沿与下划线之间的净空像素数
+constexpr int kReaderUnderlineThickness = 2; // 横排下划线的像素线宽
+
+inline int ReaderGlyphInkBottom(const lv_font_t* font, const lv_font_glyph_dsc_t& glyph) {
+    return static_cast<int>(font->line_height) - static_cast<int>(font->base_line) - glyph.ofs_y - 1;
+}
+
+inline int ReaderUnderlineTop(int ink_bottom) {
+    return ink_bottom + kReaderUnderlineGap + 1;
+}
+
+struct TextLineLayout {
+    lv_coord_t extent = 0; // 完整阅读视口沿换行方向的长度
+    lv_coord_t line_height = 0; // 包含下划线的字形行框
+    int count = 0; // 同一视口最多容纳的行或列数
+    lv_coord_t CellHeight(int row) const {
+        if (count <= 0 || row < 0 || row >= count) return 0;
+        return static_cast<lv_coord_t>((static_cast<int64_t>(row + 1) * extent) / count -
+            (static_cast<int64_t>(row) * extent) / count);
+    }
+    lv_coord_t TextOffset(int row) const { return std::max<lv_coord_t>(0, (CellHeight(row) - line_height) / 2); }
+};
+
+/** @brief 按字体行框、相对疏密及完整视口生成均分余量的行布局。 */
+inline TextLineLayout MakeTextLineLayout(const lv_font_t* font, lv_coord_t extent,
+                                         int spacing_percent, bool vertical = false) {
+    TextLineLayout layout;
+    layout.extent = std::max<lv_coord_t>(0, extent);
+    const int line_h = font && font->line_height > 0 ? font->line_height : 24;
+    // 行内始终预留装饰空间，开关下划线不改变文字位置和分页。
+    const int frame = line_h + (vertical ? 1 : kReaderUnderlineGap + kReaderUnderlineThickness);
+    layout.line_height = static_cast<lv_coord_t>(frame);
+    const int desired = std::max(frame, line_h + static_cast<int>(
+        (static_cast<int64_t>(line_h) * std::max(0, spacing_percent) + 50) / 100));
+    if (layout.extent >= frame) layout.count = std::max(1, static_cast<int>(layout.extent) / std::max(1, desired));
+    return layout;
+}
+
+/** @brief 段落在普通行距之外增加的间距，章名后附加章后距。 */
+inline lv_coord_t ReaderParagraphGap(lv_coord_t para_gap, bool previous_title) {
+    return static_cast<lv_coord_t>(std::max<lv_coord_t>(0, para_gap) +
+        (previous_title ? kReaderChapterTitleAfterGap : 0));
+}
 
 // 解码后的封面/插图（L8，适合 I1 墨水屏）
 struct RasterImage {

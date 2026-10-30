@@ -9,6 +9,10 @@ choice BOARD_TYPE
     config BOARD_TYPE_METALIO_E_INK4_PLUS
         bool "Metalio E-Ink4-Plus (4.7 parallel)"
         depends on IDF_TARGET_ESP32S31
+
+    config BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
+        bool "Metalio E-Ink4-Plus Global (4.7 parallel)"
+        depends on IDF_TARGET_ESP32S31
 endchoice
 
 choice WAKE_WORD_TYPE

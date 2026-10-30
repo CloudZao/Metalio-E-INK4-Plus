@@ -1,3 +1,4 @@
+#include "assets/lang_screen.h"
 #include "ssid_manager.h"
 #include "application.h"
 #include "board.h"
@@ -24,7 +25,7 @@
 #include "task_screen/task_screen.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
 #include "ota_confirm_dialog/ota_confirm_dialog.h"
-#ifdef CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS
+#if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
 #include "boards/metalio-e-ink4-plus/display/metalio_touch.h"
 #include "boards/metalio-e-ink4-plus/bus/metalio_i2c1.h"
 #endif
@@ -65,19 +66,19 @@ namespace {
 class OtaTouchPause {
 public:
     OtaTouchPause() {
-#ifdef CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS
+        #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
         metalio_touch_set_feed_paused(true);
         // Drain an in-flight read before starting the upgrade. The sampler also
         // rechecks pause depth after taking this bus lock, closing the race.
         if (metalio_i2c1_lock(-1)) {
             metalio_i2c1_unlock();
         }
-#endif
+        #endif
     }
     ~OtaTouchPause() {
-#ifdef CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS
+        #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
         metalio_touch_set_feed_paused(false);
-#endif
+        #endif
     }
     OtaTouchPause(const OtaTouchPause&) = delete;
     OtaTouchPause& operator=(const OtaTouchPause&) = delete;
@@ -1349,7 +1350,7 @@ bool Application::RejectUnactivatedListening() {
         auto& app = Application::GetInstance();
         if (AssistantScreen::IsActive() && !StandbyScreen::IsActive() &&
             (app.chat_activation_pending_.load() || app.HasPendingActivationCode())) {
-            ScreenShowToast("请先激活设备");
+            ScreenShowToast(Lang::Strings::DEVICE_ACTIVATE_FIRST);
         }
     };
     if (!ScreenLvAsyncUrgent(notify)) ScreenLvAsync(notify);
@@ -1556,7 +1557,7 @@ void Application::BootStandbyCheckpoint() {
 void Application::Start() {
     BootStandbyCheckpoint();
     chat_cloud::InitializeFromNvs();
-    // UI 语言：NVS ui/language，无则 LANG_DEFAULT_CODE（跟 CONFIG_LANGUAGE_*）
+    // UI 语言优先读取 NVS ui/language，无记录时使用板型默认语言。
     Lang::InitFromNvs();
 
     // SD 运行日志（默认开；有卡写 metalio/e-ink/logs/metalio_logs.txt）
@@ -1800,7 +1801,7 @@ void Application::DispatchClockTick() {
             static bool sd_error_notified = false;
             if (!sd_error_notified && SdCardManager::GetInstance().HasIoError() &&
                 !StandbyScreen::IsActive()) {
-                ScreenShowToast("SD 卡读写异常");
+                ScreenShowToast(Lang::Strings::STORAGE_IO_ERROR);
                 sd_error_notified = true;
             }
             Board::GetInstance().GetDisplay()->UpdateStatusBar();

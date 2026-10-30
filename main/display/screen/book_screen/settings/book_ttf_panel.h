@@ -6,8 +6,6 @@
 bool IsTtfFileName(const char* name);
 /** @brief TTF 列表总页数 */
 int TtfPageCount();
-/** @brief 根据字体列表可用高度计算每页行数。 */
-int TtfRowsPerPage();
 /** @brief 扫描 SD 上 TTF/OTF */
 void TtfScanFiles();
 /** @brief 关闭并清理 TTF 面板 */

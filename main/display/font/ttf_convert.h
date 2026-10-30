@@ -7,8 +7,9 @@
 namespace ttf_convert {
 
 /**
- * @brief 启动转换：读 template_ef_path 的字集，渲染 sizes_px 各档 2bpp，
+ * @brief 启动转换：按字集渲染 sizes_px 各档 2bpp，
  * 输出 {family}_{px}_2.ef 到 out_dir。family 取 TTF 文件名 stem。
+ * template_ef_path 为空指针或空串时使用内置阅读字集，否则读取该 .ef 的字集。
  * size_count 通常为 1（UI 默认 40px，可选 20–80）；最多 3。
  * 运行中重复调用返回 false。失败原因经 Error() 获取。
  */
@@ -30,7 +31,7 @@ bool Busy();
 /** @brief 请求取消转换，由后台任务释放资源后退出。 */
 void Cancel();
 
-/** @brief 生成输出名前缀：TTF/OTF 文件名 stem 净化（与 Start 写入规则一致）。 */
+/** @brief 获取源文件名去掉最后一个扩展名后的原始名称，保留中文、空格和标点。 */
 void FamilyFromPath(const char* ttf_path, char* out, size_t out_len);
 
 /**

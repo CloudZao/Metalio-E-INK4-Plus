@@ -399,7 +399,7 @@ void Network_AsyncOpenSuccess(void* p) {
         Network_State().retry_ssid.clear();
         Network_ClosePasswordPage();
         if (Network_State().transfer_mode) {
-            Network_OpenStatusOverlay("WIFI传输已就绪");
+            Network_OpenStatusOverlay(Lang::Strings::NETWORK_TRANSFER_READY);
             auto* card = lv_obj_get_parent(Network_State().ui.status_msg);
             lv_obj_set_style_pad_row(card, UiSy(8), 0);
             if (const auto* font = fontpack_lv_font_get(30, 4)) {
@@ -417,15 +417,15 @@ void Network_AsyncOpenSuccess(void* p) {
             };
             auto* network = add_text("");
             lv_obj_set_height(network, Network_UiLineH());
-            add_text("手机或电脑连接同一WIFI\n扫码或用浏览器打开下方网址");
+            add_text(Lang::Strings::NETWORK_TRANSFER_OPEN_HINT);
             auto* qr = ApQrCreate(card);
             ApQrPaint(qr, Network_State().transfer_info.url);
             add_text(Network_State().transfer_info.url);
-            add_text("切换传输方式或退出传输页将停止传输");
-            Network_MakeBtn(card, "返回列表", kPwdBtnW, kPwdBtnH,
+            add_text(Lang::Strings::NETWORK_TRANSFER_STOP_HINT);
+            Network_MakeBtn(card, Lang::Strings::NETWORK_BACK_TO_LIST, kPwdBtnW, kPwdBtnH,
                 [](lv_event_t*) { Network_CloseStatusOverlay(); });
             char network_name[80];
-            snprintf(network_name, sizeof(network_name), "当前网络：%s", msg->ssid.c_str());
+            snprintf(network_name, sizeof(network_name), Lang::Strings::NETWORK_CURRENT_SSID_FMT, msg->ssid.c_str());
             Book_SetFilenameMiddle(network, network_name);
         } else {
             char headline[96];

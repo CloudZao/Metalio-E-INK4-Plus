@@ -1,3 +1,5 @@
+#include "assets/lang_screen.h"
+#include "assets/lang_config.h"
 // assistant_ingest.cc — split from assistant_screen.cc
 #include "assistant_screen_priv.h"
 
@@ -368,7 +370,7 @@ void AssistantScreen::AddMessage(const char* role, const char* content) {
         auto* spans = cJSON_AddArrayToObject(comp, "spans");
         auto* prefix = cJSON_CreateObject();
         cJSON_AddItemToArray(spans, prefix);
-        cJSON_AddStringToObject(prefix, "text", std::strcmp(role, "user") == 0 ? "用户：" : "AI：");
+        cJSON_AddStringToObject(prefix, "text", std::strcmp(role, "user") == 0 ? Lang::Strings::ASSISTANT_USER_PREFIX : Lang::Strings::ASSISTANT_AI_PREFIX);
         cJSON_AddBoolToObject(prefix, "bold", true);
         auto* message = cJSON_CreateObject();
         cJSON_AddItemToArray(spans, message);
@@ -421,6 +423,7 @@ void AssistantScreen::AddMessage(const char* role, const char* content) {
             return;
         }
         DisplayLockGuard lock(display);
+        if (!lock) return;
         if (!IsActive()) {
             return;
         }

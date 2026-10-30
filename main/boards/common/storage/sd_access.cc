@@ -170,6 +170,14 @@ Permit::Permit() : acquired_(AddPermit()) {
     if (!acquired_) ESP_LOGW("SdAccess", "permit unavailable: task slots exhausted");
 }
 Permit::~Permit() { if (acquired_) RemovePermit(); }
+DeferredTransaction::DeferredTransaction() : admitted_(Admit()) {}
+DeferredTransaction::~DeferredTransaction() { if (admitted_) Finish(); }
+Transaction::Transaction(DeferredTransaction& deferred) : admitted_(false) {
+    if (deferred.admitted_ && AddPermit(true)) {
+        deferred.admitted_ = false;
+        admitted_ = true;
+    }
+}
 Transaction::Transaction() : admitted_(Admit()) {
     if (admitted_ && !AddPermit(true)) {
         Finish();

@@ -1,6 +1,8 @@
 #pragma once
 // Read after a stopped scan; no ISR logging is needed for stream diagnosis.
 void epd_lcd_get_stream_stats(int* max_eof_gap_us,int* max_eof_work_us);
+/** @brief 获取已停止扫描的最近一相 LCD 扫描耗时，单位为微秒。 */
+int epd_lcd_get_scan_time_us(void);
 
 #include <driver/gpio.h>
 #include <stdbool.h>

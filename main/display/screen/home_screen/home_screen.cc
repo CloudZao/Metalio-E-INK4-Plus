@@ -21,6 +21,7 @@
 #include "vk_key_handler.h"
 #include "vk_page_repeat.h"
 #include "wallpaper_screen/wallpaper_screen.h"
+#include "sdkconfig.h"
 
 #include <cstdio>
 #include <cstring>
@@ -56,7 +57,9 @@ void Home_OnAppNameDraw(lv_event_t* e)
     const char *Home_AppNameCloud() { return Lang::Strings::HOME_APP_CLOUD; }
     const char *Home_AppNameSettings() { return Lang::Strings::HOME_APP_SETTINGS; }
 
+    #if !CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
     const char* Home_AppNameWorkBuddy() { return "workbuddy"; }
+    #endif
 
     extern const AppEntry kApps[] = {
         {"A:ic_app_home_task.spng", Home_AppNameTask, TaskScreen::Create},
@@ -65,7 +68,9 @@ void Home_OnAppNameDraw(lv_event_t* e)
         {"A:ic_app_home_wallpaper.spng", Home_AppNameWallpaper, WallpaperScreen::Create},
         {"A:ic_app_home_cloud.spng", Home_AppNameCloud, CloudScreen::Create},
         {"A:ic_app_home_setting.spng", Home_AppNameSettings, SettingsScreen::Create},
+        #if !CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
         {"A:ic_app_home_workbuddy.spng", Home_AppNameWorkBuddy, WorkBuddyScreen::Create},
+        #endif
     };
 
     // 仅对外展示用户可见的应用，保持首页与设计稿一致。
@@ -76,7 +81,9 @@ void Home_OnAppNameDraw(lv_event_t* e)
         {"A:ic_app_home_task.spng", Home_AppNameTask, TaskScreen::Create},
         {"A:ic_app_home_cloud.spng", Home_AppNameCloud, CloudScreen::Create},
         {"A:ic_app_home_setting.spng", Home_AppNameSettings, SettingsScreen::Create},
+        #if !CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
         {"A:ic_app_home_workbuddy.spng", Home_AppNameWorkBuddy, WorkBuddyScreen::Create},
+        #endif
     };
 
     // 每页六个应用，新增应用自动进入后续页。
@@ -167,6 +174,10 @@ void Home_UpdatePageIndicator() {
 }
 
 static void Home_CreatePageIndicator(lv_obj_t* screen) {
+    if (Home_PageCount() <= 1) {
+        Home_page_lbl = nullptr;
+        return;
+    }
     Home_page_lbl = lv_obj_create(screen);
     lv_obj_remove_style_all(Home_page_lbl);
     lv_obj_set_size(Home_page_lbl, Home_PageCount() * UiSx(20), UiSy(30));
@@ -318,7 +329,7 @@ bool HomeScreen::GoToFirstPage() {
         lv_obj_set_style_pad_all(cell, 0, 0);
         Home_ApplyCardStyle(cell, card_style);
         lv_obj_set_style_radius(cell, kCardRadius, 0);
-        lv_obj_set_style_clip_corner(cell, true, 0);
+        // 子控件无需圆角裁剪，避免名称上下部分分别走黑白直绘与 ARGB 混合。
         lv_obj_set_style_layout(cell, LV_LAYOUT_NONE, 0);
         lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);

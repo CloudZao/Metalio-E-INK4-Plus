@@ -97,8 +97,9 @@ public:
                  Bq27220Gauge::GetInstance().IsReady() ? "ok" : "N/A");
     }
 
+    /** @brief 返回当前构建所选板型的标识 */
     std::string GetBoardType() override {
-        return "metalio-e-ink4-plus";
+        return BOARD_TYPE;
     }
 
     Display* GetDisplay() override {
@@ -114,7 +115,7 @@ public:
     }
 
     bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
-        return Bq27220Gauge::GetInstance().GetBatteryLevel(level, charging, discharging);
+        return Bq27220Gauge::GetInstance().GetCachedBatteryLevel(level, charging, discharging);
     }
 
     void PulseVibration(int duration_ms = 50) override {

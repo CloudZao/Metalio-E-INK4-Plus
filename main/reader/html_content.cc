@@ -229,15 +229,19 @@ bool HtmlBlockParser::Tag() {
     if (closing) ++begin;
     while (begin < end && std::isspace(static_cast<unsigned char>(*begin))) ++begin;
     const char* p = begin;
-    while (p < end && std::isalnum(static_cast<unsigned char>(*p))) ++p;
-    const std::string name = ToLower(std::string(begin, p));
-    if (name == "script") in_script_ = !closing;
+    while (p < end && (std::isalnum(static_cast<unsigned char>(*p)) || *p == ':' || *p == '-' || *p == '_')) ++p;
+    std::string name = ToLower(std::string(begin, p));
+    const size_t colon = name.find(':');
+    if (colon != std::string::npos) name.erase(0, colon + 1);
+    if (name == "head") in_head_ = !closing;
+    else if (name == "script") in_script_ = !closing;
     else if (name == "style") in_style_ = !closing;
-    else if (!in_script_ && !in_style_) {
+    else if (!in_head_ && !in_script_ && !in_style_) {
         if (!closing && (name == "img" || name == "image")) {
             if (!Emit(false)) return false;
             std::string src = ReadAttrValue(begin, end, "src");
             if (src.empty()) src = ReadAttrValue(begin, end, "xlink:href");
+            if (src.empty()) src = ReadAttrValue(begin, end, "href");
             ContentBlock image; image.kind = ContentKind::kImage;
             image.image_href = NormalizeZipPath(base_, DecodeHtmlEntities(src));
             if (!image.image_href.empty() && !sink_(std::move(image))) return false;
@@ -287,7 +291,7 @@ bool HtmlBlockParser::Feed(const uint8_t* data, size_t size) {
             entity_.clear();
         }
         if (c == '<') { in_tag_ = true; continue; }
-        if (in_script_ || in_style_) continue;
+        if (in_head_ || in_script_ || in_style_) continue;
         if (c == '&') entity_ = "&";
         else if (!Text(c)) return false;
     }

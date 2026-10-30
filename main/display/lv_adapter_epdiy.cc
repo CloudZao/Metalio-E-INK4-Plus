@@ -8,6 +8,7 @@
 #include "epd_refresh.h"
 #include "epd_prepare.h"
 #include "epd_content_policy.h"
+#include "reader/image_tone.h"
  
 #include "lv_adapter_epdiy_touch.h"
 
@@ -22,13 +23,8 @@
 #include "config.h"
 #include "device_state.h"
 #include "display_orient.h"
-#include "epd_board_metalio_eink4_plus.h"
 #include "epd_font24.h" // EPD_LOGICAL_W/H、epd_logical_to_physical
-#include "epd_highlevel.h"
 #include "epdiy.h"
-extern "C" {
-#include "output_lcd/lcd_driver.h"
-}
 #include "fontpack_lvgl.h"
 #include "frontlight.h"
 #include "home_screen/home_screen.h"
@@ -37,7 +33,6 @@ extern "C" {
 #include "metalio_touch.h"
 #include "ota_confirm_dialog/ota_confirm_dialog.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
-#include "power_hw.h"
 #include "power_policy.h"
 #include "screen_common.h"
 #include "sd_access.h"
@@ -48,6 +43,7 @@ namespace {
 bool BlitL8ToEpdFullScreen(const reader::RasterImage& img);
 }
 #include "book_screen/book_screen.h"
+#include "book_screen/book_nav.h"
 #include "vk_key_handler.h"
 #include "book_screen/reader/book_open_worker.h"
 #include "book_screen/reader/book_reader_prefs.h"
@@ -89,7 +85,6 @@ extern "C" void* __wrap_lv_realloc_core(void* memory, size_t size) {
 
 #define TAG "lv_epdiy"
 
-static constexpr int kEpdTempC = 25;
 static std::atomic<bool> s_force_full{false};
 static std::atomic<bool> s_stream_paint{false};
 static std::atomic<bool> s_freeze_updates{false};
@@ -116,8 +111,8 @@ static void DisplayTickTask(void* /*arg*/) {
         auto* d = LvAdapterEpdiy::Instance();
         if (d != nullptr) {
             d->Tick();
-            if (MetalioKeys_TakeShutdownPulse()) {
-                // 与电源长按策略同路：先刷关机图再脉冲（幂等）
+            // 待机由 LP 任务消费长按请求，确保硬件恢复完成后再关机。
+            if (!StandbyScreen::IsActive() && MetalioKeys_TakeShutdownPulse()) {
                 PowerPolicy::GetInstance().RequestPowerOff();
             }
         }
@@ -138,23 +133,12 @@ static void StartDisplayTickTaskOnce() {
 /** LANDSCAPE 下直接写 4bpp FB（等同 epd_draw_pixel，避免每像素函数调用） */
 static inline void FbPutNative(uint8_t* fb, int px, int py, uint8_t color, int fb_w) {
     uint8_t* buf_ptr = &fb[py * (fb_w / 2) + (px / 2)];
+    const unsigned gray = (unsigned(color) * 15 + 127) / 255;
     if (px & 1) {
-        *buf_ptr = static_cast<uint8_t>((*buf_ptr & 0x0F) | (color & 0xF0));
+        *buf_ptr = static_cast<uint8_t>((*buf_ptr & 0x0F) | (gray << 4));
     } else {
-        *buf_ptr = static_cast<uint8_t>((*buf_ptr & 0xF0) | (color >> 4));
+        *buf_ptr = static_cast<uint8_t>((*buf_ptr & 0xF0) | gray);
     }
-}
-
-// 统一落墨闸门：busy 供 WiFi 等 defer；硬冲突在此 pause
-static void epd_panel_enter() {
-    Display::SetPanelBusy(true);
-    // tip/add76573：落墨期间勿并发采触摸（I2C1 与 TCA/TPS 争用会出假点）
-    metalio_touch_set_feed_paused(true);
-}
-
-static void epd_panel_exit() {
-    metalio_touch_set_feed_paused(false);
-    Display::SetPanelBusy(false);
 }
 
 static void epd_commit_update(bool force_full) {
@@ -330,23 +314,6 @@ bool LvAdapterEpdiy::Init() {
     width_ = DISPLAY_CONTENT_W;
     height_ = DISPLAY_CONTENT_H;
 
-    EpdDrawError clear_result;
-    {
-        PowerHwCpuFreqHold cpu_freq_hold;
-        epd_panel_enter();
-        epd_poweron();
-        assert(epd_lcd_white_border_pixels()==DISPLAY_WHITE_BORDER_PIXELS);
-        epd_lcd_prime_white_border(true);
-        clear_result = epd_clear_checked();
-        epd_lcd_prime_white_border(false);
-        epd_poweroff();
-        epd_panel_exit();
-    }
-    if (clear_result != EPD_DRAW_SUCCESS) {
-        ESP_LOGE(TAG, "startup panel clear failed: 0x%x", (unsigned)clear_result);
-        return false;
-    }
-
     if (!EpdRefreshInit()) {
         ESP_LOGE(TAG, "refresh worker/buffers unavailable");
         return false;
@@ -445,7 +412,6 @@ bool LvAdapterEpdiy::Init() {
              DISPLAY_CONTENT_LEFT_INSET, DISPLAY_CONTENT_RIGHT_INSET, DISPLAY_CONTENT_TOP_INSET,
              DISPLAY_CONTENT_BOTTOM_INSET);
     lv_screen_load(HomeScreen::Create());
-    s_force_full.store(true);
     lv_refr_now(s_disp);
 
     {
@@ -454,6 +420,7 @@ bool LvAdapterEpdiy::Init() {
                 [](void* arg) {
                     auto* display = static_cast<LvAdapterEpdiy*>(arg);
                     DisplayLockGuard lock(display);
+                    if (!lock) return;
                     if (display->notification_label_ != nullptr) {
                         lv_obj_add_flag(display->notification_label_, LV_OBJ_FLAG_HIDDEN);
                     }
@@ -659,6 +626,12 @@ void LvAdapterEpdiy::Tick() {
         return;
     }
     if (Lock(50)) {
+        const int64_t round_start = esp_timer_get_time();
+        VkKey_DrainTouch();
+        PollBootKey();
+        PollSideKeys();
+        while (MetalioKeys_TakeEdge()) {}
+        PollReaderPageWork();
         ScreenLvAsyncDrain();
         // OpenDone 无锁投递：先于 timer_handler，避免整屏绘制占锁时回调永远进不来
         BookDrainPendingOpenDone();
@@ -672,14 +645,18 @@ void LvAdapterEpdiy::Tick() {
         const int64_t t0 = esp_timer_get_time();
         lv_timer_handler();
         const int64_t dt = esp_timer_get_time() - t0;
+        const int64_t round_us = esp_timer_get_time() - round_start;
         Unlock();
-        if (dt > 200 * 1000) {
-            ESP_LOGW(TAG, "lv_timer_handler slow %lldms", (long long)(dt / 1000));
+        if (round_us > 200 * 1000) {
+            static int64_t last_log_us = 0;
+            static unsigned suppressed = 0;
+            const auto now = esp_timer_get_time();
+            if (last_log_us == 0 || now - last_log_us >= 5000000) {
+                ESP_LOGW(TAG, "UI round slow total=%lldms timers=%lldms suppressed=%u",
+                    static_cast<long long>(round_us / 1000), static_cast<long long>(dt / 1000), suppressed);
+                last_log_us = now; suppressed = 0;
+            } else ++suppressed;
         }
-    }
-    PollBootKey();
-    PollSideKeys();
-    while (MetalioKeys_TakeEdge()) {
     }
 }
 
@@ -758,6 +735,7 @@ void LvAdapterEpdiy::BeginStandbyEnterPaint() {
 
 bool LvAdapterEpdiy::ParkEpdForStandby() {
     DisplayLockGuard lock(this);
+    if (!lock) return false;
     if (Wallpaper_HasStandbySelection() && StandbyWallpaper_DecodedImage() == nullptr) {
         // 解码失败时恢复底层页面，移除已落墨的加载提示。
         s_defer_standby_commit.store(true, std::memory_order_relaxed);
@@ -775,7 +753,7 @@ bool LvAdapterEpdiy::ParkEpdForStandby() {
         DisplayUiSetOrient(kDisplayUiPortrait);
         if (!BlitL8ToEpdFullScreen(*wallpaper)) return false;
     }
-    EpdRequestScreenChange();
+    EpdRequestScreenChange(true);
     const uint32_t sequence = EpdSubmit(false);
     if (!EpdWait(sequence)) {
         ESP_LOGE(TAG, "standby frame failed; stay awake");
@@ -794,7 +772,7 @@ void LvAdapterEpdiy::WakeEpdFromStandby() {
     FreezeFlush(false);
     SetStreamPaintMode(false);
     s_force_full.store(false);
-    EpdRequestScreenChange();
+    EpdRequestScreenChange(true);
     if (lv_screen_active() != nullptr) {
         lv_obj_invalidate(lv_screen_active());
     }
@@ -844,7 +822,7 @@ bool BlitL8ToEpdFullScreen(const reader::RasterImage& img) {
             if (py < 0 || py >= fb_h) {
                 continue;
             }
-            FbPutNative(fb, px, py, row[lx * img.width / draw_w], fb_w);
+            FbPutNative(fb, px, py, reader::DarkenImagePixel(row[lx * img.width / draw_w]), fb_w);
         }
         if ((ly & 63) == 0) {
             taskYIELD();
@@ -959,6 +937,7 @@ void DecodeShutdownWallpaperTask(void* arg) {
 
 bool LvAdapterEpdiy::ShowPoweredOffScreen() {
     DisplayLockGuard lock(this);
+    if (!lock) return false;
     // 加载期间保留原帧，提示局部叠加；解码完成后再生成完整关机画面。
     FreezeFlush(true);
     s_defer_standby_commit.store(true, std::memory_order_relaxed);
@@ -1001,7 +980,7 @@ bool LvAdapterEpdiy::ShowPoweredOffScreen() {
     FreezeFlush(true);
     s_defer_standby_commit.store(false, std::memory_order_relaxed);
     s_force_full.store(false);
-    EpdRequestScreenChange();
+    EpdRequestScreenChange(true);
     if (!EpdWait(EpdSubmit(false))) {
         ESP_LOGE(TAG, "shutdown frame failed; keep power on");
         return false;
@@ -1012,6 +991,7 @@ bool LvAdapterEpdiy::ShowPoweredOffScreen() {
 
 void LvAdapterEpdiy::SetStatusTitlePrefix(const char* prefix) {
     DisplayLockGuard lock(this);
+    if (!lock) return;
     if (prefix == nullptr || prefix[0] == '\0') {
         status_title_prefix_[0] = '\0';
     } else {
@@ -1146,6 +1126,7 @@ void LvAdapterEpdiy::SetEmotion(const char* emotion) {
         return;
     }
     DisplayLockGuard lock(this);
+    if (!lock) return;
     AssistantScreen::SetEmotion(emotion);
 }
 
@@ -1158,6 +1139,7 @@ void LvAdapterEpdiy::SetStatus(const char* status) {
         }
     }
     DisplayLockGuard lock(this);
+    if (!lock) return;
     if (status_label_ == nullptr) {
         return;
     }
@@ -1177,6 +1159,7 @@ void LvAdapterEpdiy::ShowNotification(const char* notification, int duration_ms)
         duration_ms = 0;
     }
     DisplayLockGuard lock(this);
+    if (!lock) return;
     if (notification_label_ == nullptr || notification == nullptr) {
         return;
     }
@@ -1232,6 +1215,7 @@ void LvAdapterEpdiy::UpdateStatusBar(bool update_all) {
     }
 
     DisplayLockGuard lock(this);
+    if (!lock) return;
     if (wifi_busy == nullptr && network_busy_status_) {
         network_busy_status_ = false;
         ApplyStatusTextLocked(status_before_network_);

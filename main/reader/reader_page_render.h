@@ -31,106 +31,90 @@ inline lv_coord_t ParaIndentPadPx(const lv_font_t* font) {
     return em * 2;
 }
 
-/** 段前垂直空白：独立控件；高度扣除 line_gap，因两侧还有 flex pad_row。 */
-inline void AddParaGapSpacer(lv_obj_t* col, lv_coord_t max_w, lv_coord_t para_gap,
-                             lv_coord_t line_gap) {
-    if (col == nullptr || para_gap <= 0) {
-        return;
-    }
-    lv_coord_t h = para_gap;
-    if (h > line_gap) {
-        h = static_cast<lv_coord_t>(h - line_gap);
-    }
-    lv_obj_t* gap = lv_obj_create(col);
-    lv_obj_remove_style_all(gap);
-    lv_obj_set_size(gap, max_w > 0 ? max_w : 1, h);
-    lv_obj_clear_flag(gap, LV_OBJ_FLAG_CLICKABLE);
-    DisableObjScroll(gap);
-}
-
-/**
- * @brief 在 col 下创建正文 label；段首 spacer+label 行布局。
- * @param line_gap / para_gap 须与分页 BookSession::SetGaps 一致
- */
+/** @brief 按共享自适应行布局创建正文控件，段距只计入当前项一次。 */
 inline lv_obj_t* CreatePageTextLabel(lv_obj_t* col, const PageItem& item, lv_coord_t max_w,
-                                     const lv_font_t* book_font, lv_coord_t line_gap,
-                                     lv_coord_t para_gap) {
+                                     const lv_font_t* book_font, const TextLineLayout& layout,
+                                     int& row_index, lv_coord_t para_gap,
+                                     void (*decorate_label)(lv_obj_t*) = nullptr) {
+    if (!col || !book_font || row_index >= layout.count || item.text.empty()) return nullptr;
+    const bool need_para_gap = item.para_gap_before && lv_obj_get_child_count(col) > 0;
+    const int gap_before = need_para_gap ? std::max<lv_coord_t>(0, para_gap) : 0;
+    const int first = row_index;
+    int lines = 1;
+    if (item.chapter_title) for (size_t i = 0; i + 1 < item.text.size(); ++i) if (item.text[i] == '\n') ++lines;
+    int height = gap_before;
+    for (int i = 0; i < lines; ++i) height += layout.CellHeight(row_index++);
+    const int offset = layout.TextOffset(first);
+    const int underline_extra = std::max<int>(0, layout.line_height - book_font->line_height);
     lv_obj_t* label_parent = col;
     lv_coord_t text_w = max_w;
-    const bool need_para_gap =
-        item.para_gap_before && col != nullptr && lv_obj_get_child_count(col) > 0;
-
-    if (need_para_gap) {
-        AddParaGapSpacer(col, max_w, para_gap, line_gap);
-    }
-
     if (item.para_indent) {
         const lv_coord_t indent_px = ParaIndentPadPx(book_font);
-        lv_obj_t* row = lv_obj_create(col);
+        auto* row = lv_obj_create(col);
         lv_obj_remove_style_all(row);
-        lv_obj_set_width(row, max_w);
-        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_set_size(row, max_w, height);
+        lv_obj_set_style_pad_top(row, gap_before + offset, 0);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
         DisableObjScroll(row);
-
-        lv_obj_t* spacer = lv_obj_create(row);
+        auto* spacer = lv_obj_create(row);
         lv_obj_remove_style_all(spacer);
         lv_obj_set_size(spacer, indent_px, 1);
         lv_obj_clear_flag(spacer, LV_OBJ_FLAG_CLICKABLE);
         DisableObjScroll(spacer);
-
         label_parent = row;
-        text_w = max_w - indent_px;
+        text_w -= indent_px;
     }
-
-    // 章名：居中加粗；可含换行拆成「第N章」与章节名两行
     if (item.chapter_title) {
-        lv_obj_t* stack = lv_obj_create(label_parent);
+        auto* stack = lv_obj_create(col);
         lv_obj_remove_style_all(stack);
-        lv_obj_set_width(stack, text_w);
-        lv_obj_set_height(stack, LV_SIZE_CONTENT);
-        lv_obj_set_style_layout(stack, LV_LAYOUT_NONE, 0);
+        lv_obj_set_size(stack, text_w, height);
         lv_obj_clear_flag(stack, LV_OBJ_FLAG_CLICKABLE);
         DisableObjScroll(stack);
-
-        lv_obj_t* label = lv_label_create(stack);
-        lv_label_set_text(label, item.text.c_str());
-        lv_obj_set_style_text_font(label, book_font, 0);
-        lv_obj_set_style_text_color(label, lv_color_black(), 0);
-        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_width(label, text_w);
-        lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-        lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
-        DisableObjScroll(label);
-
-        lv_obj_t* bold = lv_label_create(stack);
-        lv_label_set_text(bold, item.text.c_str());
-        lv_obj_set_style_text_font(bold, book_font, 0);
-        lv_obj_set_style_text_color(bold, lv_color_black(), 0);
-        lv_obj_set_style_text_align(bold, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_width(bold, text_w);
-        lv_label_set_long_mode(bold, LV_LABEL_LONG_WRAP);
-        lv_obj_clear_flag(bold, LV_OBJ_FLAG_CLICKABLE);
-        DisableObjScroll(bold);
-        lv_obj_align(bold, LV_ALIGN_TOP_LEFT, 1, 0);
-
-        lv_obj_update_layout(stack);
-        lv_obj_set_height(stack, lv_obj_get_height(label));
-        return label;
+        lv_obj_t* first_label = nullptr;
+        size_t begin = 0;
+        int top = gap_before;
+        for (int line = 0; line < lines; ++line) {
+            const size_t end = item.text.find('\n', begin);
+            const std::string text = item.text.substr(begin, end == std::string::npos ? end : end - begin);
+            const int current = first + line;
+            for (int dx : {0, 1}) {
+                auto* label = lv_label_create(stack);
+                lv_label_set_text(label, text.c_str());
+                lv_obj_set_style_text_font(label, book_font, 0);
+                lv_obj_set_style_text_color(label, lv_color_black(), 0);
+                lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+                lv_obj_set_style_pad_top(label, layout.TextOffset(current), 0);
+                lv_obj_set_style_pad_bottom(label, underline_extra, 0);
+                lv_obj_set_size(label, text_w, layout.CellHeight(current));
+                lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+                lv_obj_set_pos(label, dx, top);
+                lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+                DisableObjScroll(label);
+                if (dx == 0 && decorate_label) decorate_label(label);
+                if (!first_label) first_label = label;
+            }
+            top += layout.CellHeight(current);
+            begin = end == std::string::npos ? item.text.size() : end + 1;
+        }
+        return first_label;
     }
-
-    lv_obj_t* label = lv_label_create(label_parent);
+    auto* label = lv_label_create(label_parent);
     lv_label_set_text(label, item.text.c_str());
     lv_obj_set_style_text_font(label, book_font, 0);
     lv_obj_set_style_text_color(label, lv_color_black(), 0);
+    lv_obj_set_style_pad_bottom(label, underline_extra, 0);
     lv_obj_set_width(label, text_w);
-    lv_obj_set_style_flex_grow(label, item.para_indent ? 1 : 0, 0);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    if (!item.para_indent) {
+        lv_obj_set_height(label, height);
+        lv_obj_set_style_pad_top(label, gap_before + offset, 0);
+    }
+    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
     lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
     DisableObjScroll(label);
+    if (decorate_label) decorate_label(label);
     return label;
 }
 
-}  // namespace reader
+} // namespace reader

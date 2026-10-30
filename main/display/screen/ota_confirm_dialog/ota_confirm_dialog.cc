@@ -20,6 +20,7 @@
 #include <freertos/semphr.h>
 #include <lvgl.h>
 #include "assets/lang_config.h"
+#include "screen_text.h"
 
 
 static constexpr const char* TAG = "OtaConfirmDlg";
@@ -196,6 +197,7 @@ static lv_obj_t* MakeButton(lv_obj_t* parent, const char* text, lv_event_cb_t cb
     lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
     lv_obj_center(lbl);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn, ScreenFitButtonLabelOnSize, LV_EVENT_SIZE_CHANGED, lbl);
     return btn;
 }
 

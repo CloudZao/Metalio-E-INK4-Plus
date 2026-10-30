@@ -375,7 +375,7 @@ void EnterCloudMode(int mode) {
     }
     if (mode == kCloudModeAp || mode == kCloudModeWifi) {
         HoldTransferPower();
-        SetRadioStatus(mode == kCloudModeAp ? Lang::Strings::CLOUD_AP_OPENING : "正在准备WIFI传输…");
+        SetRadioStatus(mode == kCloudModeAp ? Lang::Strings::CLOUD_AP_OPENING : Lang::Strings::CLOUD_WIFI_PREPARING);
         KickRadio(mode);
         return;
     }
@@ -512,7 +512,7 @@ void BuildCloudMainChrome(lv_obj_t* scr, lv_coord_t status_height) {
     lv_obj_clear_flag(tab_row, LV_OBJ_FLAG_CLICKABLE);
     MakeTabBtn(tab_row, Lang::Strings::CLOUD_TAB_APP, kCloudModeApp);
     MakeTabBtn(tab_row, Lang::Strings::CLOUD_TAB_AP, kCloudModeAp);
-    MakeTabBtn(tab_row, "WIFI传输", kCloudModeWifi);
+    MakeTabBtn(tab_row, Lang::Strings::CLOUD_TAB_WIFI, kCloudModeWifi);
     MakeTabBtn(tab_row, Lang::Strings::CLOUD_TAB_USB, kCloudModeUsb);
     RefreshTabUi();
 

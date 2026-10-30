@@ -12,6 +12,7 @@
 #include "ebook_document.h"
 #include "reader_page_render.h"
 #include "reader_types.h"
+#include "image_tone.h"
 
 namespace {
 
@@ -181,35 +182,45 @@ void RenderPage() {
     PrewarmPageFont(page);
 
     const bool page_images = ui.session->IsPageImagesMode();
-    const lv_coord_t max_w = page_images ? EPD_HOR_RES : ContentWidth();
-    const lv_coord_t content_h = lv_obj_get_height(ui.content);
+    const lv_coord_t max_w = ui.session->ViewportWidth();
+    const lv_coord_t content_h = ui.session->ViewportHeight();
     lv_obj_t* col = lv_obj_create(ui.content);
     lv_obj_remove_style_all(col);
     lv_obj_set_size(col, max_w, page_images ? content_h : LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(col, 0, 0);
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(col, page_images ? 0 : reader::kReaderLineGapDefault, 0);
-    lv_obj_align(col, page_images ? LV_ALIGN_TOP_LEFT : LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_pad_row(col, 0, 0);
+    lv_obj_align(col, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_clear_flag(col, LV_OBJ_FLAG_CLICKABLE);
     DisableScroll(col);
 
+    const auto line_layout = reader::MakeTextLineLayout(BookFont(), content_h, ui.session->LineSpacingPercent());
+    int row_index = 0;
+    bool previous_title = false;
     for (const auto& item : page->items) {
         if (item.kind == reader::ContentKind::kText) {
             const lv_font_t* book_font = BookFont();
             if (item.text.empty()) {
                 continue;
             }
-            reader::CreatePageTextLabel(col, item, max_w, book_font, reader::kReaderLineGapDefault,
-                                       reader::kReaderParaGapDefault);
+            reader::CreatePageTextLabel(col, item, max_w, book_font, line_layout, row_index,
+                                       reader::ReaderParagraphGap(ui.session->ParaGap(), previous_title));
+            previous_title = item.chapter_title;
         } else {
+            previous_title = false;
             reader::RasterImage img;
-            const lv_coord_t max_h = page_images ? content_h : (content_h * 3 / 4);
-            if (ui.session->LoadPageImage(item.image_href, max_w, max_h > 40 ? max_h : 200, img) &&
+            lv_obj_t* slot = lv_obj_create(col);
+            lv_obj_remove_style_all(slot);
+            lv_obj_set_size(slot, max_w, page->items.size() == 1 ? content_h : item.image_h);
+            lv_obj_clear_flag(slot, LV_OBJ_FLAG_CLICKABLE);
+            DisableScroll(slot);
+            if (ui.session->LoadPageImage(item.image_href, item.image_w, item.image_h, img) &&
                 !img.empty()) {
                 auto* heap_img = new reader::RasterImage(std::move(img));
+                reader::ApplyImageDarkening(heap_img->pixels.data(), heap_img->pixels.size());
                 heap_img->BindDsc();
-                lv_obj_t* image = lv_image_create(col);
+                lv_obj_t* image = lv_image_create(slot);
                 lv_image_set_src(image, &heap_img->dsc);
                 lv_obj_set_user_data(image, heap_img);
                 lv_obj_add_event_cb(
@@ -221,17 +232,23 @@ void RenderPage() {
                     },
                     LV_EVENT_DELETE, nullptr);
                 lv_obj_clear_flag(image, LV_OBJ_FLAG_CLICKABLE);
-                if (page_images) {
-                    lv_obj_align(image, LV_ALIGN_TOP_LEFT, 0, 0);
-                }
+                lv_obj_center(image);
             } else {
-                lv_obj_t* label = lv_label_create(col);
+                lv_obj_t* label = lv_label_create(slot);
                 lv_label_set_text(label, "[图片]");
                 lv_obj_set_style_text_font(label, BookFont(), 0);
+                lv_obj_center(label);
             }
         }
     }
     UpdateFooter();
+}
+
+bool NavigateSession(reader::BookSession::NavigationKind kind, int value) {
+    auto& ui = Ui();
+    if (!ui.session) return false;
+    auto cursor = ui.session->CreateNavigationCursor(kind, value);
+    return cursor && cursor->PrepareNavigation(kind, value) && ui.session->CommitNavigation(*cursor);
 }
 
 void OnContentClicked(lv_event_t* e) {
@@ -242,7 +259,8 @@ void OnContentClicked(lv_event_t* e) {
     if (!ui.session || !ui.session->IsOpen()) {
         return;
     }
-    if (ui.session->NextPage()) {
+    if (NavigateSession(reader::BookSession::NavigationKind::kDelta, 1)) {
+        ui.session->SaveProgress();
         RenderPage();
     }
 }
@@ -268,12 +286,12 @@ void BuildScreen() {
     DisableScroll(status);
 
     const lv_coord_t body_h = EPD_VER_RES - ui.status_h - kFooterH;
-    const bool page_images = ui.session && ui.session->IsPageImagesMode();
     lv_obj_t* body = lv_obj_create(ui.scr);
     lv_obj_remove_style_all(body);
     lv_obj_set_size(body, EPD_HOR_RES, body_h);
     lv_obj_align(body, LV_ALIGN_TOP_MID, 0, ui.status_h);
-    lv_obj_set_style_pad_hor(body, page_images ? 0 : kListPad, 0);
+    lv_obj_set_style_pad_hor(body, kListPad, 0);
+    lv_obj_set_style_pad_bottom(body, 8, 0);
     lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
     DisableScroll(body);
     lv_obj_add_event_cb(body, OnContentClicked, LV_EVENT_CLICKED, nullptr);
@@ -330,15 +348,10 @@ bool OpenSessionPath(const char* path) {
     EnsureEpdfont();
     ui.session = std::make_unique<reader::BookSession>();
     ui.session->SetFont(BookFont());
-    ui.session->SetGaps(reader::kReaderLineGapDefault, reader::kReaderParaGapDefault);
+    ui.session->SetLineSpacing(reader::kReaderLineSpacingPercentDefault, reader::kReaderParaGapDefault);
 
     const lv_coord_t body_h = EPD_VER_RES - StatusBarHeight() - kFooterH;
-    const bool page_images = reader::EbookDocument::PeekPageImages(path);
-    if (page_images) {
-        ui.session->SetViewport(EPD_HOR_RES, body_h);
-    } else {
-        ui.session->SetViewport(ContentWidth(), body_h - 8);
-    }
+    ui.session->SetViewport(ContentWidth(), body_h - 8);
 
     reader::BookInfo info;
     info.path = path;
@@ -448,21 +461,24 @@ int book_reader_open_ebook_mem(const uint8_t* data, size_t len) {
 
 void book_reader_next_page(void) {
     auto& ui = Ui();
-    if (ui.session && ui.session->NextPage()) {
+    if (NavigateSession(reader::BookSession::NavigationKind::kDelta, 1)) {
+        ui.session->SaveProgress();
         RenderPage();
     }
 }
 
 void book_reader_prev_page(void) {
     auto& ui = Ui();
-    if (ui.session && ui.session->PrevPage()) {
+    if (NavigateSession(reader::BookSession::NavigationKind::kDelta, -1)) {
+        ui.session->SaveProgress();
         RenderPage();
     }
 }
 
 void book_reader_go_toc(int index) {
     auto& ui = Ui();
-    if (ui.session && ui.session->GoToToc(index)) {
+    if (NavigateSession(reader::BookSession::NavigationKind::kToc, index)) {
+        ui.session->SaveProgress();
         RenderPage();
     }
 }

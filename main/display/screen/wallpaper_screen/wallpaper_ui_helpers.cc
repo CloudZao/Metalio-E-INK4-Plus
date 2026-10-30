@@ -7,6 +7,7 @@
 #include <string>
 
 #include "assets/lang_config.h"
+#include "screen_text.h"
 #include "fontpack_lvgl.h"
 #include "reader/reader.h"
 #include "reader/text_encoding.h"
@@ -162,6 +163,9 @@ void StyleActionBtn(lv_obj_t* btn, lv_obj_t* lbl, bool filled, bool enabled) {
     }
     if (lbl != nullptr) {
         lv_obj_set_style_text_color(lbl, filled ? lv_color_white() : lv_color_black(), 0);
+        lv_obj_update_layout(btn);
+        ScreenFitLabel(lbl, lv_obj_get_content_width(btn), lv_obj_get_content_height(btn),
+                       Wallpaper_UiFont());
     }
 }
 

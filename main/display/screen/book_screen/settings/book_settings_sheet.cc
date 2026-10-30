@@ -1,3 +1,4 @@
+#include "assets/lang_screen.h"
 #include "standby_screen/standby_screen.h"
 #pragma GCC optimize("O1")
 
@@ -43,6 +44,7 @@
 #include <dirent.h>
 
 #include "assets/lang_config.h"
+#include "screen_text.h"
 #include "frontlight.h"
 #include "haptic_feedback.h"
 #include "settings.h"
@@ -215,6 +217,12 @@ void OnSheetMarginInc(lv_event_t* e) {
     ScheduleLayoutApply(false);
 }
 
+bool DeferComicTextSetting() {
+    if (!ReaderPageImagesHint()) return false;
+    ScreenShowToast(Lang::Strings::BOOK_COMIC_SETTING_SAVED);
+    return true;
+}
+
 void OnSheetGapDec(lv_event_t* e) {
     lv_event_stop_bubbling(e);
     if (Book_State().reader.opening.load()) {
@@ -226,6 +234,7 @@ void OnSheetGapDec(lv_event_t* e) {
     }
     BookReaderPrefsSetSpacingPreset(cur - 1);
     RequestSettingsSheetPaint();
+    if (DeferComicTextSetting()) return;
     ScheduleLayoutApply(false);
 }
 
@@ -240,6 +249,7 @@ void OnSheetGapInc(lv_event_t* e) {
     }
     BookReaderPrefsSetSpacingPreset(cur + 1);
     RequestSettingsSheetPaint();
+    if (DeferComicTextSetting()) return;
     ScheduleLayoutApply(false);
 }
 
@@ -288,9 +298,13 @@ void OnSheetUnderlineMode(lv_event_t* e) {
     if (mode < 0 || mode >= kBookReaderUnderlineModeCount) {
         return;
     }
-    BookReaderPrefsSetUnderlineMode(BookReaderPrefsUnderlineMode() == mode ? kBookReaderUnderlineOff : mode);
+    const int current = BookReaderPrefsUnderlineMode();
+    const int next = current == mode ? kBookReaderUnderlineOff : mode;
+    if (next == current) return;
+    BookReaderPrefsSetUnderlineMode(next);
     RequestSettingsSheetPaint();
-    RenderReaderPage();
+    if (DeferComicTextSetting()) return;
+    RequestRenderReaderPage();
 }
 
 void OnSheetFlCct(lv_event_t* e) {
@@ -335,8 +349,11 @@ constexpr int kDurationTab = 4;
 struct SheetBinding { lv_obj_t* button;lv_event_cb_t event;int value;bool mask; };
 static std::vector<SheetBinding> s_sheet_bindings;
 static lv_obj_t* s_auto_turn_value = nullptr;
+static lv_obj_t* s_text_direction_row = nullptr;
 static int s_auto_turn_seconds = 10;
 static bool s_auto_turn_adjusting = false;
+static int s_toc_count = 0;
+static bool s_toc_building = false;
 static lv_obj_t* s_live_body=nullptr;
 static lv_obj_t *s_bookmark_button=nullptr,*s_bookmark_icon=nullptr,*s_duration_value=nullptr,*s_progress_value=nullptr,*s_progress_slider=nullptr,*s_chapter_prev=nullptr,*s_chapter_next=nullptr;
 static int s_live_tab=-1,s_live_width=0,s_live_height=0;
@@ -374,6 +391,7 @@ static lv_obj_t* SheetButton(lv_obj_t* parent, const char* text, int w, int h,
     HapticAttachClick(btn);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, reinterpret_cast<void*>(value));
     auto* label = SheetLabel(btn, text);
+    ScreenFitLabel(label, w - 12, h - 6);
     lv_obj_set_style_text_color(label, active ? lv_color_white() : lv_color_black(), 0);
     lv_obj_center(label);
     return btn;
@@ -398,6 +416,9 @@ static void SheetScrollMove(lv_event_t* e) {
     auto* list = static_cast<lv_obj_t*>(lv_event_get_target(e));
     static bool adjusting = false;
     if (adjusting || !settings.reader_sheet_scrolling || list != settings.reader_sheet_scroll || !TouchUiFingerIsDown()) return;
+    // 仅加速当前输入设备实际拖动的列表，恢复位置和按钮翻页不参与加速。
+    auto* indev = lv_indev_active();
+    if (!indev || lv_indev_get_scroll_obj(indev) != list) return;
     const int current = lv_obj_get_scroll_y(list);
     const int delta = current - settings.reader_scroll_last;
     if (delta) {
@@ -418,33 +439,37 @@ static void SheetScrollEnd(lv_event_t* e) {
     if (target == settings.reader_sheet_scroll && settings.reader_sheet_scrolling) {
         settings.reader_sheet_scrolling = false;
         EpdSetUiScrolling(false);
-        // Keep the final DU frame; stopping does not schedule a quality refresh.
+        const auto& session=Book_State().reader.session;
+        if(tab==0 && session && (s_toc_count!=session->TocCount() ||
+            s_toc_building!=session->LiveRelayoutPending())) RequestSettingsSheetPaint();
     }
 }
 static void SheetPreset(lv_event_t* e) {
     lv_event_stop_bubbling(e);
     if (Book_State().reader.opening.load()) return;
     const int encoded = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if (encoded < 10) BookReaderPrefsSetMarginPreset(encoded);
-    else BookReaderPrefsSetSpacingPreset(encoded - 10);
+    if (encoded < 10) {
+        if (encoded == BookReaderPrefsMarginPreset()) return;
+        BookReaderPrefsSetMarginPreset(encoded);
+    } else {
+        if (encoded - 10 == BookReaderPrefsSpacingPreset()) return;
+        BookReaderPrefsSetSpacingPreset(encoded - 10);
+    }
     RequestSettingsSheetPaint();
+    if (encoded >= 10 && DeferComicTextSetting()) return;
     ScheduleLayoutApply(false);
 }
 static bool SheetNavigationReady() {
     const auto& st = Book_State();
     if (!st.reader.session || !st.reader.session->IsOpen() || st.reader.prefs_reopen_pending ||
         st.reader.layout_again || st.reader.opening.load()) return false;
-    return !ReaderWorkersBusy() || (st.reader.layout_busy.load() &&
-        st.reader.session->Info().format == reader::BookFormat::kTxt &&
-        st.reader.session->LiveRelayoutPending() && !st.reader.chapter_pages_busy.load() &&
-        !st.reader.page_image_busy.load());
+    return !st.reader.deferred_cleanup && !st.reader.standby_paused;
 }
 static void SheetJumpAsync(void* data) {
-    auto& st = Book_State();
     if (!SheetNavigationReady()) return;
     const int encoded = static_cast<int>(reinterpret_cast<intptr_t>(data));
-    const bool ok = encoded >= 10000 ? st.reader.session->GoToReadingProgress(encoded - 10000)
-                                    : st.reader.session->GoToToc(encoded);
+    const bool ok = encoded >= 10000 ? RequestReaderNavigation(reader::BookSession::NavigationKind::kProgress, encoded - 10000)
+                                    : RequestReaderNavigation(reader::BookSession::NavigationKind::kToc, encoded);
     if (ok) {
         HideReadChrome();
         RequestRenderReaderPage();
@@ -457,11 +482,10 @@ static void SheetTocJump(lv_event_t* e) {
 static void SheetChapterAsync(void* data) {
     auto& st=Book_State();
     if(!SheetNavigationReady() || st.reader.read_chrome!=BookUiState::ReadChrome::kSettings)return;
-    // Resolve relative to the latest chapter when executed, so queued clicks are not stale.
     const int delta=static_cast<int>(reinterpret_cast<intptr_t>(data));
-    const int index=st.reader.session->CurrentTocIndex()+delta;
-    if(index<0 || index>=st.reader.session->TocCount())return;
-    if(st.reader.session->GoToToc(index)) {
+    const auto kind=st.reader.session->IsPageImagesMode() ? reader::BookSession::NavigationKind::kDelta
+                                                        : reader::BookSession::NavigationKind::kChapterDelta;
+    if(RequestReaderNavigation(kind, delta)) {
         RequestRenderReaderPage();
         RequestSettingsSheetPaint();
     }
@@ -515,12 +539,14 @@ static lv_obj_t* SettingsRow(lv_obj_t* parent, const char* title, int count, con
                              lv_event_cb_t event, const int* values, int selected, bool mask = false, int slots = 0) {
     lv_obj_update_layout(parent);
     const int w = lv_obj_get_content_width(parent);
-    const int h = lv_obj_get_content_height(parent) / (LV_HOR_RES > LV_VER_RES ? 6 : 11);
+    const int h = lv_obj_get_content_height(parent) / (LV_HOR_RES > LV_VER_RES ? 6 : 12);
     auto* row = SheetBox(parent, w, h);
     auto* label = SheetLabel(row, title);
     lv_obj_align(label, LV_ALIGN_LEFT_MID, 0, 0);
     const int start = std::min<lv_coord_t>(UiSx(94), w / 3);
     const int gap = UiSx(8);
+    ScreenFitLabel(label, start - gap, h - 4);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, 0);
     const int columns = slots > count ? slots : count;
     const int bw = (w - start - gap * (columns - 1)) / columns;
     for (int i = 0; i < count; ++i) {
@@ -562,7 +588,33 @@ static void SheetWritingMode(lv_event_t* e) {
     if (mode == BookReaderPrefsWritingMode()) return;
     BookReaderPrefsSetWritingMode(mode);
     RequestSettingsSheetPaint();
+    if (DeferComicTextSetting()) return;
     ScheduleLayoutApply(false);
+}
+static void UpdateTextDirectionVisibility() {
+    if (!s_text_direction_row) return;
+    const bool visible = BookReaderPrefsWritingMode() == kBookReaderWritingVertical;
+    lv_obj_set_flag(s_text_direction_row, LV_OBJ_FLAG_HIDDEN, !visible);
+}
+static bool FitReadingSettingsHeight() {
+    auto& settings = Book_State().settings;
+    if (settings.reader_tab != 3 || LV_HOR_RES > LV_VER_RES) return false;
+    auto* body = settings.reader_sheet_body;
+    auto* sheet = settings.settings_sheet;
+    lv_obj_update_layout(body);
+    int height = lv_obj_get_style_pad_top(body, LV_PART_MAIN) +
+        lv_obj_get_style_pad_bottom(body, LV_PART_MAIN);
+    for (uint32_t i = 0; i < lv_obj_get_child_count(body); ++i) {
+        auto* row = lv_obj_get_child(body, i);
+        if (!lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN)) height += lv_obj_get_height(row);
+    }
+    const int sheet_height = lv_obj_get_y(body) + height + SheetNavHeight() + 4;
+    if (height == lv_obj_get_height(body) && sheet_height == lv_obj_get_height(sheet)) return false;
+    // 保持设置行高度不变，仅随可见行收缩或展开面板。
+    lv_obj_set_height(sheet, sheet_height);
+    lv_obj_set_height(body, height);
+    lv_obj_align(sheet, LV_ALIGN_BOTTOM_MID, 0, 0);
+    return true;
 }
 static void SheetPageTurn(lv_event_t* e) {
     lv_event_stop_bubbling(e);
@@ -573,12 +625,22 @@ static void SheetPageTurn(lv_event_t* e) {
                       mode == kBookReaderPageTurnRipple ? EpdEffect::Ripple : EpdEffect::None);
     RequestSettingsSheetPaint();
 }
+static void SheetTextDirection(lv_event_t* e) {
+    lv_event_stop_bubbling(e);
+    const int direction = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    if (direction == BookReaderPrefsTextDirection()) return;
+    BookReaderPrefsSetTextDirection(direction);
+    RequestSettingsSheetPaint();
+    if (DeferComicTextSetting()) return;
+    RequestRenderReaderPage();
+}
 static void SheetBackground(lv_event_t* e) {
     lv_event_stop_bubbling(e);
     const int mode = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
     BookReaderPrefsSetBackground(BookReaderPrefsBackground() == mode ? 0 : mode);
     RequestSettingsSheetPaint();
-    RenderReaderPage();
+    if (DeferComicTextSetting()) return;
+    RequestRenderReaderPage();
 }
 static void SheetAntialias(lv_event_t* e) {
     lv_event_stop_bubbling(e);
@@ -586,6 +648,8 @@ static void SheetAntialias(lv_event_t* e) {
     if (enabled == BookReaderPrefsAntialias()) return;
     BookReaderPrefsSetAntialias(enabled);
     RequestSettingsSheetPaint();
+    if (DeferComicTextSetting()) return;
+    RequestRenderReaderPage();
 }
 static void BuildSheetSettings(lv_obj_t* body) {
     lv_obj_update_layout(body);
@@ -600,20 +664,24 @@ static void BuildSheetSettings(lv_obj_t* body) {
         auto* divider=SheetBox(body,2,h);lv_obj_set_pos(divider,w/2-1,0);
         lv_obj_set_style_bg_color(divider,lv_color_black(),0);lv_obj_set_style_bg_opa(divider,LV_OPA_COVER,0);
     }
-    const char* directions[] = {"竖屏", "左横", "右横", "自动"};
+    const char* directions[] = {Lang::Strings::BOOK_ORIENT_PORTRAIT, Lang::Strings::BOOK_ORIENT_LAND_LEFT, Lang::Strings::BOOK_ORIENT_LAND_RIGHT, Lang::Strings::BOOK_ORIENT_AUTO};
     const int orientation[] = {kBookReaderOrientPortrait, kBookReaderOrientLandLeft,
                                kBookReaderOrientLandRight, kBookReaderOrientAuto};
-    SettingsRow(left, "阅读方向", 4, directions, OnSheetOrientMode, orientation, BookReaderPrefsOrient());
-    const char* writing[] = {"横排", "竖排"};
+    SettingsRow(left, Lang::Strings::BOOK_ORIENT_TITLE, 4, directions, OnSheetOrientMode, orientation, BookReaderPrefsOrient());
+    const char* writing[] = {Lang::Strings::BOOK_WRITING_HORIZONTAL, Lang::Strings::BOOK_WRITING_VERTICAL};
     const int writing_values[] = {0, 1};
-    auto* writing_row = SettingsRow(left, "文字排版", 2, writing, SheetWritingMode, writing_values, BookReaderPrefsWritingMode());
-    SetSheetBtnEnabled(lv_obj_get_child(writing_row, 2), !ReaderPageImagesHint());
-    const char* page_turns[] = {"左右滑动", "推白翻页"};
+    SettingsRow(left, Lang::Strings::BOOK_WRITING_TITLE, 2, writing, SheetWritingMode, writing_values, BookReaderPrefsWritingMode());
+    const char* text_directions[] = {Lang::Strings::BOOK_TEXT_LEFT_TO_RIGHT, Lang::Strings::BOOK_TEXT_RIGHT_TO_LEFT};
+    const int text_direction_values[] = {kBookReaderTextLeftToRight, kBookReaderTextRightToLeft};
+    s_text_direction_row = SettingsRow(left, Lang::Strings::BOOK_TEXT_DIRECTION, 2, text_directions,
+        SheetTextDirection, text_direction_values, BookReaderPrefsTextDirection());
+    UpdateTextDirectionVisibility();
+    const char* page_turns[] = {Lang::Strings::BOOK_TURN_SLIDE, Lang::Strings::BOOK_TURN_PUSH};
     const int page_turn_values[] = {kBookReaderPageTurnSlide, kBookReaderPageTurnWipe};
-    SettingsRow(left, "翻页方式", 2, page_turns, SheetPageTurn, page_turn_values, BookReaderPrefsPageTurn());
+    SettingsRow(left, Lang::Strings::BOOK_TURN_TITLE, 2, page_turns, SheetPageTurn, page_turn_values, BookReaderPrefsPageTurn());
     lv_obj_update_layout(left);
     const int auto_w = lv_obj_get_content_width(left);
-    const int auto_h = lv_obj_get_content_height(left) / (landscape ? 6 : 11);
+    const int auto_h = lv_obj_get_content_height(left) / (landscape ? 6 : 12);
     auto* auto_row = SheetBox(left, auto_w, auto_h);
     const int gap = UiSx(8);
     const int title_w = std::min<lv_coord_t>(UiSx(94), auto_w / 3);
@@ -621,18 +689,19 @@ static void BuildSheetSettings(lv_obj_t* body) {
     const int button_h = std::min<lv_coord_t>(UiSy(26), auto_h - 6);
     const int step_w = toggle_w / 2;
     const int value_w = 2 * toggle_w - step_w * 2 - gap;
-    auto* auto_title = SheetLabel(auto_row, "定时翻页");
-    lv_obj_set_width(auto_title, title_w);lv_label_set_long_mode(auto_title, LV_LABEL_LONG_CLIP);
+    auto* auto_title = SheetLabel(auto_row, Lang::Strings::BOOK_AUTO_TURN);
+    ScreenFitLabel(auto_title, title_w - gap, auto_h - 4);
+    lv_obj_set_style_text_align(auto_title, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_align(auto_title, LV_ALIGN_LEFT_MID, 0, 0);
     int auto_x = title_w;
     for (int enabled = 0; enabled <= 1; ++enabled) {
-        auto* button = SheetButton(auto_row, enabled ? "开启" : "关闭", toggle_w, button_h,
+        auto* button = SheetButton(auto_row, enabled ? Lang::Strings::COMMON_ON : Lang::Strings::COMMON_OFF, toggle_w, button_h,
                                    SheetAutoTurnToggle, enabled, ReaderAutoTurnEnabled() == (enabled != 0));
         lv_obj_align(button, LV_ALIGN_LEFT_MID, auto_x, 0);
         s_sheet_bindings.push_back({button, SheetAutoTurnToggle, enabled, false});
         auto_x += toggle_w + gap;
     }
-    auto* minus = SheetButton(auto_row, "-", step_w, button_h, SheetAutoTurnInterval, -1);
+    auto* minus = SheetButton(auto_row, Lang::Strings::SETTINGS_FRONTLIGHT_BRIGHTNESS_DEC, step_w, button_h, SheetAutoTurnInterval, -1);
     lv_obj_align(minus, LV_ALIGN_LEFT_MID, auto_x, 0);auto_x += step_w + gap;
     s_auto_turn_seconds = BookReaderPrefsAutoTurnSeconds();
     char auto_text[16];std::snprintf(auto_text, sizeof(auto_text), "%ds", s_auto_turn_seconds);
@@ -640,34 +709,34 @@ static void BuildSheetSettings(lv_obj_t* body) {
     lv_obj_set_width(s_auto_turn_value, value_w);
     lv_obj_set_style_text_align(s_auto_turn_value, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_auto_turn_value, LV_ALIGN_LEFT_MID, auto_x, 0);auto_x += value_w + gap;
-    auto* plus = SheetButton(auto_row, "+", step_w, button_h, SheetAutoTurnInterval, 1);
+    auto* plus = SheetButton(auto_row, Lang::Strings::SETTINGS_FRONTLIGHT_BRIGHTNESS_INC, step_w, button_h, SheetAutoTurnInterval, 1);
     lv_obj_align(plus, LV_ALIGN_LEFT_MID, auto_x, 0);
     for (auto* button : {minus, plus}) {
         lv_obj_remove_event_cb(button, SheetAutoTurnInterval);
         const intptr_t delta = button == minus ? -1 : 1;
         lv_obj_add_event_cb(button, SheetAutoTurnInterval, LV_EVENT_ALL, reinterpret_cast<void*>(delta));
     }
-    const char* presets[] = {"小", "标准", "大", "很大"}; const int values[] = {0,1,2,3};
-    SettingsRow(left, "边距设置", 4, presets, SheetPreset, values, BookReaderPrefsMarginPreset());
+    const char* presets[] = {Lang::Strings::BOOK_PRESET_SMALL, Lang::Strings::BOOK_SPACING_STANDARD, Lang::Strings::BOOK_PRESET_LARGE, Lang::Strings::BOOK_PRESET_XLARGE}; const int values[] = {0,1,2,3};
+    SettingsRow(left, Lang::Strings::BOOK_MARGIN_TITLE, 4, presets, SheetPreset, values, BookReaderPrefsMarginPreset());
     const int spacing[] = {10,11,12,13};
-    SettingsRow(right, "行距设置", 4, presets, SheetPreset, spacing, 10 + BookReaderPrefsSpacingPreset());
-    const char* backgrounds[] = {"方格", "点阵"}; const int bg_values[] = {1,2};
-    SettingsRow(right, "阅读背景", 2, backgrounds, SheetBackground, bg_values, BookReaderPrefsBackground());
-    const char* foot[] = {"章节名", "时间", "进度", "电量"};
+    SettingsRow(right, Lang::Strings::BOOK_SPACING_TITLE, 4, presets, SheetPreset, spacing, 10 + BookReaderPrefsSpacingPreset());
+    const char* backgrounds[] = {Lang::Strings::BOOK_BACKGROUND_GRID, Lang::Strings::BOOK_BACKGROUND_DOTS}; const int bg_values[] = {1,2};
+    SettingsRow(right, Lang::Strings::BOOK_BACKGROUND_TITLE, 2, backgrounds, SheetBackground, bg_values, BookReaderPrefsBackground());
+    const char* foot[] = {Lang::Strings::BOOK_FOOTER_TITLE, Lang::Strings::BOOK_FOOTER_TIME, Lang::Strings::BOOK_FOOTER_PROGRESS, Lang::Strings::BOOK_FOOTER_BATTERY};
     const int bits[] = {kBookReaderFooterTitle,kBookReaderFooterTime,kBookReaderFooterProgress,kBookReaderFooterBattery};
-    SettingsRow(right, "底栏信息", 4, foot, OnSheetFooterBitToggle, bits, BookReaderPrefsFooterMask(), true);
-    const char* underline[] = {"实线", "虚线"}; const int ul[] = {1,2};
-    SettingsRow(right, "下划线", 2, underline, OnSheetUnderlineMode, ul, BookReaderPrefsUnderlineMode());
-    const char* antialias[] = {"关闭", "开启"}; const int aa_values[] = {0, 1};
-    SettingsRow(right, "抗锯齿", 2, antialias, SheetAntialias, aa_values, BookReaderPrefsAntialias());
+    SettingsRow(right, Lang::Strings::BOOK_CHAPTER_PROGRESS, 4, foot, OnSheetFooterBitToggle, bits, BookReaderPrefsFooterMask(), true);
+    const char* underline[] = {Lang::Strings::BOOK_UNDERLINE_SOLID, Lang::Strings::BOOK_UNDERLINE_DASHED}; const int ul[] = {1,2};
+    SettingsRow(right, Lang::Strings::BOOK_UNDERLINE, 2, underline, OnSheetUnderlineMode, ul, BookReaderPrefsUnderlineMode());
+    const char* antialias[] = {Lang::Strings::COMMON_OFF, Lang::Strings::COMMON_ON}; const int aa_values[] = {0, 1};
+    SettingsRow(right, Lang::Strings::BOOK_ANTIALIAS, 2, antialias, SheetAntialias, aa_values, BookReaderPrefsAntialias());
     const int one[] = {0};
-    const char* custom[] = {"自定义"};
-    SettingsRow(right, "触摸分区", 1, custom, OnSheetTapZonesClicked, one, -1, false, 2);
+    const char* custom[] = {Lang::Strings::BOOK_CUSTOM};
+    SettingsRow(right, Lang::Strings::BOOK_TAP_ZONES_TITLE, 1, custom, OnSheetTapZonesClicked, one, -1, false, 2);
 }
 // Only viewport rows exist; a one-pixel extent preserves the full scroll range.
 static lv_obj_t* s_toc_list = nullptr;
 static std::vector<lv_obj_t*> s_toc_rows;
-static int s_toc_count = 0, s_toc_height = 1, s_toc_first = -1;
+static int s_toc_height = 1, s_toc_first = -1;
 static bool s_toc_binding = false;
 static void BindTocRows();
 static void TocScroll(lv_event_t*) { BindTocRows(); }
@@ -779,19 +848,31 @@ static void BuildSheetFonts(lv_obj_t* body) {
     auto& st = Book_State();
     lv_obj_update_layout(body);
     auto* list = SheetPagedList(body,LV_HOR_RES-UiSx(32),lv_obj_get_content_height(body));
+    if (st.settings.font_entries.size() <= kFontListPageSize) {
+        lv_obj_set_style_pad_bottom(list, 0, 0);
+        Book_DisableScroll(list);
+    }
     if (st.settings.font_scan_loading || st.settings.font_scan_failed) {
         lv_obj_set_style_pad_bottom(list, 0, 0);
-        auto* message = SheetLabel(list, st.settings.font_scan_loading ?
-            "字体加载中…" : "字体加载失败，请重新打开字体页签");
-        lv_obj_center(message);
+        Book_ShowMessage(list, st.settings.font_scan_loading ?
+            Lang::Strings::BOOK_FONT_LOADING : Lang::Strings::BOOK_FONT_REOPEN, Book_ItemFont());
         return;
     }
-    if (st.settings.font_entries.empty()) SheetLabel(list, "暂无字体，请导入 TTF");
+    if (st.settings.font_entries.empty()) {
+        lv_obj_set_style_pad_bottom(list, 0, 0);
+        Book_ShowMessage(list, Lang::Strings::BOOK_FONT_IMPORT_EMPTY, Book_ItemFont());
+        return;
+    }
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_t* current_row=nullptr;
+    lv_obj_update_layout(list);
+    const int page_height = lv_obj_get_height(list);
     for (int i = 0; i < static_cast<int>(st.settings.font_entries.size()); ++i) {
         const auto& font = st.settings.font_entries[i];
-        auto* row = SheetBox(list, LV_HOR_RES - UiSx(32) - 2, UiSy(44));
+        const int slot = i % kFontListPageSize;
+        const int row_height = (slot + 1) * page_height / kFontListPageSize -
+            slot * page_height / kFontListPageSize;
+        auto* row = SheetBox(list, LV_HOR_RES - UiSx(32) - 2, row_height);
         lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_set_style_border_width(row, 1, 0);
         lv_obj_set_style_border_color(row, lv_color_black(), 0);
@@ -800,7 +881,7 @@ static void BuildSheetFonts(lv_obj_t* body) {
         HapticAttachClick(row);
         lv_obj_add_event_cb(row, OnSheetFontSelect, LV_EVENT_CLICKED, nullptr);
         lv_obj_add_event_cb(row, OnSheetFontLongPressed, LV_EVENT_LONG_PRESSED, nullptr);
-        char name[100]; FormatFontListName(font.file, name, sizeof(name));
+        char name[SD_FILE_NAME_CAPACITY]; FormatFontListName(font.file, name, sizeof(name));
         const bool current = font.file == BookReaderPrefsFontFile();
         const bool selected = current && !st.settings.font_multi;
         if (current) current_row = row;
@@ -865,9 +946,9 @@ static void BuildSheetToc(lv_obj_t* body) {
     if(landscape)lv_obj_set_height(title,Book_ListFont()->line_height*2);
     std::string author_name = session.Author();
     const auto first = author_name.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) author_name = "未知";
+    if (first == std::string::npos) author_name = Lang::Strings::COMMON_UNKNOWN;
     else author_name = author_name.substr(first, author_name.find_last_not_of(" \t\r\n") - first + 1);
-    if (author_name == "unknown" || author_name == "Unknown" || author_name == "null" || author_name == "-" || author_name == "　") author_name = "未知";
+    if (author_name == "未知" || author_name == "未命名" || author_name == "unknown" || author_name == "Unknown" || author_name == "null" || author_name == Lang::Strings::SETTINGS_FRONTLIGHT_BRIGHTNESS_DEC || author_name == "　") author_name = Lang::Strings::COMMON_UNKNOWN;
     auto* author = SheetLabel(head, author_name.c_str());
     lv_obj_set_size(author,head_w-info_x,Book_ItemFont()->line_height);
     lv_label_set_long_mode(author,LV_LABEL_LONG_DOT);
@@ -882,6 +963,7 @@ static void BuildSheetToc(lv_obj_t* body) {
     }
     s_toc_list=list;
     s_toc_count=session.TocCount();
+    s_toc_building=session.LiveRelayoutPending();
     s_toc_height=std::max<int>(UiSy(44),std::max(Book_ListFont()->line_height,Book_ItemFont()->line_height)+UiSy(12));
     s_toc_first=-1;
     lv_obj_set_layout(list,LV_LAYOUT_NONE);
@@ -983,7 +1065,7 @@ static void BookmarkMessage(const std::string& text) {
     lv_obj_add_event_cb(box, [](lv_event_t* event) {
         if (lv_event_get_target(event) == s_bookmark_message) s_bookmark_message = nullptr;
     }, LV_EVENT_DELETE, nullptr);
-    auto* title=lv_msgbox_add_title(box,"书签");
+    auto* title=lv_msgbox_add_title(box,Lang::Strings::BOOK_BOOKMARKS);
     auto* label=lv_msgbox_add_text(box,text.c_str());
     lv_obj_set_style_text_font(title,Book_ListFont(),0);
     lv_obj_set_style_text_font(label,Book_ItemFont(),0);
@@ -1014,8 +1096,8 @@ static void BookmarkRequestAsync(void* data) {
         } else if(found==selected.end())selected.push_back(request->id);
         else selected.erase(found);
     } else {
-        if(ReaderWorkersBusy() || st.reader.prefs_reopen_pending || session->LiveRelayoutPending()) {
-            BookmarkMessage("正文正在编排，请稍后操作");return;
+        if(!SheetNavigationReady()) {
+            BookmarkMessage(Lang::Strings::BOOK_LAYOUT_WAIT);return;
         }
         std::string error;
         if(request->action==kBookmarkAdd) {
@@ -1027,19 +1109,19 @@ static void BookmarkRequestAsync(void* data) {
             if(!session->RemoveBookmarks(selected,error)) { BookmarkMessage(error);return; }
             ResetBookmarkSelection();
         } else if(request->action==kBookmarkClick) {
-            if(!session->GoToBookmark(request->id)) { BookmarkMessage("无法定位书签，请检查书籍是否发生变化");return; }
+            if(!RequestReaderNavigation(reader::BookSession::NavigationKind::kBookmark, request->id)) { BookmarkMessage(Lang::Strings::BOOK_BOOKMARK_LOCATE_FAILED);return; }
             HideReadChrome();RequestRenderReaderPage();return;
         }
     }
     RequestSettingsSheetPaint();
-    } catch(const std::bad_alloc&) { BookmarkMessage("内存不足，请稍后操作"); }
+    } catch(const std::bad_alloc&) { BookmarkMessage(Lang::Strings::COMMON_MEMORY_RETRY); }
 }
 static void QueueBookmarkAction(BookmarkAction action,uint32_t id=0) {
     auto& st=Book_State();if(!st.reader.session)return;
     try {
     auto* request=new(std::nothrow) BookmarkRequest{action,id,st.reader.session->Info().path};
     if(request && !BookLvAsync(BookmarkRequestAsync,request))delete request;
-    } catch(const std::bad_alloc&) { BookmarkMessage("内存不足，请稍后操作"); }
+    } catch(const std::bad_alloc&) { BookmarkMessage(Lang::Strings::COMMON_MEMORY_RETRY); }
 }
 static void BookmarkActionEvent(lv_event_t* event) {
     lv_event_stop_bubbling(event);
@@ -1127,7 +1209,7 @@ static void BuildSheetBookmarks(lv_obj_t* body) {
     const int row_step=landscape?std::max(text_h+24,(content_h-16)/3):std::max(y(180),text_h+y(24)+6);
     if(!landscape)lv_obj_set_height(page,std::max(height,y(70)+5*row_step+text_h+y(80)));
     if(entries.empty()) {
-        auto* empty=SheetLabel(page,session.BookmarkStore().Error().empty()?"暂无书签":session.BookmarkStore().Error().c_str());
+        auto* empty=SheetLabel(page,session.BookmarkStore().Error().empty()?Lang::Strings::BOOK_BOOKMARKS_EMPTY:session.BookmarkStore().Error().c_str());
         lv_obj_set_width(empty,landscape?column_w-24:width*3/5);
         lv_obj_set_style_text_align(empty,LV_TEXT_ALIGN_CENTER,0);
         if(landscape) {
@@ -1201,11 +1283,11 @@ static void BuildSheetDuration(lv_obj_t* body) {
     const int width = LV_HOR_RES - UiSx(32);
     auto* row = SheetBox(body, width, UiSy(62));
     const uint32_t seconds = session.ReadingSeconds();
-    char duration[64]; std::snprintf(duration, sizeof(duration), "%u小时%u分钟", seconds / 3600, seconds % 3600 / 60);
+    char duration[64]; std::snprintf(duration, sizeof(duration), Lang::Strings::BOOK_DURATION_HM_FMT, seconds / 3600, seconds % 3600 / 60);
     char progress[64]; const int pct = session.ReadingProgressX10();
     std::snprintf(progress, sizeof(progress), "%.2f%%",
         session.ReadingProgressX10() / 10.0);
-    const char* titles[] = {"阅读时长", "阅读进度"};
+    const char* titles[] = {Lang::Strings::BOOK_READ_DURATION, Lang::Strings::BOOK_READING_PROGRESS};
     const char* values[] = {duration, progress};
     for (int i = 0; i < 2; ++i) {
         auto* column = SheetBox(row, width / 2, UiSy(62));
@@ -1219,19 +1301,28 @@ static void BuildSheetDuration(lv_obj_t* body) {
     auto* line = SheetBox(row, 1, UiSy(44));lv_obj_set_style_bg_color(line,lv_color_black(),0);
     lv_obj_set_style_bg_opa(line,LV_OPA_COVER,0);lv_obj_center(line);
     auto* controls = SheetBox(body, width, UiSy(44));
-    auto* prev = SheetButton(controls, "上一章", UiSx(74), UiSy(30), SheetChapter, -1);
+    const bool comic = session.IsPageImagesMode();
+    const char* previous_title = comic ? Lang::Strings::BOOK_PAGE_PREV : Lang::Strings::BOOK_CHAPTER_PREV;
+    const char* next_title = comic ? Lang::Strings::BOOK_PAGE_NEXT : Lang::Strings::BOOK_CHAPTER_NEXT;
+    lv_point_t previous_size, next_size;
+    lv_text_get_size(&previous_size, previous_title, Book_ItemFont(), 0, 0,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_text_get_size(&next_size, next_title, Book_ItemFont(), 0, 0,
+                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    const int chapter_w = std::min<int>(width / 3, std::max(previous_size.x, next_size.x) + 16);
+    auto* prev = SheetButton(controls, previous_title, chapter_w, UiSy(30), SheetChapter, -1);
     lv_obj_align(prev, LV_ALIGN_LEFT_MID, 0, 0);
-    auto* next = SheetButton(controls, "下一章", UiSx(74), UiSy(30), SheetChapter, 1);
+    auto* next = SheetButton(controls, next_title, chapter_w, UiSy(30), SheetChapter, 1);
     s_chapter_prev=prev;s_chapter_next=next;
     lv_obj_align(next, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_border_width(prev, 0, 0);
     lv_obj_set_style_border_width(next, 0, 0);
-    auto* slider = SheetSlider(controls, pct, 1000, LV_HOR_RES - UiSx(214));lv_obj_center(slider);
+    auto* slider = SheetSlider(controls, pct, 1000, width - 2 * chapter_w - UiSx(24));lv_obj_center(slider);
     s_progress_slider=slider;
     lv_obj_add_event_cb(slider, SheetSeek, LV_EVENT_RELEASED, nullptr);
     const bool ready = SheetNavigationReady();
-    SetSheetBtnEnabled(prev, ready && session.CurrentTocIndex() > 0);
-    SetSheetBtnEnabled(next, ready && session.CurrentTocIndex() + 1 < session.TocCount());
+    SetSheetBtnEnabled(prev, ready && (comic ? session.HasPrevPage() : session.CurrentTocIndex() > 0));
+    SetSheetBtnEnabled(next, ready && (comic ? session.HasNextPage() : session.CurrentTocIndex() + 1 < session.TocCount()));
     if (!ready) lv_obj_add_state(slider, LV_STATE_DISABLED);
 }
 } // namespace
@@ -1247,7 +1338,8 @@ bool CloseBookmarkMessage() {
 
 
 void ResetReadingSheetLiveRefs() {
-    s_toc_list=nullptr;s_toc_rows.clear();s_toc_count=0;s_toc_first=-1;
+    s_text_direction_row = nullptr;
+    s_toc_list=nullptr;s_toc_rows.clear();s_toc_count=0;s_toc_building=false;s_toc_first=-1;
     s_sheet_bindings.clear();s_live_body=nullptr;s_live_tab=-1;
     if (s_auto_turn_adjusting) BookReaderPrefsSetAutoTurnSeconds(s_auto_turn_seconds);
     s_auto_turn_adjusting=false;s_auto_turn_value=nullptr;
@@ -1263,13 +1355,22 @@ bool RefreshReadingSheetInPlace() {
     if(!s_live_body || s_live_body!=st.settings.reader_sheet_body || !lv_obj_is_valid(s_live_body) ||
        s_live_tab!=st.settings.reader_tab ||
        s_live_width!=LV_HOR_RES || s_live_height!=LV_VER_RES ||
-       (s_live_tab!=3 && s_live_tab!=kDurationTab))return false;
+       (s_live_tab!=0 && s_live_tab!=3 && s_live_tab!=kDurationTab))return false;
+    if(s_live_tab==0) {
+        if(!st.reader.session || !s_toc_count || st.reader.session->TocCount()!=s_toc_count)return false;
+        s_toc_first=-1;
+        BindTocRows();
+        return true;
+    }
+    UpdateTextDirectionVisibility();
+    if (FitReadingSettingsHeight()) ApplyReadingPanelRules(st.settings.settings_sheet, SheetNavHeight() + 2);
     for(const auto& binding:s_sheet_bindings) {
         int selected=-1;
         if(binding.event==SheetPreset)selected=binding.value<10?BookReaderPrefsMarginPreset():10+BookReaderPrefsSpacingPreset();
         else if(binding.event==OnSheetOrientMode)selected=BookReaderPrefsOrient();
         else if(binding.event==SheetAutoTurnToggle)selected=ReaderAutoTurnEnabled()?1:0;
         else if(binding.event==SheetWritingMode)selected=BookReaderPrefsWritingMode();
+        else if(binding.event==SheetTextDirection)selected=BookReaderPrefsTextDirection();
         else if(binding.event==SheetPageTurn)selected=BookReaderPrefsPageTurn();
         else if(binding.event==SheetBackground)selected=BookReaderPrefsBackground();
         else if(binding.event==SheetAntialias)selected=BookReaderPrefsAntialias();
@@ -1279,7 +1380,7 @@ bool RefreshReadingSheetInPlace() {
         SetLiveSheetButton(binding.button,binding.mask?(selected&binding.value)!=0:selected==binding.value);
     }
     if(st.reader.session && s_bookmark_button) {
-        const bool ready=!ReaderWorkersBusy() && !st.reader.prefs_reopen_pending && !st.reader.session->LiveRelayoutPending();
+        const bool ready=SheetNavigationReady();
         const bool active=ready && st.reader.session->CurrentPageBookmarkId()!=0;
         SetLiveSheetButton(s_bookmark_button,active);
         lv_obj_set_style_image_recolor(s_bookmark_icon,active?lv_color_white():lv_color_black(),0);
@@ -1288,15 +1389,15 @@ bool RefreshReadingSheetInPlace() {
     if(st.reader.session && s_duration_value) {
         auto& session=*st.reader.session;
         const uint32_t seconds=session.ReadingSeconds();
-        char value[64];std::snprintf(value,sizeof(value),"%u小时%u分钟",seconds/3600,seconds%3600/60);
+        char value[64];std::snprintf(value,sizeof(value),Lang::Strings::BOOK_DURATION_HM_FMT,seconds/3600,seconds%3600/60);
         lv_label_set_text(s_duration_value,value);
         std::snprintf(value,sizeof(value),"%.2f%%",session.ReadingProgressX10()/10.0);
         lv_label_set_text(s_progress_value,value);
         if(s_progress_slider) {
             lv_slider_set_value(s_progress_slider,session.ReadingProgressX10(),LV_ANIM_OFF);
             const bool ready=SheetNavigationReady();
-            SetSheetBtnEnabled(s_chapter_prev,ready && session.CurrentTocIndex()>0);
-            SetSheetBtnEnabled(s_chapter_next,ready && session.CurrentTocIndex()+1<session.TocCount());
+            SetSheetBtnEnabled(s_chapter_prev,ready && (session.IsPageImagesMode() ? session.HasPrevPage() : session.CurrentTocIndex()>0));
+            SetSheetBtnEnabled(s_chapter_next,ready && (session.IsPageImagesMode() ? session.HasNextPage() : session.CurrentTocIndex()+1<session.TocCount()));
             if(ready)lv_obj_remove_state(s_progress_slider,LV_STATE_DISABLED);
             else lv_obj_add_state(s_progress_slider,LV_STATE_DISABLED);
         }
@@ -1355,12 +1456,26 @@ void ApplyReadingPanelRules(lv_obj_t* panel, int bottom_gap) {
 void ResizeReadingBottomSheet() {
     auto& st = Book_State();auto* sheet = st.settings.settings_sheet;
     if (!sheet || !lv_obj_is_valid(sheet)) return;
+    if (st.settings.reader_tab == 3 && LV_HOR_RES <= LV_VER_RES &&
+        s_live_body && s_live_body == st.settings.reader_sheet_body && lv_obj_is_valid(s_live_body) &&
+        s_live_width == LV_HOR_RES && s_live_height == LV_VER_RES) {
+        UpdateTextDirectionVisibility();
+        FitReadingSettingsHeight();
+        ApplyReadingPanelRules(sheet, SheetNavHeight() + 2);
+        return;
+    }
     const bool compact = st.settings.reader_tab == kDurationTab;
     const bool full = st.settings.reader_tab == 0 || st.settings.reader_tab == 2 ||
         (st.settings.reader_tab == 3 && LV_HOR_RES > LV_VER_RES);
-    const int desired = compact ? UiSy(190) :
+    int desired = compact ? UiSy(190) :
         full ? LV_VER_RES : st.settings.reader_tab == 3 ? UiSy(558) : UiSy(430);
-    const int limit = compact ? LV_VER_RES * 3 / 5 : full
+    if (st.settings.reader_tab == 1) {
+        const int header = std::min<int>(UiSy(56), LV_VER_RES / 8);
+        const int pager = std::max<int>(UiSy(44), Book_ItemFont()->line_height + 16);
+        desired = header + SheetNavHeight() + 4 + 2 * UiSy(4) + 6 + 4 + pager +
+            kFontListPageSize * kFontListRowH;
+    }
+    const int limit = compact ? LV_VER_RES * 3 / 5 : full || st.settings.reader_tab == 1
         ? LV_VER_RES : LV_VER_RES * 4 / 5;
     const int status_h = st.reader.status_h > 0 ? st.reader.status_h : 40;
     const int available = std::max<int>(1, LV_VER_RES - status_h);
@@ -1408,7 +1523,7 @@ void BuildReadingBottomSheet() {
     const int nav_h = SheetNavHeight()+4; // Keep icons at their existing height; add 4px above them.
     if (!duration) {
         auto* header = SheetBox(sheet, LV_HOR_RES, header_h);
-        const char* titles[] = {"目录", "选择字体", "书签", "阅读设置"};
+        const char* titles[] = {Lang::Strings::BOOK_TOC, Lang::Strings::BOOK_FONT_SELECT, Lang::Strings::BOOK_BOOKMARKS, Lang::Strings::BOOK_READING_SETTINGS};
         char font_selection[32];
         const char* header_title = titles[st.settings.reader_tab];
         if (st.settings.reader_tab == 1 && st.settings.font_multi) {
@@ -1434,14 +1549,14 @@ void BuildReadingBottomSheet() {
         lv_obj_clear_flag(down, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_center(down);
         if (st.settings.reader_tab == 1 && !st.settings.font_multi) {
-            auto* action = SheetButton(header,"导入TTF",
+            auto* action = SheetButton(header,Lang::Strings::BOOK_IMPORT_TTF,
                 UiSx(112),std::min<int>(UiSy(34),header_h-8),OnFontImportClick);
             lv_obj_set_ext_click_area(action, UiSx(6));
             lv_obj_align(action, LV_ALIGN_RIGHT_MID, -UiSx(12), 0);
             SetSheetBtnEnabled(action, !st.settings.font_scan_loading);
         }
         if(st.settings.reader_tab==3) {
-            const bool ready=!ReaderWorkersBusy() && !st.reader.prefs_reopen_pending && !st.reader.session->LiveRelayoutPending();
+            const bool ready=SheetNavigationReady();
             const bool active=ready && st.reader.session->CurrentPageBookmarkId()!=0;
             const int size=std::min<int>(UiSy(36),header_h-8);
             auto* action=SheetButton(header,"",size,size,BookmarkActionEvent,kBookmarkAdd,active);
@@ -1455,7 +1570,7 @@ void BuildReadingBottomSheet() {
             lv_obj_center(icon);SetSheetBtnEnabled(action,ready && st.reader.session->BookmarkStore().Error().empty());
         }
         if(st.settings.reader_tab==2 && st.settings.bookmark_multi) {
-            char count[32];std::snprintf(count,sizeof(count),"已选 %u 项",static_cast<unsigned>(st.settings.bookmark_selected.size()));
+            char count[32];std::snprintf(count,sizeof(count),Lang::Strings::BOOK_SELECTED_ITEMS_FMT,static_cast<unsigned>(st.settings.bookmark_selected.size()));
             auto* label=SheetLabel(header,count,Book_ListFont());
             lv_obj_set_style_bg_color(label,lv_color_white(),0);lv_obj_set_style_bg_opa(label,LV_OPA_COVER,0);lv_obj_center(label);
         }
@@ -1478,25 +1593,31 @@ void BuildReadingBottomSheet() {
     lv_obj_set_style_border_side(nav, LV_BORDER_SIDE_TOP, 0);
     lv_obj_set_style_border_width(nav, 0, 0);
     lv_obj_set_style_border_color(nav, lv_color_black(), 0);
-    const char* tabs[] = {"目录", "字体", "书签", "设置"};
+    const char* tabs[] = {Lang::Strings::BOOK_TOC, Lang::Strings::BOOK_FONT_TITLE, Lang::Strings::BOOK_BOOKMARKS, Lang::Strings::HOME_APP_SETTINGS};
     const lv_image_dsc_t* icons[] = {SheetFontIcon(), SheetTocIcon(), SheetBookmarkNavIcon(), SheetSettingsIcon()};
     const int bottom_gap = LV_HOR_RES>LV_VER_RES?8:UiSy(10); // Additional space inside the display's configured 8px content inset.
     if(st.settings.reader_tab==2 && st.settings.bookmark_multi) {
-        const char* actions[]={"取消","全选","移除"};
+        const char* actions[]={Lang::Strings::COMMON_CANCEL,Lang::Strings::COMMON_SELECT_ALL,Lang::Strings::COMMON_REMOVE};
         const BookmarkAction codes[]={kBookmarkCancel,kBookmarkAll,kBookmarkRemove};
         for(int i=0;i<3;++i) {
             auto* button=SheetButton(nav,actions[i],LV_HOR_RES/3-UiSx(16),std::min<int>(UiSy(34),nav_h-bottom_gap-6),BookmarkActionEvent,codes[i]);
             lv_obj_set_pos(button,LV_HOR_RES*i/3+UiSx(8),UiSy(16));
             if(i==2)SetSheetBtnEnabled(button,!st.settings.bookmark_selected.empty());
         }
-    } else if (st.settings.reader_tab == 1 && st.settings.font_multi) {
+    } else if (st.settings.reader_tab == 1 &&
+               (st.settings.font_multi || !st.ttf.ttf_selected.empty())) {
+        const bool ttf_multi = !st.ttf.ttf_selected.empty();
         const char* actions[] = {Lang::Strings::COMMON_CANCEL, Lang::Strings::COMMON_SELECT_ALL, Lang::Strings::COMMON_REMOVE};
-        const lv_event_cb_t callbacks[] = {OnFontMultiCancel, OnFontMultiSelectAll, OnFontMultiRemove};
+        const lv_event_cb_t callbacks[] = {
+            ttf_multi ? OnTtfMultiCancel : OnFontMultiCancel,
+            ttf_multi ? OnTtfMultiSelectAll : OnFontMultiSelectAll,
+            ttf_multi ? OnTtfMultiRemove : OnFontMultiRemove};
         for (int i = 0; i < 3; ++i) {
             auto* button = SheetButton(nav, actions[i], LV_HOR_RES / 3 - UiSx(16),
                 std::min<int>(UiSy(34), nav_h - bottom_gap - 6), callbacks[i]);
             lv_obj_set_pos(button, LV_HOR_RES * i / 3 + UiSx(8), UiSy(16));
-            if (i == 2) SetSheetBtnEnabled(button, FontSelectedCount() > 0 && !ReaderWorkersBusy());
+            if (i == 2) SetSheetBtnEnabled(button,
+                (ttf_multi ? TtfSelectedCount() : FontSelectedCount()) > 0 && (ttf_multi || !ReaderWorkersBusy()));
         }
     } else for (int i = 0; i < 4; ++i) {
         auto* btn = SheetBox(nav, LV_HOR_RES / 4, nav_h - bottom_gap - 2);lv_obj_set_pos(btn, i * LV_HOR_RES / 4, 1);
@@ -1526,10 +1647,10 @@ void BuildReadingBottomSheet() {
     }
     s_live_body=body;s_live_tab=st.settings.reader_tab;
     s_live_width=LV_HOR_RES;s_live_height=LV_VER_RES;
+    FitReadingSettingsHeight();
     ApplyReadingPanelRules(sheet,nav_h-2);
     if (st.ttf.ttf_mode != BookUiState::TtfMode::kNone) TtfEnsurePanel();
     if (st.tap.tap_zone_ui != BookUiState::TapZoneUi::kClosed) TapZonesEnsurePanel();
-    lv_obj_move_foreground(sheet);
     if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings) SetReadStatusVisible(true);
 }
 

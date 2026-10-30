@@ -1,3 +1,4 @@
+#include "assets/lang_screen.h"
 #include "assistant_boot_photo.h"
 
 #include "a2ui_image.h"
@@ -225,11 +226,10 @@ static char* BuildCapturingJson() {
         cJSON_Delete(root);
         return nullptr;
     }
-    cJSON_AddStringToObject(sp0, "text", "用户：");
+    cJSON_AddStringToObject(sp0, "text", Lang::Strings::ASSISTANT_USER_PREFIX);
     cJSON_AddBoolToObject(sp0, "bold", true);
     cJSON_AddItemToArray(spans, sp0);
-    const char* capt = Lang::Strings::SETTINGS_TEST_CAPTURING;
-    cJSON_AddStringToObject(sp1, "text", capt != nullptr && capt[0] ? capt : "拍照中…");
+    cJSON_AddStringToObject(sp1, "text", Lang::Strings::SETTINGS_TEST_CAPTURING);
     cJSON_AddBoolToObject(sp1, "bold", false);
     cJSON_AddItemToArray(spans, sp1);
 

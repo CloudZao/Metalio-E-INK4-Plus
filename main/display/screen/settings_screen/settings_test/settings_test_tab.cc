@@ -1,3 +1,4 @@
+#include "assets/lang_screen.h"
 #include "settings_test_tab.h"
 #include "settings_test_screens.h"
 #include "settings_test_display_screen.h"
@@ -38,5 +39,5 @@ void SettingsTestTab_Build(lv_obj_t* page) {
     SettingsCreateSelectableOption(page, Lang::Strings::SETTINGS_TEST_TOUCH, OnTouchTestClicked, 0);
     SettingsCreateSelectableOption(page, Lang::Strings::SETTINGS_TEST_BATTERY, OnBatteryTestClicked, 0);
     SettingsCreateSelectableOption(page, Lang::Strings::SETTINGS_TEST_AGING, OnAgingTestClicked, 0);
-    SettingsCreateSelectableOption(page, "显示测试", [](lv_event_t*) { ScreenNavigateTo(SettingsTestDisplayScreen::Create); }, 0);
+    SettingsCreateSelectableOption(page, Lang::Strings::SETTINGS_TEST_DISPLAY, [](lv_event_t*) { ScreenNavigateTo(SettingsTestDisplayScreen::Create); }, 0);
 }

@@ -17,6 +17,7 @@
 #include "ui_scale.h"
 
 #include <cstdlib>
+#include <atomic>
 #include <cstring>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -38,8 +39,7 @@ static bool MapLogicalToUi(int lx, int ly, int* ux, int* uy) {
 static const char* s_vk_hold_name = nullptr;
 static int64_t s_vk_hold_down_us = 0;
 static bool s_vk_hold_long = false;
-static bool s_vk_hold_long_consumed = false;
-static bool s_ui_finger_down = false;
+static std::atomic<bool> s_ui_finger_down{false};
 
 struct CoverKey {
     const char* name;
@@ -71,25 +71,20 @@ static void EndCoverHold(bool emit) {
     }
     if (emit) {
         const char* name = s_vk_hold_name;
-        const bool emit_click = !s_vk_hold_long_consumed;
-        VkKey_OnPressUp(name);
-        if (emit_click) {
-            HapticPulseIfEnabled();
-            VkKey_Dispatch(name);
-        }
+        if (!s_vk_hold_long) HapticPulseIfEnabled();
+        VkKey_PostTouch(VkTouchPhase::kUp, name);
     }
     s_vk_hold_name = nullptr;
     s_vk_hold_down_us = 0;
     s_vk_hold_long = false;
-    s_vk_hold_long_consumed = false;
 }
 
 static void BeginCoverHold(const char* vk, int raw_x, int raw_y) {
     s_vk_hold_name = vk;
     s_vk_hold_down_us = esp_timer_get_time();
     s_vk_hold_long = false;
-    s_vk_hold_long_consumed = false;
     HapticBeginPress();
+    VkKey_PostTouch(VkTouchPhase::kDown, vk);
     ESP_LOGD(TAG, "cover key [%s] down raw=(%d,%d)", vk, raw_x, raw_y);
 }
 
@@ -117,10 +112,7 @@ static void OnTouchSample(uint8_t count, int raw_x, int raw_y, int lx, int ly) {
             if (elapsed_ms >= TOUCH_VK_LONG_MS) {
                 s_vk_hold_long = true;
                 ESP_LOGD(TAG, "cover key [%s] long-press", s_vk_hold_name);
-                s_vk_hold_long_consumed = VkKey_OnLongPress(s_vk_hold_name);
-                if (s_vk_hold_long_consumed) {
-                    HapticPulseIfEnabled();
-                }
+                VkKey_PostTouch(VkTouchPhase::kLong, s_vk_hold_name);
             }
         }
         return;
@@ -172,15 +164,14 @@ static bool PageOwnsVerticalDrag(lv_point_t point) {
     lv_obj_t* layers[] = {lv_layer_sys(), lv_layer_top(), lv_screen_active()};
     for (auto* layer : layers) {
         auto* target = FindGestureTarget(layer, point);
-        if (target == nullptr || target == layer) continue;
+        if (target == nullptr) continue;
         for (auto* obj = target; obj != nullptr; obj = lv_obj_get_parent(obj)) {
             const auto dir = lv_obj_get_scroll_dir(obj);
-            // 指定纵向滚动的列表在边界和内容未填满时仍拥有手势，不依赖点击标志。
+            // 仅实际存在纵向滚动范围的容器保留手势，长列表到达边界时仍优先滚动。
             if (lv_obj_has_flag(obj, LV_OBJ_FLAG_SCROLLABLE) && (dir & LV_DIR_VER) != 0 &&
-                (dir == LV_DIR_VER || (obj != lv_screen_active() &&
-                 lv_obj_get_scroll_top(obj) + lv_obj_get_scroll_bottom(obj) > 0))) return true;
+                lv_obj_get_scroll_top(obj) + lv_obj_get_scroll_bottom(obj) > 0) return true;
         }
-        return false;
+        if (target != layer) return false;
     }
     return false;
 }

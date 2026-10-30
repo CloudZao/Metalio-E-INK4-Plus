@@ -1,175 +1,231 @@
 # 低功耗策略（S31）
 
-业务经 `PowerPolicy::GetInstance()` 声明需求与活动；**勿经 Board 转发**。策略评估后调用 `power_hw_*` 原子动作。
+**中文** | [English](README.en.md)
 
-| 文件 | 职责 |
-|------|------|
-| `power_policy.h` | 对外 API / `PowerNeed` |
-| `power_policy.cc` | 调度：计时、档位评估、NVS、WiFi/PA/CPU 投递 |
-| `power_policy_standby_lp.cc` | 待机 Overlay 后切片浅睡会话 |
-| `power_hw.*` | 硬件原子（PA / WiFi pause / CPU / 浅睡 / 关机脉冲） |
-| `power_policy_priv.h` | 目录内部共享状态 |
+本文集中说明 `metalio-e-ink4-plus` 与 `metalio-e-ink4-plus-global` 进入待机、浅睡眠唤醒和退出待机时的软件收尾、硬件操作及恢复条件。国外版仅使用 Wi-Fi，其余待机硬件流程共用。显示待机页只表示进入待机流程，必须完成业务收尾和物理刷屏后才会进入浅睡眠；定时唤醒也不等于退出待机。
 
----
+这里的“待机”是软件状态；主控通过 `esp_light_sleep_start()` 进入浅睡眠，唤醒后从该调用返回继续执行。触控芯片自身的深睡是独立外设功能，其支持情况见“当前限制与失败保护”。
 
-## 档位
+## 入口与代码分工
 
-```text
-PowerNeed + DeviceState + 无操作计时
-        │
-        ▼
-  ReevaluateLocked → Mode
-        │
-   ┌────┼────────────┬────────────┐
-   ▼    ▼            ▼            ▼
- Full  NetActive   AppIdle    StandbyUi
-```
+- 自动待机：`PowerPolicy` 根据活动需求、业务状态和无操作时间评估档位，再异步显示待机页。执行 UI 请求前重新检查需求，避免过期请求取消刚开始的传输。
+- 电源键短按：[按键入口](../../../display/screen/boot_key_handler.cc) 请求显示待机页，停止传输，并请求暂停传输热点。OTA 界面阻止此操作；USB 虚拟 U 盘占用或正在切换 SD 时暂不进入。
+- 业务使用 [power_policy.h](power_policy.h) 的 `PowerPolicy::GetInstance()`、`Acquire/Release` 或 `PowerNeedHold` 声明需求，不经 Board 增加转发层。
 
-| Mode | 进入条件（要点） | 硬件动作 |
-|------|------------------|----------|
-| **Full** | `PhoneCall` / `BtAudio` | 满频 + PA |
-| **NetActive** | 硬占网 / 软保网 / 断网暂留未满 / 配网激活 | 满频 + 保 WiFi；PA 另算 |
-| **AppIdle** | `Idle` 且无占网、暂留已满 | 关 PA、pause WiFi、MAIN_PWR 态掉电、CPU→空闲 MHz |
-| **StandbyUi** | 无操作满阈值，或电源键短按进待机 | Overlay → settle/Park → `standby_lp` 切片浅睡 |
+| 源文件 | 职责 |
+|---|---|
+| [power_policy.cc](power_policy.cc) | 档位评估、需求引用、计时、NVS，以及网络、CPU、共享电源请求的调度 |
+| [power_policy_standby_lp.cc](power_policy_standby_lp.cc) | 等待收尾、显示定格、浅睡眠切片、按键判断和退出待机调度 |
+| [power_hw.cc](power_hw.cc) | SD 停放与恢复、Wi-Fi 暂停、PA、CPU、浅睡眠和关机的硬件操作 |
+| [standby_screen.cc](../../../display/screen/standby_screen/standby_screen.cc) | 待机页生命周期及各业务的暂停、恢复钩子 |
+| [lv_adapter_epdiy.cc](../../../display/lv_adapter_epdiy.cc) | 提交待机画面、等待物理刷新、冻结提交、暂停触控采样及前光恢复 |
+| [s31_sleep/](s31_sleep/) | SDK 浅睡眠兼容、MPLL/PSRAM 时钟交接和 RTC 保留诊断 |
 
-`KeepNet` 为保留档，当前评估不选用。
+引脚、总线及电源控制定义以板型 [config.h](../../metalio-e-ink4-plus/config.h) 为准；外设断电和保持操作以 [板级显示与电源实现](../../metalio-e-ink4-plus/display/epd_board_metalio_eink4_plus.c) 为准。具体引脚、方向、电平和保持配置见下文“待机相关引脚与电平配置”；引脚定义仍以板型源码为准。
 
-### PA
+## 进入待机：软件收尾
 
-- 开：`Full`，或 `NetActive` 且 `DeviceState` 为 Speaking / AudioTesting
-- 关：其余；`UiKeepNet` 持有时不改 PA
-
-Connecting / Listening **保网但不拉 PA**。
-
-### 前台联网应用
-
-WorkBuddy 与百问 AI 使用 `ForegroundNetwork` 声明页面及后台查询的软保网需求。引用存在时跳过空闲断网倒计时，保持网络可用；不改变 PA，不刷新用户活动时间，也不阻止无操作自动待机。进入待机释放页面引用，取消轮询及连接；用户退出待机且页面仍保留时重新申请并恢复联网。手动关闭 Wi-Fi 时不自动打开，待机内部的定时唤醒不恢复业务联网。
-
-页面引用原位存放，使用现有 `PowerNeedHold` 管理。该需求的硬件刷新由现有网络工作队列执行，投递失败由策略节拍兜底。联网应用的音频占用在采音和编解码任务退出前保持可见，待机任务确认这些应用的网络引用、音频占用以及网络和共享电源的硬件操作全部收尾后，才进入切断共享外设电源的浅睡阶段；等待期间仍响应电源键退出待机。OTA、下载和实际录音继续使用原有活动需求。
-
-百问 AI 使用会话代号取消离页或待机前的异步启动、录音及音频就绪回调，旧停止消息不会关闭恢复后的新会话。WorkBuddy 恢复授权时若旧任务仍占用并发名额，复用页面节拍延后重试，保留当前授权和换绑意图；服务返回的授权错误仍由用户选择重试。
-
-### 禁待机
-
-- `UsbVirtualDisk` / `StandbyInhibit`：不计无操作进待机（不硬占网）
-- 硬占网（`LocalMic` / `OtaDownload` / Connecting 等）期间也不计无操作进待机
-
----
-
-## 设置→功耗（NVS ns=`power`）
-
-UI：`settings_power_tab`。改后异步写 NVS，重启可读。
-
-| 项 | API | 可选 | 默认 | 作用 |
-|----|-----|------|------|------|
-| 空闲降频 | `Get/SetIdleCpuMhz` | 160 / 240 / 320 | 320 | 仅 **AppIdle** 定频（需 `CONFIG_PM_ENABLE`） |
-| 保网时长 | `Get/SetNetGraceSec` | 0（永不）/ 30 / 60 / 120 | 30 | 无保网需求后仍保持 **NetActive**；选择“永不”时不因空闲断网，待机仍停网 |
-| 浅睡待机 | `Get/SetUserIdleToStandbySec` | 180 / 600 / 1800 | 180 | 无操作 → StandbyUi |
-| 自动关机 | `Get/SetStandbyToShutdownSec` | 0（永不）/ 180 / 600 / 1800 / 10800 / 21600 | 1800 | 浅睡累计 → 硬关机 |
-
-允许 Wi-Fi 时，选择“永不”后不因空闲断网；自动待机和电源键待机仍停网，退出待机后按业务需求恢复联网。全局下滑面板的手动关闭优先于保网与唤醒恢复，使用约束见根 README 的快捷控制说明。开机联网等待上限为 30 秒，超时后继续后台连接。
-
----
-
-## 按键
-
-对齐 397：浅睡只靠电源键唤醒并退出待机。
-
-| 场景 | POWER 短按 | POWER 长按（约 3s） | BOOT |
-|------|------------|---------------------|------|
-| 非待机 | 进 Standby Overlay → LP 会话 | `RequestPowerOff` → 关机图 → PWR_KEY | 业务 / 百问等（屏内 VkKey） |
-| 待机内（浅睡醒） | EXT1(GPIO2/P17) → 一律按 POWER：短按 dismiss | 量满长按 → 硬关机 | — |
-| 待机内（醒着轮询） | 同上 dismiss | 同上关机 | 短按继续睡；长按约 500ms → 百问 hold-through |
-
-待机内手势由 `standby_lp` 量时长（浅睡期间正常按键任务不参与决策）。EXT1 醒后即使 P17 已松开，仍按「POWER 短按 dismiss」（对齐 397 latch）。
-
----
-
-## S31 浅睡原子（`power_hw_light_sleep_once`）
-
-对齐 **add76573 tip** 入睡序列；唤醒脚 P17→TCA INT→GPIO2：
+主要调用顺序：
 
 ```text
-SD HoldPinsLow
-→ TPS enter_sleep
-→ 屏总线 bus_hold_low
-→ Accel ReleaseIntLine
-→ Keys MaskForSleep
-→ 等 GPIO2 空闲高 → 仅 P17 输入唤醒
-→ EXT1 GPIO2 ANY_LOW（+ 可选定时）
-→ sleep_cut_rails → bus/SD latch
-→ esp_light_sleep_start
-→ 醒瞬间锁存 P17
-→ Keys Resume → restore rails → **Sd_Init → ReviveUsj（软拔插）** → bus
+显示待机 Overlay，暂停业务并禁止普通 SD 新访问
+→ 等待待机内容准备完成
+→ 等待 SD 操作与句柄归还，卸载并停放 SD
+→ 等待开机工作、网络/音频业务和硬件请求收尾
+→ 定格待机画面，等待物理刷新成功，关闭前光
+→ 执行浅睡眠硬件序列
 ```
 
-**SD hold 与串口**：浅睡仍做 `kLsSd`（CNNT release + 脚拉低）。醒后先 remount（IDF 拉回 `ded_sel`），再 `ReviveUsjAfterSdRestore`——先前在 remount **之前**踢 USJ 无效。
+### 1. 显示待机页并发出暂停请求
 
-进睡日志应见 `sd=1`；醒后应见 `usj revive after SD conn=1`。
+`StandbyScreen::Show()` 保留底层页面，显示经典待机页或选定壁纸，收起快捷控制面板，并通过 `BeginStandbyEnterPaint()` 延迟物理提交，让待机画面在准备完成后统一定格。此时不提前关闭前光。
 
-- 单次切片上限：`kLightSleepSliceUs`（60s）
-- 排查时可设 `kStandbyLpUseLightSleep = false`（改用 `vTaskDelay`，串口不断；此时 BOOT 长按仍可进百问）
-- 硬关机：`power_hw_begin_power_off` → 关 PA → `ShowPoweredOffScreen` → 关前光 → PWR_KEY 脉冲
+| 软件对象 | 进入待机时的处理 |
+|---|---|
+| 阅读 | 停止自动旋转跟踪、阅读计时和字体扫描，关闭字体操作面板，取消页面绘制、图片加载、排版与分页任务；等待工作线程和字体转换结束后，分离书籍 SD 句柄并释放阅读字体。收尾期间持有 SD 事务，防止提前卸卡。 |
+| 壁纸浏览 | 暂停解码，作废旧代预览和缩略图结果。待机壁纸自身的解码仍可在获准的 SD 访问范围内完成。 |
+| 百问 AI | 取消按住说话状态和倾听动画，归还前台保网引用，停止语音会话；异步采音、编解码和连接清理由对应后台任务完成。 |
+| WorkBuddy | 取消当前语音、HTTP、授权查询和回复轮询，停止录音及连续翻页，归还前台保网引用；取消不重发已受理指令。国外版无此应用入口。 |
+| 云传输及日志上传 | 入口请求停止传输/同步和中止日志上传；设置页待机钩子清理上传状态。关闭连接和任务回收不在 UI 回调中等待。电源键入口还请求停止 AP，射频工作线程负责收尾。 |
+| SD 运行日志 | `SdLogWriter_OnSdUnmounting()` 停止日志生产，然后 `sd_access::Quiesce()` 禁止普通新访问。已接纳事务和允许的待机解码可完成收尾。 |
+| 电池测试及触控 | 暂停电池测试页轮询定时器；`PauseStandbyBackgroundWork()` 暂停触控采样，减少待机 I²C 访问。 |
+| 网络、PA 与共享电源策略 | 重新评估为待机策略，暂停 STA 射频并关闭 PA（PA 仍遵守下文的需求规则）。网络和共享电源操作在策略锁外串行执行，待机线程等待这些操作完成。 |
 
-关机任务使用 PSRAM 栈执行同步 LVGL 绘制，壁纸解码由独立后台任务完成。加载提示及画面保留行为见[屏幕显示说明](../../../display/README.md)。
+音频服务由多个消费者共享，只有最后一个消费者归还占用后，才停止音频工作任务并释放 I²S 通道及 DMA 资源。联网应用的占用标记持续到工作线程退出，避免待机线程将“已发出停止请求”误认为“驱动已释放”；实现见 [application.cc](../../../application.cc) 与 [audio_service.cc](../../../audio/audio_service.cc)。
 
-`MAIN_PWR`：S31 无独立轨脚，`power_hw_main_rail_set` 为策略态幂等 no-op。
+### 2. 等待资源真正空闲
 
-触控芯片深睡：板级 `TouchEnterSleep` 暂未接，待机仍可靠 POWER/定时唤醒。
+`standby_lp` 先尝试板级 `TouchEnterSleep()`，再执行以下检查：
 
----
+1. `WaitStandbyPaintReady()` 等待经典页至少一帧 LVGL flush，或待机壁纸解码完成。这里的准备完成不等于物理刷屏完成。
+2. `DrainSdAndBootWork()` 等待 `sd_access::IsIdle()`，确认在途操作、事务及文件/目录句柄已经归还，再调用 `power_hw_sd_park()`。该操作卸载 SD、释放 SDMMC/CNNT 复用，将 SD 信号脚拉低并保持。
+3. 等待 `Application::IsBootWorkActive()` 结束，避免开机外设初始化与断电相撞。
+4. 等待 `HasNetworkAudioWork()`、`HasForegroundNetworkWork()` 和 `HasPendingHardwareWork()` 全部清零，避免采音、连接恢复或共享电源操作尚未完成就切断电源。
 
-关闭虚拟 U 盘时，先删除 TinyUSB 的 MSC 存储挂载，再释放 raw card/SDMMC
-控制器并由 `SdCardManager` 普通挂载；浅睡卸载因此始终对应 IDF 的挂载上下文。
-TinyUSB 临时 APP 挂载不转移 raw card 所有权。
+等待期间仍轮询电源键及唤醒请求。SD 收尾和待机内容准备没有“超时后强制断电”的通道；资源未归还时继续等待，不能以节能为由中断文件写入或切断仍在使用的共享电源。
 
-物理刷屏与日志存储操作互斥，避免 Flash 写入暂停缓存导致 LCD 行缓冲欠载。
-进出待机和关机复用切页推白：准备完整画面后提交一次刷新，避免额外强制全刷；驱动异常恢复及周期清屏仍按原策略执行。
-待机定格和关机在等待物理刷新前冻结后续 UI 提交；刷新失败时重试，成功后才进入浅睡或发送断电脉冲。退出待机在恢复界面落墨后恢复前光。
+### 3. 定格显示并关闭前光
 
-S31 连续浅睡复位定位在 SDK 唤醒时的 MPLL 校准等待。失败前 RTC 快照中
-电源配置为 7/7，启动时写入的 12/12 已被覆盖。校准前每次恢复 12/12，
-并补齐官方 MPLL 模拟初始化与 PSRAM/MPLL 时钟交接；全局 SDK 文件不修改。
-参考官方提交 `9726078b55430ef8d2ce4a460ebf21d889bb5c12` 及当前 S31 PMU 实现。
-项目内兼容补丁见 `s31_sleep/s31_sleep_sdk.cmake`，更换 SDK 时应复核这些兼容处理。
+`StandbyScreen::EnterEpdSleep()` 通过 LVGL 队列执行 `ParkEpdForStandby()`：冻结后续 UI 提交，将完整目标画面提交给刷新任务，并用 `EpdWait()` 等待物理完成。刷屏成功后才执行 `Frontlight::ForceAllLow()`。
 
-SDK 包装、启动配置与 RTC 阶段/寄存器诊断统一放在 `s31_sleep/s31_sleep.cc`。
-`power_hw.cc` 仅通过 `s31_sleep.h` 的初始化、报告、具名阶段和浅睡接口调用，
-保留板级电源流程。链接包装也由模块 CMake 统一接入；清理构建后自动重新生成补丁源码，
-无需修改全局 IDF。
+物理刷新失败时保持清醒并重试，不进入浅睡眠。显示清屏和波形细节见[屏幕显示说明](../../../display/README.md)。刷屏与 Flash 日志写入互斥；显示定格必须发生在屏幕电源和总线停放之前。
 
-RTC 看门狗保留，CPU retention、PSRAM halfsleep 使用原配置。
-RTC 阶段/寄存器快照在启动后延迟重放，避免 USB 重枚举期间丢失复位证据。
+## 进入浅睡眠：硬件操作顺序
 
-## 待机 / 关机壁纸
+`power_hw_light_sleep_once()` 每次先确认 SD 已停止接纳新访问且完全空闲、开机工作已结束、没有退出待机请求，再持有 SD 状态转换保护。当前 `kLightSleepHw` 启用 SD、TPS、屏总线和外设电源四组处理。
 
-| 能力 | 状态 |
-|------|------|
-| 待机 Overlay：NVS 有待机壁纸 → `StandbyWallpaper`，否则经典页 | 已移植 |
-| 壁纸库设为待机 / 关机（NVS 文件名） | 已移植 |
-| 关机：`ShowPoweredOffScreen`（NVS → 内置 `bg_shutdown.a2i1` → 「已关机」）→ 冻结 flush → PWR_KEY | 已接 `power_hw` |
-| 待机 Park 后冻结 flush | 已接（`ParkEpdForStandby`） |
-| 待机暂停 touch_feed | 已接（对齐 397；落墨期间嵌套 pause） |
+1. **确认 SD 已停放。** `power_hw_sd_park()` 可重复调用，已停放时不重复卸载。
+2. **屏幕 PMIC 休眠。** 按板级顺序将 TPS65185 置入 SLEEP，然后将屏幕总线保持为低电平。
+3. **释放共享中断。** `MetalioAccel_ReleaseIntLine()` 关闭阅读加速度跟踪并停用或静默加速度计中断，避免共享 INT 一直被拉低。
+4. **停按键采样并设置安全电平。** `MetalioKeys_MaskForSleep()` 先停侧键扫描，再配置 IO 扩展器端口；随后检查电源键点击锁存及退出待机请求。
+5. **配置唤醒源。** 等共享 INT 空闲为高，仅将电源键通道恢复为输入，设置 MCU EXT1 低电平唤醒，并按本次切片时长配置定时唤醒。INT 未释放或配置失败时取消本次浅睡眠。
+6. **关闭共享外设电源。** 再次压低前光输出；若当前为 4G 模式，先停止 modem 及其 UART/UHCI、网络任务；`MetalioAudio_OnPowerOff()` 作废音频模式就绪状态，然后 `sleep_cut_rails()` 依次关闭摄像头/屏幕电源和 4G/蓝牙/功放共享电源。
+7. **保持总线，进入浅睡眠。** 锁存屏总线休眠电平，记录 RTC 阶段，通过 `s31_sleep::LightSleep()` 调用 `esp_light_sleep_start()`。
 
----
+每个切片最长 60 秒；临近自动关机阈值时使用更短切片。设置“永不自动关机”也仍按切片定时醒来。
 
-## 业务接入
+## 待机相关引脚与电平配置
 
-```c
-PowerPolicy::GetInstance().Acquire(PowerNeed::OtaDownload);
-// … 占网工作 …
-PowerPolicy::GetInstance().Release(PowerNeed::OtaDownload);
+以下按当前 `config.h` 中启用的引脚定义，以及 `power_hw.cc`、板级驱动的实际操作整理。国内版与国外版共用该映射；4G 行仅在当前网络板为蜂窝模式时执行。硬件版本或板型定义变化时，应同步核对此节；这些表是行为说明，配置仍由源码决定。
 
-// 或 RAII
-PowerNeedHold hold(PowerNeed::AudioSession);
-```
+`GPIO n` 表示 ESP32-S31 引脚。`Pxy` 表示 TCA9555 的 Port x、bit y，例如 **P12 = P1.2 = 扩展器线性编号 10**，不是 MCU GPIO12；MCU GPIO12 实际是 EPD D4。表中的 0/1 表示输出低/高电平，输入行不保证固定电平。TCA 配置寄存器中 1 为输入、0 为输出；扩展器锁存与 MCU `gpio_hold_en()` 是两种不同机制。
 
-| 钩子 | 时机 |
-|------|------|
-| `NotifyDeviceState` | `SetDeviceState` 内 |
-| `NotifyUserActivity` | 触摸 / 侧键；触摸深睡后待机中不应点屏 dismiss（靠 POWER） |
-| `RequestReevaluate` | Overlay Show 后等 |
-| `OnStandbyOverlayDismissed` | `StandbyScreen::Dismiss` |
-| `Init(board)` | 板构造末尾 |
+### MCU GPIO：休眠配置与恢复
 
-已接线示例：百问 `AudioSession`、OTA/云下载 `OtaDownload`、蓝牙音频 `BtAudio`、虚拟 U 盘 `UsbVirtualDisk`。
+| 信号 | 当前 GPIO 映射 | 进入浅睡眠前 / 浅睡眠期间 | 唤醒与退出待机 |
+|---|---|---|---|
+| 共享 I²C | SDA = GPIO0；SCL = GPIO1 | 保留共享 I²C 总线及上拉配置；本路径不将这两脚统一拉低或加 GPIO hold，仍需访问 TCA 等器件。 | 继续用原总线恢复扩展器与电源；不在每次唤醒时销毁重建 I²C。 |
+| 共享 INT / EXT1 | GPIO2 | MCU 输入，上拉开启、下拉关闭；先确认空闲高，再配置 EXT1 ANY_LOW。TCA 电源键通道和加速度计共享这根 INT 线，加速度计中断先释放。 | 先锁存电源键，再关闭本次 EXT1 配置；恢复正常按键端口。低电平唤醒不等于触控唤醒。 |
+| SDMMC 数据 | D0/D1/D2/D3 = GPIO20/21/22/23 | 先卸载 SD、释放 CNNT 复用；设为 GPIO 输入输出模式，关闭 GPIO 上下拉，输出 0，再 `gpio_hold_en()`。 | 用户退出时解除 hold 并由挂载流程重建 SDMMC；定时唤醒保留 SD 停放状态。 |
+| SDMMC 时钟/命令 | CLK = GPIO24；CMD = GPIO25 | 与 SD 数据脚同样处理。CNNT SDIO 路径另设置上拉关、下拉开，并清除专用复用选择；不能把 CNNT 配置与 GPIO 上下拉混为一谈。 | 与 SD 数据脚一同恢复；SD 初始化调用之后再恢复 USB Serial/JTAG 控制台。 |
+| EPD 数据 | D0–D7 = GPIO8–15 | 拆除 LCD 总线，改为 GPIO 输出，关闭上下拉，全部输出 0；共享电源切断后、CPU 进入浅睡眠前再启用 GPIO hold。 | 解除 hold，重新初始化 LCD 总线及其复用。 |
+| EPD 控制 | XCL = GPIO16；XLE = GPIO17；XOE = GPIO18；XSTL = GPIO4；SPV = GPIO35；CKV = GPIO40；MODE = GPIO19；BORDER = GPIO37 | 与 EPD 数据脚同组拉低并 hold；采用当前启用的 XSTL/MODE 定义，不使用 `config.h` 中已注释的旧版映射。 | 解除 hold，先将 XOE/MODE/BORDER 配为输出 0，再重建 LCD 总线；不是逐脚直接恢复为高。 |
+| 前光 | 冷光 = GPIO6；暖光 = GPIO7 | 待机画面完成后占空比或输出设为 0，并停止亮度过渡定时器；保留 LEDC 矩阵配置，本路径不为这两脚另加 GPIO hold。切共享电源前再次压低。 | 恢复电源后继续保持 0，底层页面画面物理完成后再按保存的亮度恢复。 |
+| 触控 INT | GPIO5 | 保持原输入/上拉和中断配置，暂停触控采样；不将它配置成当前浅睡眠唤醒源。 | 退出待机后恢复采样；这不涉及向触控芯片写入深睡或复位脉冲。 |
+| BOOT | GPIO61 | 此待机路径不额外改变其方向、电平或 hold；未配置成浅睡眠唤醒源。 | 只能在待机清醒轮询阶段处理长按；不能依靠它唤醒当前浅睡眠。 |
+| 音频 I²S | BCLK = GPIO42；WS = GPIO43；DOUT = GPIO44；DIN = GPIO45 | 最后一个音频消费者退出后删除 I²S 通道并释放 DMA；未另设这一组引脚全部输出 0 或 GPIO hold，供电由共享电源控制。 | 音频模式确认就绪并重新申请服务后，由 I²S 驱动恢复通道配置；电源恢复不代表通道已恢复。 |
+| 蓝牙音频 UART | TX = GPIO39；RX = GPIO38 | `MetalioAudio_OnPowerOff()` 作废模式就绪状态，不在该钩子中重配这两脚；芯片由 P14 共享电源断电。 | P14 恢复后按音频需求重新确认模式，不将 UART 保持配置描述为芯片仍在供电。 |
+| 4G UART / 握手 | TX = GPIO58；RX = GPIO59；MRDY = GPIO60；SRDY = GPIO3 | 断 P14 前停止 modem/UHCI、关闭 SRDY 中断及 GPIO 唤醒、恢复 MRDY sleep-select，再对四脚调用 `gpio_reset_pin()`；没有将四脚统一拉低或启用 hold。GPIO 默认态由当前 SDK 决定。 | 用户退出待机后由蜂窝恢复任务重建 UART/握手与联网；定时唤醒不启动该任务。国外版无当前蜂窝板，不走此处理。 |
+| 模拟开关 | ANA_SW = GPIO36 | 当前浅睡眠序列没有额外切换此脚，保留此前选路；不能将其列为已执行的待机断电动作。 | 保留选路，后续由对应功能操作。 |
+
+实现入口：[SD/CNNT](../../metalio-e-ink4-plus/periph/metalio_sd.cc)、[共享 I²C](../../metalio-e-ink4-plus/bus/metalio_i2c1.c)、[前光](../../metalio-e-ink4-plus/periph/frontlight.cc)、[I²S 释放](../audio/bt_audio_codec.cc)、[蜂窝引脚收尾](../board/uart_eth_modem.cc)。
+
+### TCA9555：端口方向、锁存与电源控制
+
+方向切换分三个阶段，不能仅写成“按键保持输入”：
+
+- 正常态：Port0 输入掩码为 `0xC0`，Port1 输入掩码为 `0xE3`。
+- `ioexp_mask_for_sleep()`：先写安全输出锁存，再将两个端口的配置寄存器都写为 `0x00`，即全部输出。停止按键采样发生在这个步骤之前。
+- `ioexp_enable_power_wake_pin()`：在共享 INT 已为空闲高后，只将 Port1 配置改为 `0x80`，即仅 P17 为输入；Port0 仍为 `0x00`。唤醒后的 `ioexp_restore_keys()` 再恢复正常方向掩码。
+
+| 扩展器引脚 | 信号 / 正常态 | 入睡前与浅睡眠时 | 唤醒恢复 |
+|---|---|---|---|
+| P00 / P01 / P02 | TPS VCOM_CTRL / PWRUP / WAKEUP，输出 | VCOM_CTRL 与 PWRUP 先置 0，随后 WAKEUP 置 0；休眠保持 0。 | 恢复输出方向但不立即全拉高，TPS 后续上电由显示驱动按刷屏需求执行。 |
+| P03 | 马达使能，输出 | mask 阶段保留软件锁存，没有在此新增强制清零；正常震动由脉冲控制结束。 | 按原马达控制逻辑，不将 mask 等同于关闭所有输出。 |
+| P04 | PA_EN，输出 | 电源/音频策略请求关 PA；mask 阶段保留策略锁存，随后 P14 切断共享供电。 | 由音频需求和业务状态控制，不能与 P14 一起无条件开启 PA。 |
+| P05 | 摄像头/屏幕电源，输出 | mask 时先保留，`sleep_cut_rails()` 第一阶段置 0。 | 在 P14 恢复后置 1，恢复此电源。 |
+| P06 | 未分配，正常为输入 | mask 后为输出 0。 | 恢复为输入。 |
+| P07 | TPS PWR_GOOD，正常为输入 | TPS 进入 SLEEP 后，mask 将其改为输出 0；浅睡眠期间不读取它判断工作电压。 | 恢复为输入，后续由显示电源流程使用。 |
+| P10 / P11 | 音量+ / 音量−，正常为输入 | mask 时改为输出 1，保持按键空闲电平，未作为本次唤醒输入。 | 恢复为输入；稳定后重新建立按键采样基线，避免假按键。 |
+| P12 | 触控/4G/摄像头共享 RST，输出 | 保留原锁存，正常已上电时为 1；待机不主动将其拉低或产生复位脉冲。 | 保留锁存。不能因暂停触控采样而描述为此脚已断电。 |
+| P13 | 关机脉冲，输出 | 强制为 0，不发送关机脉冲。 | 仍为 0；只有硬关机流程按配置输出脉冲。 |
+| P14 | 4G/蓝牙/功放共享电源，输出 | mask 时先保留，在 P05 关闭后置 0；相关驱动必须先完成收尾。 | `sleep_restore_rails()` 先置 1，再恢复 P05；只表示供电恢复。 |
+| P15 | 未分配，正常为输入 | mask 后为输出 0。 | 恢复为输入。 |
+| P16 | RTC_INT，正常为输入 | mask 后为输出 0，未保留为此次浅睡眠的 RTC 外部中断唤醒输入。 | 恢复为输入；切片定时醒来使用 MCU 定时唤醒源。 |
+| P17 | POWER，正常为输入 | mask 时先输出 1，随后改回输入；电源键拉低此脚，经 TCA INT 拉低 GPIO2。 | 在恢复方向前先锁存电平；即使短按已松开，也保留电源键唤醒语义。 |
+
+TPS 休眠的当前实现为：若三条控制脚未全低，先拉低 P00/P01，等待 50 ms 后拉低 P02，再等待 120 ms；已经全低时仅补最后的 120 ms 等待。共享电源断开顺序为 **P05 → P14**，恢复顺序为 **P14 → P05**。
+
+电源键的完整唤醒链路为 **P17 输入低 → TCA INT 低 → MCU GPIO2 EXT1 ANY_LOW**。RTC 的 P16、触控 GPIO5、BOOT GPIO61 及蜂窝 SRDY GPIO3 均不属于这次最终配置的外部按键唤醒链路。P17 也不能因为历史宏名 `EPD_TPS_IO_INT` 使用相同线性编号，就被当成独立 TPS 中断脚。
+
+## 唤醒与退出待机
+
+### 1. 每次浅睡眠返回时的硬件恢复
+
+`esp_light_sleep_start()` 返回后，无论是否马上退出待机，先完成硬件恢复：
+
+1. 在恢复按键方向前锁存电源键状态，避免短按已松开而丢失唤醒事件。
+2. 关闭本次 EXT1/定时唤醒配置；`MetalioKeys_ResumeAfterSleep()` 恢复 IO 扩展器按键输入、等待电平稳定并重建采样基线，避免制造按下/松开假沿。
+3. `sleep_restore_rails()` 按与断电相反的顺序恢复共享电源；通知音频及蜂窝板电源已恢复。这里只更新电源状态，不代表音频模式或蜂窝联网已经就绪。前光继续压低，避免旧 PWM 占空比造成闪亮。
+4. **非定时唤醒**调用 `power_hw_sd_restore()`，解除 SD 保持并尝试重新挂载；在 SD 初始化调用之后，再对启用的 USB Serial/JTAG 控制台做软断开/重枚举，以配合 SDMMC 的引脚复用恢复。**定时唤醒跳过 SD 恢复。**
+5. 恢复屏幕总线并返回待机调度层。此时 SD 的普通业务访问仍可能被 `Quiesce` 阻止，挂载恢复不能替代软件恢复入口。
+
+### 2. 定时唤醒：留在待机
+
+定时唤醒用于累计待机时间和判断自动关机，不删除待机 Overlay、不恢复业务网络、不开始录音，也不重新挂载 SD。硬件恢复后，若未达到关机阈值且没有按键退出请求，就再次执行浅睡眠序列。
+
+因此，待机是周期性浅睡眠，不是整机持续断电，也不是深睡重启；切片之间会有短暂清醒和硬件操作。
+
+### 3. 电源键唤醒：完成软件恢复
+
+电源键短按请求退出待机；长按达到阈值则进入硬关机流程。恢复按键采样时仍按住电源键的，从此时开始累计长按，后续 SD、串口和显示总线恢复耗时计入同一次按住时间。达到阈值的请求会锁存，即使恢复期间已松手，也按长按关机处理。待机时由 LP 任务消费长按请求，非待机时由显示任务分发。
+
+浅睡眠中 EXT1 事件只按电源键处理；未锁存长按且读脚时已经松开的，仍视为短按退出。触屏不是浅睡眠唤醒源；BOOT 只在待机尚清醒、能够轮询时支持长按进入助手，不能作为当前浅睡眠唤醒来源。
+
+退出请求由待机线程收尾，即使请求发生在等待 SD 或刷屏之前，也走同一恢复流程：
+
+1. 待机线程调用 `power_hw_sd_restore()` 尝试恢复 SD，并按当前网络板型请求蜂窝异步恢复；清除已消费的电源键点击，再向优先 UI 队列投递 `FinishWake()`。此处未按 SD 恢复返回值阻止退出，挂载失败时仍继续处理退出请求，业务访问受实际挂载状态约束。不会因主应用循环正在等网络而丢弃退出请求。
+2. `StandbyScreen::Dismiss()` 解除显示提交冻结、准备前光亮度恢复，执行 `sd_access::Resume()` 重新开放普通 SD 访问，并恢复 SD 日志生产；随后移除待机变体、定时器和 Overlay。
+3. `OnStandbyOverlayDismissed()` 清理待机请求和累计时间，刷新用户活动时间并重新评估档位。网络恢复由新的需求驱动，不保证返回首页就立即联网；手动关闭 Wi-Fi 的设置优先。
+4. 仍保留在底层的助手或 WorkBuddy 页面重新申请前台保网需求并恢复会话/授权检查，不自动录音，也不重发已受理请求。旧代后台结果不能访问已作废的控件或覆盖新会话。
+5. 重置电量滤波，等待唤醒负载稳定后重新采样；恢复清单、阅读、字体/书籍句柄、必要的书库预热、设置前光控件、电池测试轮询和触控采样。阅读恢复须等待先前工作真正结束。
+6. 请求恢复底层页面画面并登记前光恢复标记，随后解除壁纸解码暂停，并由传输页按需重新建立 AP；这些软件恢复不等待物理刷新。**前光由刷新任务在对应画面物理提交完成后恢复**，并非在 `Dismiss()` 中同步点亮。
+
+## 当前限制与失败保护
+
+- **触控采样暂停不等于芯片深睡。** 当前板类的 `TouchEnterSleep()` 和 `TouchWakeByReset()` 均返回 `ESP_ERR_NOT_SUPPORTED`；不能将已暂停采样写成 FT6336U 已深睡或已断电。
+- **AppIdle 不直接切断共享电源。** `power_hw_main_rail_set()` 只维护策略状态，没有独立 MAIN_PWR 轨可关；物理共享电源切断在浅睡眠序列中执行。
+- **显示待机页不代表已浅睡眠。** 未完成的解码、文件句柄、开机工作、网络或音频清理会延迟浅睡眠；等待阶段仍可请求退出。
+- 唤醒配置或入睡前检查失败时取消本次浅睡眠，按已执行阶段恢复硬件；已经执行的断电、总线和 SD 操作由回退路径处理，再返回待机循环判断按键。
+- SD 恢复失败不能视为挂载成功；普通访问仍受挂载状态检查。USB 虚拟 U 盘关闭时先移除 TinyUSB MSC 挂载，再释放 raw card/SDMMC 并恢复普通挂载，不能混用挂载所有权。
+- PA 关闭、屏幕停放、共享电源切断和浅睡眠是不同阶段；任务并非全部删除，RTC/保留内存也不等于全部外设断电。实际待机电流需在目标硬件、供电和唤醒配置下测量，不能从软件状态名推断。
+
+## 功耗档位与设置
+
+`PowerPolicy` 每秒评估一次，并在需求、状态或配置变化时触发重评估。`KeepNet` 是保留档，当前不被选用。
+
+| 档位 | 主要条件与动作 |
+|---|---|
+| `Full` | 电话或蓝牙音频需求：运行频率、PA；这些需求优先于普通无操作待机。 |
+| `NetActive` | 硬网络需求、前台软保网、配网/激活或断网暂留：运行频率并按需保网。Connecting/Listening 不拉 PA，Speaking/AudioTesting 可开 PA。 |
+| `AppIdle` | Idle 且无保网需求、暂留已满：关 PA、暂停 STA，CPU 使用设置的空闲频率。共享电源这里只改策略状态。 |
+| `StandbyUi` | 无操作达到阈值或请求待机：显示 Overlay，执行上述收尾及浅睡眠流程。 |
+
+`PeripheralReset` 抑制 PA；`UiKeepNet` 持有时策略不改 PA。`ForegroundNetwork` 只软保网，不刷新无操作时间、不影响 PA、不阻止自动待机。实际录音、OTA/下载、Connecting/Listening/Speaking/Upgrading 等硬需求阻止自动待机；`UsbVirtualDisk`、`StandbyInhibit` 只禁止无操作待机，不额外强占网络或开启 PA。硬需求、USB 占用或禁待机需求释放后会刷新无操作时间，避免立即进入待机。
+
+入口：设置 → 功耗。以下默认值用于没有保存偏好的设备；修改经内部 RAM 栈任务异步保存至 NVS `power` 命名空间。
+
+| 设置 | NVS 键 | 可选值 | 默认值 |
+|---|---|---|---|
+| 空闲 CPU 频率 | `idle_mhz` | 160 / 240 / 320 MHz | 320 MHz |
+| 无操作进入待机 | `idle_stb_s` | 180 / 600 / 1800 秒 | 180 秒 |
+| 断网暂留 | `net_grace_s` | 0 / 30 / 60 / 120 秒；0 为永不因空闲断网 | 30 秒 |
+| 待机累计关机 | `stb_off_s` | 0 / 180 / 600 / 1800 / 10800 / 21600 秒；0 为永不自动关机 | 1800 秒 |
+
+- 默认空闲频率为 320 MHz，不应描述为默认已降到低频。仅 `AppIdle` 采用此设置；其他档位请求 `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ`。定频需要 `CONFIG_PM_ENABLE`，本层关闭 SDK 自动浅睡眠，由待机任务显式控制浅睡眠；`PowerHwCpuFreqHold` 可在关键工作期间暂时保持运行频率。
+- 普通 Idle 的断网暂留与进待机时间从最近用户活动并行计时；配网/激活有独立评估，满足无操作阈值后再考虑暂留。软保网页面可以维持网络，但仍遵循自动待机规则。
+- “永不因空闲断网”不禁止待机停网；手动关闭 Wi-Fi 不会被软保网或用户唤醒自动覆盖。STA 暂停停止扫描、重连定时器和射频，保留 netif/事件上下文，避免重复销毁重建。
+- 自动关机累计当前待机会话中的清醒收尾时间与已完成的定时浅睡眠切片，退出待机后清零，不跨重启保存；不能解释为只累计 CPU 实际睡眠时间。
+
+## 硬关机路径
+
+电源键长按或待机累计达到阈值会请求硬关机。策略中止日志上传并尝试触控深睡钩子，关机任务取消并等待字体转换、关闭 PA、尝试恢复 SD 以读取壁纸，等待关机画面物理刷新成功，再关闭前光并输出板级关机脉冲。SD 不可用时使用默认关机画面；物理刷新失败时重试。该路径由电源电路断电，不是 `esp_deep_sleep_start()`，不应与待机软件收尾顺序混为一谈。壁纸加载与回退行为见[屏幕显示说明](../../../display/README.md)。
+
+待机长按关机不先唤醒触控；发起关机后，LP 会话直接结束，不再等待电源键松开。持续按住达到板级硬件强制断电时限时，电源电路仍可直接断电，软件的刷新等待无法阻止该动作。
+
+## S31 SDK 浅睡眠兼容与诊断
+
+[s31_sleep.cc](s31_sleep/s31_sleep.cc) 在浅睡眠唤醒的 MPLL 校准前恢复 DREG/PVT 前置条件并补齐模拟初始化，低层包装只在本次 SDK 浅睡眠范围内生效。缓存关闭或另一 CPU 暂停时使用 IRAM 和低层寄存器访问，避免日志、分配及跨核锁；返回后清除作用域标记。
+
+[s31_sleep_sdk.cmake](s31_sleep/s31_sleep_sdk.cmake) 检查当前 SDK 的 S31 PMU 源码，必要时在构建目录生成兼容副本：入睡前将 PSRAM 时钟交接至 XTAL，并按 CPU retention 条件处理 MSPI 时钟；唤醒后恢复 MPLL/MSPI 再切回 PSRAM 时钟。已识别到交接实现时跳过该补丁；需要补丁而源码锚点不匹配时停止构建，要求复核。安装目录中的 SDK 不被改写，清理构建后会重新生成。升级 SDK 时须同时复核时钟交接补丁和 MPLL 包装，不能仅凭跳过副本生成就认定全部兼容处理已不需要。
+
+模拟初始化的来源参见源码所引用的 Espressif 提交 `9726078b55430ef8d2ce4a460ebf21d889bb5c12`。RTC 看门狗保持启用；CPU retention 与 PSRAM halfsleep 遵循当前 SDK 配置，不以关闭保护来规避唤醒问题。
+
+诊断入口集中在 `PowerPolicy` / `PowerHw` 日志：
+
+- `wait_paint`：等待待机内容；`SD drain pending`：SD 尚未归还；`epd_park`：等待显示定格；`pre_sleep` / `post_sleep`：浅睡眠调用边界。不要把这些阶段日志当成物理断电或低电流证明。
+- RTC 保留快照记录 cycle、phase、已执行硬件位和寄存器信息。阶段定义见 [s31_sleep.h](s31_sleep/s31_sleep.h)；`9` 表示硬件恢复流程返回，`501/502` 分别包围实际 MPLL 校准调用，需结合复位原因和错误码判断，不能将单个阶段号视为成功结果。
+- 启动后在 10、30、60 秒重放上次快照，便于 USB 重枚举后读取；该记录只用于诊断，不在浅睡眠期间写 SD。
+- `power_policy_priv.h` 的 `kStandbyLpUseLightSleep = false` 仅供将浅睡眠替换为轮询延时的诊断。此模式不具备真实浅睡眠功耗，也不能据此验证硬件浅睡眠唤醒。
+
+业务接入时对实际存续的活动持有 `PowerNeedHold`，在任务退出前释放；UI 回调只发取消/恢复请求，不等待网络、音频或 SD 任务。新增后台业务须同时接入待机取消、资源归还和按需恢复，不能只隐藏页面而继续占用文件或共享电源。

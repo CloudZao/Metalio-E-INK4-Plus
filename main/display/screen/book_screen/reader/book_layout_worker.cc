@@ -1,6 +1,7 @@
 #pragma GCC optimize("O1")
 
 #include "book_screen/reader/book_layout_worker.h"
+#include "assets/lang_reader.h"
 #include "book_screen/book_screen_priv.h"
 #include "book_screen/book_font_runtime.h"
 #include "book_screen/book_geom.h"
@@ -16,6 +17,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <lvgl.h>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <esp_log.h>
@@ -27,22 +29,22 @@
 #include "screen_common.h"
 #include "standby_screen/standby_screen.h"
 
-struct LayoutDoneMsg {
-    uint32_t token = 0;
-    bool ok = false;
+namespace {
+struct LayoutCompletion {
+    uint32_t token = 0; // 完成任务的代次
+    bool ok = false; // 编排结果
+    std::atomic<bool> ready{false}; // 单个在途任务的完成槽，由 UI 消费
 };
+LayoutCompletion layout_done, chapter_pages_done;
+}
 
 struct LayoutWorkerArg {
     uint32_t token = 0;
     reader::BookSession::LayoutAnchor anchor{};
 };
 
-void AsyncLayoutDone(void* user_data) {
-    auto* msg = static_cast<LayoutDoneMsg*>(user_data);
+static void OnLayoutDone(uint32_t token, bool ok) {
     auto& st = Book_State();
-    const uint32_t token = msg->token;
-    const bool ok = msg->ok;
-    delete msg;
 
     const bool mine = (token == st.reader.layout_token.load());
     // 无论 token 是否作废，本 worker 已结束，必须清 busy（离开时不再提前清）
@@ -57,15 +59,10 @@ void AsyncLayoutDone(void* user_data) {
     if (st.reader.prefs_reopen_pending || !mine || st.reader.content == nullptr || !st.reader.session) {
         return;
     }
-    if (st.reader.layout_again) {
-        const bool reload = st.reader.layout_reload_font;
-        st.reader.layout_again = false;
-        st.reader.layout_reload_font = false;
-        ApplyReaderLayoutLive(reload);
-        return;
-    }
+    if (st.reader.layout_again) return;
     if (!ok) {
-        ESP_LOGW(TAG, "layout worker failed");
+        if (st.reader.session->Error() != reader::BookReadError::kCancelled)
+            ESP_LOGW(TAG, "layout worker failed error=%d", static_cast<int>(st.reader.session->Error()));
         // 后台索引失败时保留当前可读页，不自动重开并重复扫描整本书。
         st.reader.layout_hint_done_until_us = 0;
         StopLayoutHintTimer();
@@ -83,8 +80,8 @@ void AsyncLayoutDone(void* user_data) {
         UpdateReadFooter();
     }
 
-    StartChapterPageWorker();
-    if (!IsLayoutHintBusy()) {
+    // 正文绘制请求完成后再启动整书页数统计，避免争用字体任务和 SD。
+    if ((keep_sheet || !st.reader.session->NeedsChapterPageRebuild()) && !IsLayoutHintBusy()) {
         MarkLayoutHintDone();
     }
 }
@@ -97,28 +94,15 @@ void LayoutWorker(void* arg) {
         sd_access::Permit permit;
         ok = st.reader.session->FinishLiveRelayout(ctx->anchor);
     }
-    auto* done = new LayoutDoneMsg{};
-    done->token = ctx->token;
-    done->ok = ok;
-    if (!ScreenLvAsync(AsyncLayoutDone, done)) {
-        delete done;
-        st.reader.layout_busy.store(false);
-    }
+    layout_done.token = ctx->token;
+    layout_done.ok = ok;
     delete ctx;
+    layout_done.ready.store(true, std::memory_order_release);
     vTaskDeleteWithCaps(nullptr);
 }
 
-struct ChapterPagesDoneMsg {
-    uint32_t token = 0;
-    bool ok = false;
-};
-
-void AsyncChapterPagesDone(void* user_data) {
-    auto* msg = static_cast<ChapterPagesDoneMsg*>(user_data);
+static void OnChapterPagesDone(uint32_t token, bool ok) {
     auto& st = Book_State();
-    const uint32_t token = msg->token;
-    const bool ok = msg->ok;
-    delete msg;
 
     const bool mine = (token == st.reader.chapter_pages_token.load());
     st.reader.chapter_pages_busy.store(false);
@@ -139,14 +123,7 @@ void AsyncChapterPagesDone(void* user_data) {
         UpdateReadFooter();
     }
     // 换字号曾因页表 worker 占用 font 而 defer：worker 结束后再落地
-    if (st.reader.layout_again) {
-        const bool reload = st.reader.layout_reload_font;
-        st.reader.layout_again = false;
-        st.reader.layout_reload_font = false;
-        st.reader.chapter_pages_again = false;
-        ApplyReaderLayoutLive(reload);
-        return;
-    }
+    if (st.reader.layout_again) return;
     StartPageImageWorker();
     if (!ok) {
         st.reader.layout_hint_done_until_us = 0;
@@ -154,11 +131,7 @@ void AsyncChapterPagesDone(void* user_data) {
         UpdateReadFooter();
         return;
     }
-    if (st.reader.chapter_pages_again || st.reader.session->NeedsChapterPageRebuild()) {
-        st.reader.chapter_pages_again = false;
-        StartChapterPageWorker(); // 设置卡内会直接 return，关卡后再建
-        return;
-    }
+    if (st.reader.session->NeedsChapterPageRebuild()) return;
     MarkLayoutHintDone();
 }
 
@@ -172,35 +145,31 @@ void ChapterPageWorker(void* arg) {
         sd_access::Permit permit;
         ok = st.reader.session->FinishChapterPageTable();
     }
-    auto* done = new ChapterPagesDoneMsg{};
-    done->token = token;
-    done->ok = ok;
-    if (!ScreenLvAsync(AsyncChapterPagesDone, done)) {
-        delete done;
-        st.reader.chapter_pages_busy.store(false);
-    }
+    chapter_pages_done.token = token;
+    chapter_pages_done.ok = ok;
+    chapter_pages_done.ready.store(true, std::memory_order_release);
     vTaskDeleteWithCaps(nullptr);
+}
+
+void PollReaderLayoutWork() {
+    if (layout_done.ready.exchange(false, std::memory_order_acquire))
+        OnLayoutDone(layout_done.token, layout_done.ok);
+    if (chapter_pages_done.ready.exchange(false, std::memory_order_acquire))
+        OnChapterPagesDone(chapter_pages_done.token, chapter_pages_done.ok);
 }
 
 void StartChapterPageWorker() {
     auto& st = Book_State();
+    if (st.reader.deferred_cleanup || !st.reader.read_scr || !st.reader.content) return;
     if (st.reader.standby_paused || StandbyScreen::IsActive()) return;
     if (st.reader.opening.load() || st.reader.layout_busy.load() || st.reader.page_image_busy.load()) return;
     if (st.reader.prefs_reopen_pending || !st.reader.session || !st.reader.session->NeedsChapterPageRebuild()) {
         return;
     }
     if (st.reader.session->LiveRelayoutPending()) return;
-    // 设置浮层只预览当前章；Needs 仍真，关卡 HideReadChrome 再调本函数
-    if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings) {
-        return;
-    }
-    if (st.reader.chapter_pages_busy.load()) {
-        st.reader.chapter_pages_again = true;
-        return;
-    }
+    if (st.reader.chapter_pages_busy.load()) return;
     const uint32_t token = st.reader.chapter_pages_token.fetch_add(1) + 1;
     st.reader.chapter_pages_busy.store(true);
-    st.reader.chapter_pages_again = false;
     MarkLayoutHintBusy();
     auto* ctx = new uint32_t(token);
     BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
@@ -215,6 +184,7 @@ void StartChapterPageWorker() {
 }
 
 void StartLayoutWorker() {
+    if (ReaderPageWorkPending()) return;
     auto& st = Book_State();
     if (st.reader.standby_paused || StandbyScreen::IsActive()) return;
     if (st.reader.opening.load() || st.reader.chapter_pages_busy.load() || st.reader.page_image_busy.load()) return;
@@ -287,7 +257,12 @@ void ReopenReaderAfterPrefsChange() {
             st.reader.layout_token.fetch_add(1);
             st.reader.chapter_pages_token.fetch_add(1);
             CancelLayoutDebounce();
+            CancelReaderPageWork();
             CancelPageImageLoad();
+            if (st.reader.session) {
+                st.reader.session->AbortTxtPaginate();
+                st.reader.session->AbortChapterPageTable();
+            }
             ESP_LOGI(TAG, "prefs reopen deferred: layout=%d chapters=%d image=%d",
                      st.reader.layout_busy.load(), st.reader.chapter_pages_busy.load(),
                      st.reader.page_image_busy.load());
@@ -296,7 +271,6 @@ void ReopenReaderAfterPrefsChange() {
     }
     CancelReaderPrefsReopen();
     CancelLayoutDebounce();
-    st.reader.chapter_pages_again = false;
     st.reader.layout_token.fetch_add(1);
     st.reader.layout_again = false;
     st.reader.layout_reload_font = false;
@@ -313,11 +287,12 @@ void ReopenReaderAfterPrefsChange() {
     const lv_coord_t vw = st.reader.viewport_w;
     const lv_coord_t vh = st.reader.viewport_h;
 
-    s_reader_page_delta.store(0, std::memory_order_release);
-    EndReadingTimeTracking();
-    st.reader.session.reset();
-    ReleaseBookFont();
-    EnsureBookFont();
+    if (!RetireReaderSession()) {
+        st.reader.prefs_reopen_timer = lv_timer_create(OnPrefsReopenReady, 50, nullptr);
+        st.reader.prefs_reopen_pending = st.reader.prefs_reopen_timer != nullptr;
+        return;
+    }
+    if (!ReloadBookFont()) ScreenShowToast(Lang::Strings::TTF_APPLY_FAILED);
     st.reader.session = std::make_unique<reader::BookSession>();
     BindSessionLayoutPrefs(*st.reader.session);
     st.reader.session->SetViewport(vw, vh);
@@ -330,7 +305,7 @@ void OnTocRowClicked(lv_event_t* e) {
     if (!st.reader.session || !st.reader.session->IsOpen()) {
         return;
     }
-    if (!st.reader.session->GoToToc(index)) {
+    if (!RequestReaderNavigation(reader::BookSession::NavigationKind::kToc, index)) {
         return;
     }
     st.reader.read_chrome = BookUiState::ReadChrome::kReading;

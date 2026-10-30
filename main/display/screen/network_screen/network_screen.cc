@@ -10,6 +10,7 @@
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "screen_common.h"
+#include "screen_text.h"
 #include "vk_key_handler.h"
 
 #include <algorithm>
@@ -277,6 +278,7 @@ lv_obj_t* Network_MakeBtn(lv_obj_t* parent, const char* text, lv_coord_t w, lv_c
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_font(lbl, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
+    ScreenFitLabel(lbl, w - 12, h - 8);
     lv_obj_center(lbl);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
     return btn;

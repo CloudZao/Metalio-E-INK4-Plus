@@ -1,3 +1,4 @@
+#include "assets/lang_reader.h"
 #include "epd_content_policy.h"
 #include "book_screen/shelf/book_bookshelf.h"
 #include "book_screen/book_screen_priv.h"
@@ -152,40 +153,8 @@ void RenderBookshelfPage() {
 }
 
 lv_obj_t* CreateBookshelfScreen() {
-    CancelReadFontScan();
     auto& st = Book_State();
-    const bool workers_busy = st.reader.opening.load() || st.reader.layout_busy.load() ||
-                              st.reader.chapter_pages_busy.load() || st.reader.page_image_busy.load();
-    if (workers_busy) {
-        st.reader.open_token.fetch_add(1);
-        st.reader.layout_token.fetch_add(1);
-        st.reader.chapter_pages_token.fetch_add(1);
-        CancelPageImageLoad();
-        if (st.reader.session) {
-            st.reader.session->InvalidateChapterPageTable();
-            st.reader.session->AbortTxtPaginate();
-        }
-        StopReadTimeCheckpointTimer();
-        st.reader.deferred_cleanup = true;
-    } else if (st.reader.deferred_cleanup) {
-        FinishDeferredCleanup();
-    } else {
-        EndReadingTimeTracking();
-        st.reader.session.reset();
-        ReleaseBookFont();
-    }
-
-    st.reader.read_scr = nullptr;
-    st.reader.content = nullptr;
-    st.reader.footer_host = nullptr;
-    st.reader.page_label = nullptr;
-    st.reader.title_label = nullptr;
-    st.reader.status_bar = nullptr;
-    st.reader.status_overlay = nullptr;
-    st.reader.status_h = 0;
-    st.settings.settings_sheet = nullptr;
-    ClearSettingsSheetWidgetRefs();
-    StopTtfPollTimer();
+    ReleaseReaderSessionForLeave();
     st.shelf.shelf_multi = false;
     st.shelf.shelf_selected.clear();
     st.shelf.shelf_suppress_click_until_us = 0;
@@ -195,9 +164,6 @@ lv_obj_t* CreateBookshelfScreen() {
     CancelListCoverFill();
     st.shelf.recent_covers.clear();
     st.shelf.shelf_covers.clear();
-    CancelLayoutDebounce();
-    StopLayoutHintTimer();
-    StopFooterClockTimer();
     ScreenPaintCoalesceReset(&s_shelf_check_paint);
 
     ScreenSetIsHome(false);
@@ -321,8 +287,8 @@ lv_obj_t* CreateBookshelfScreen() {
         lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
         return btn;
     };
-    st.shelf.shelf_view_cover_btn = make_view_btn("封面", OnShelfViewCoverClicked);
-    st.shelf.shelf_view_list_btn = make_view_btn("列表", OnShelfViewListClicked);
+    st.shelf.shelf_view_cover_btn = make_view_btn(Lang::Strings::BOOK_VIEW_COVER, OnShelfViewCoverClicked);
+    st.shelf.shelf_view_list_btn = make_view_btn(Lang::Strings::BOOK_VIEW_LIST, OnShelfViewListClicked);
     // 中间竖线
     lv_obj_t* sep = lv_obj_create(toggle);
     lv_obj_remove_style_all(sep);

@@ -45,10 +45,26 @@ private:
     bool acquired_ = false; // 已登记当前任务的临时权限
 };
 
-/** @brief 保护多文件事务的完整生命周期，覆盖关闭文件后的重命名与清理 */
+/** @brief 预留可跨任务交接的异步 SD 访问权限。 */
+class DeferredTransaction {
+public:
+    /** @brief 预留异步事务，计入卸卡等待；可由另一任务接管。 */
+    DeferredTransaction();
+    ~DeferredTransaction();
+    explicit operator bool() const { return admitted_; }
+    DeferredTransaction(const DeferredTransaction&) = delete;
+    DeferredTransaction& operator=(const DeferredTransaction&) = delete;
+private:
+    friend class Transaction;
+    bool admitted_ = false; // 尚未被执行任务接管的预留
+};
+
+/** @brief 保护多文件事务的完整生命周期，覆盖关闭文件后的重命名与清理。 */
 class Transaction {
 public:
     Transaction();
+    /** @brief 接管已预留事务，允许在待机或卸卡等待期间完成已接纳的写入。 */
+    explicit Transaction(DeferredTransaction& deferred);
     ~Transaction();
     explicit operator bool() const { return admitted_; }
     Transaction(const Transaction&) = delete;

@@ -15,7 +15,7 @@
  * | .../recordings | 录音 Ogg Opus |
  * | .../books | 电子书 .epub/.txt/.ebook；同目录 .txt.idx 为分页索引；<stem>.a2i1 为旁路封面 |
  * | .../fonts | 阅读用 .ef 字体（云推送 .ef 亦落此） |
- * | .../fonts_ttf | 待转换 .ttf/.otf（云推送 TTF/OTF + 设置卡「导入 TTF」扫描） |
+ * | .../fonts_ttf | 阅读用 .ttf/.otf（支持直接加载或转换为 .ef） |
  * | .../a2ui_cache | A2UI 图片会话缓存（开机清空） |
  * | .../chat_log | 百问AI 本机会话 JSON（开机清空；无卡不写） |
  * | .../wallpaper | 壁纸库（关机/待机启用仅 NVS 记文件名；关机无/坏图则用固件内置 bg_shutdown.a2i1） |

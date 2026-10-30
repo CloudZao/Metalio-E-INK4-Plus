@@ -1,3 +1,4 @@
+#include "assets/lang_reader.h"
 #pragma GCC optimize("O1")
 
 #include "book_screen/shelf/book_home.h"
@@ -241,21 +242,21 @@ void RenderReadingHome() {
     Book_DisableScroll(week);
     lv_obj_clear_flag(week, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_t* week_title = lv_label_create(week);
-    lv_label_set_text(week_title, "本周阅读");
+    lv_label_set_text(week_title, Lang::Strings::BOOK_WEEK_READING);
     lv_obj_set_style_text_font(week_title, list_f, 0);
     lv_obj_set_pos(week_title, UiSx(12), UiSy(10));
     lv_obj_t* week_value = lv_label_create(week);
     char week_text[48];
     if (week_stats.valid) {
-        std::snprintf(week_text, sizeof(week_text), "%.1f 分钟", static_cast<double>(week_stats.total_seconds) / 60.0);
+        std::snprintf(week_text, sizeof(week_text), Lang::Strings::BOOK_MINUTES_FMT, static_cast<double>(week_stats.total_seconds) / 60.0);
     } else {
-        std::snprintf(week_text, sizeof(week_text), "%.1f 分钟", static_cast<double>(week_stats.undated_seconds) / 60.0);
+        std::snprintf(week_text, sizeof(week_text), Lang::Strings::BOOK_MINUTES_FMT, static_cast<double>(week_stats.undated_seconds) / 60.0);
     }
     lv_label_set_text(week_value, week_text);
     lv_obj_set_style_text_font(week_value, item_f, 0);
     lv_obj_set_style_text_color(week_value, lv_color_black(), 0);
     lv_obj_set_pos(week_value, UiSx(12), UiSy(46));
-    const char* days[] = {"一", "二", "三", "四", "五", "六", "日"};
+    const char* days[] = {Lang::Strings::BOOK_WEEK_MON, Lang::Strings::BOOK_WEEK_TUE, Lang::Strings::BOOK_WEEK_WED, Lang::Strings::BOOK_WEEK_THU, Lang::Strings::BOOK_WEEK_FRI, Lang::Strings::BOOK_WEEK_SAT, Lang::Strings::BOOK_WEEK_SUN};
     const lv_coord_t day_w = stats_w / 7;
     for (int i = 0; i < 7; ++i) {
         lv_obj_t* bar = lv_obj_create(week);
@@ -335,8 +336,8 @@ void RenderReadingHome() {
         std::snprintf(weekly, sizeof(weekly), "%.1fm", static_cast<double>(week_stats.undated_seconds) / 60.0);
     }
     std::snprintf(finished, sizeof(finished), Lang::Strings::BOOK_COUNT_FMT, stats.finished_count);
-    make_stat_col(0, weekly, "本周阅读时长");
-    make_stat_col(1, duration, "总阅读时长");
+    make_stat_col(0, weekly, Lang::Strings::BOOK_WEEK_DURATION);
+    make_stat_col(1, duration, Lang::Strings::BOOK_TOTAL_DURATION);
     make_stat_col(2, finished, Lang::Strings::BOOK_FINISHED);
     make_vgap(UiSy(24));
 

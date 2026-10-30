@@ -57,7 +57,8 @@ SettingsTestRow SettingsTest_CreateRow(lv_obj_t* parent, const char* title,
     out.row = row;
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, lv_pct(100));
-    lv_obj_set_height(row, kSettingsTestRowH);
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_min_height(row, kSettingsTestRowH, 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(row, 1, 0);
@@ -76,29 +77,30 @@ SettingsTestRow SettingsTest_CreateRow(lv_obj_t* parent, const char* title,
         lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
     }
 
-    out.icon = lv_image_create(row);
-    lv_obj_set_size(out.icon, kSettingsTestIconSz, kSettingsTestIconSz);
-    lv_obj_clear_flag(out.icon, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(out.icon, LV_OBJ_FLAG_HIDDEN);
-
     lv_obj_t* title_lbl = lv_label_create(row);
     lv_label_set_text(title_lbl, title);
     lv_obj_set_width(title_lbl, kSettingsTestTitleW);
-    lv_obj_set_height(title_lbl, lv_font_get_line_height(fontpack_lv_font_ui()));
-    lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_CLIP);
+    lv_obj_set_height(title_lbl, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(title_lbl, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(title_lbl, lv_color_black(), 0);
     lv_obj_clear_flag(title_lbl, LV_OBJ_FLAG_CLICKABLE);
 
     out.value = lv_label_create(row);
     lv_label_set_text(out.value, "…");
+    lv_obj_set_width(out.value, 0);
     lv_obj_set_flex_grow(out.value, 1);
-    lv_obj_set_height(out.value, lv_font_get_line_height(fontpack_lv_font_ui()));
-    lv_label_set_long_mode(out.value, LV_LABEL_LONG_CLIP);
+    lv_obj_set_height(out.value, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(out.value, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(out.value, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(out.value, lv_color_black(), 0);
     lv_obj_set_style_text_align(out.value, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_clear_flag(out.value, LV_OBJ_FLAG_CLICKABLE);
+
+    out.icon = lv_image_create(row);
+    lv_obj_set_size(out.icon, kSettingsTestIconSz, kSettingsTestIconSz);
+    lv_obj_clear_flag(out.icon, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(out.icon, LV_OBJ_FLAG_HIDDEN);
 
     return out;
 }

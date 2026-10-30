@@ -1,7 +1,11 @@
+#include "assets/lang_reader.h"
+#include "assets/lang_config.h"
 #include "ttf_convert.h"
 
 #include "epdfont.h"
+#include "ttf_face.h"
 #include "sd_access.h"
+#include "sd_paths.h"
 
 #include <algorithm>
 #include <atomic>
@@ -76,7 +80,7 @@ bool Cancelled() {
 }
 
 void Fail(const char* msg) {
-    std::snprintf(s_error, sizeof(s_error), "%s", msg ? msg : "unknown");
+    std::snprintf(s_error, sizeof(s_error), "%s", msg ? msg : Lang::Strings::COMMON_UNKNOWN);
     ESP_LOGE(TAG, "failed: %s", s_error);
     s_state.store(kStateFailed, std::memory_order_release);
 }
@@ -93,6 +97,30 @@ void FinishOk() {
 }
 
 bool LoadCharset(const char* template_ef_path, std::vector<uint32_t>* cps) {
+    if (template_ef_path == nullptr || template_ef_path[0] == '\0') {
+        // 与 PC 工具 fontconvert.py 的 reading_zh 范围一致，首次导入无需 SD 字库。
+        constexpr uint32_t ranges[][2] = {
+            {0x0020, 0x007E}, {0x00A0, 0x00FF}, {0x2000, 0x206F},
+            {0x3000, 0x303F}, {0x4E00, 0x9FA5}, {0xFF00, 0xFFEF},
+        };
+        size_t count = 0;
+        for (const auto& range : ranges) {
+            count += range[1] - range[0] + 1;
+        }
+        cps->clear();
+        try {
+            cps->reserve(count);
+            for (const auto& range : ranges) {
+                for (uint32_t cp = range[0]; cp <= range[1]; ++cp) {
+                    cps->push_back(cp);
+                }
+            }
+        } catch (...) {
+            cps->clear();
+            return false;
+        }
+        return true;
+    }
     FILE* f = fopen(template_ef_path, "rb");
     if (f == nullptr) {
         return false;
@@ -157,76 +185,6 @@ bool LoadCharset(const char* template_ef_path, std::vector<uint32_t>* cps) {
     return !cps->empty();
 }
 
-unsigned long FtStreamIo(FT_Stream stream, unsigned long offset, unsigned char* buffer,
-                         unsigned long count) {
-    FILE* f = static_cast<FILE*>(stream->descriptor.pointer);
-    if (f == nullptr || fseek(f, static_cast<long>(offset), SEEK_SET) != 0) {
-        s_io_failed.store(true, std::memory_order_release);
-        return 0;
-    }
-    if (count == 0) {
-        return 0;
-    }
-    const size_t got = fread(buffer, 1, count, f);
-    if (got < count) {
-        s_io_failed.store(true, std::memory_order_release);
-    }
-    return static_cast<unsigned long>(got);
-}
-
-void FtStreamClose(FT_Stream stream) {
-    if (stream == nullptr) {
-        return;
-    }
-    if (stream->descriptor.pointer != nullptr) {
-        fclose(static_cast<FILE*>(stream->descriptor.pointer));
-        stream->descriptor.pointer = nullptr;
-    }
-    free(stream);
-}
-
-bool OpenFace(FT_Library lib, const char* ttf_path, FT_Face* face_out) {
-    FT_Stream stream = static_cast<FT_Stream>(calloc(1, sizeof(FT_StreamRec)));
-    if (stream == nullptr) {
-        return false;
-    }
-    FILE* f = fopen(ttf_path, "rb");
-    if (f == nullptr) {
-        free(stream);
-        return false;
-    }
-    // 大小优先 stat：FATFS 上部分文件 fseek(SEEK_END) 会 EIO（见提交 2e68283）
-    unsigned long fsize = 0;
-    struct stat sb{};
-    if (stat(ttf_path, &sb) == 0 && S_ISREG(sb.st_mode) && sb.st_size > 0) {
-        fsize = static_cast<unsigned long>(sb.st_size);
-    } else if (fseek(f, 0, SEEK_END) == 0) {
-        const long sz = ftell(f);
-        if (sz > 0) {
-            fsize = static_cast<unsigned long>(sz);
-        }
-    }
-    if (fsize == 0) {
-        fclose(f);
-        free(stream);
-        return false;
-    }
-    stream->size = fsize;
-    stream->descriptor.pointer = f;
-    stream->read = FtStreamIo;
-    stream->close = FtStreamClose;
-
-    FT_Open_Args args{};
-    args.flags = FT_OPEN_STREAM;
-    args.stream = stream;
-    FT_Error err = FT_Open_Face(lib, &args, 0, face_out);
-    if (err != 0) {
-        // FreeType 失败路径已 FT_Stream_Free → stream->close（勿重复释放）
-        return false;
-    }
-    return true;
-}
-
 /** 8bpp 灰度 → 2bpp MSB-first（4 像素/字节），阈值与 PC 工具一致。out 调用前须已清零。 */
 void Quantize2bpp(const uint8_t* gray, int pitch, int w, int h, uint8_t* out) {
     size_t bit_i = 0;
@@ -241,24 +199,13 @@ void Quantize2bpp(const uint8_t* gray, int pitch, int w, int h, uint8_t* out) {
     }
 }
 
-std::string SanitizeFamily(const char* ttf_path) {
-    if (ttf_path == nullptr || ttf_path[0] == '\0') {
-        return "font";
-    }
+std::string FontStem(const char* ttf_path) {
+    if (ttf_path == nullptr || ttf_path[0] == '\0') return {};
     const char* base = std::strrchr(ttf_path, '/');
-    base = (base == nullptr) ? ttf_path : base + 1;
-    std::string fam;
-    for (const char* p = base; *p != '\0' && *p != '.' && fam.size() < 40; ++p) {
-        char c = *p;
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-            c == '_' || c == '-') {
-            fam.push_back(c);
-        }
-    }
-    if (fam.empty()) {
-        fam = "font";
-    }
-    return fam;
+    std::string stem = base ? base + 1 : ttf_path;
+    const size_t dot = stem.rfind('.');
+    if (dot != std::string::npos) stem.resize(dot);
+    return stem;
 }
 
 bool WriteEf(const char* out_path, int line_height, int base_line,
@@ -366,7 +313,7 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
                    uint32_t* done, uint32_t total, const char* out_path, char* fail_msg,
                    size_t fail_msg_len) {
     if (FT_Set_Pixel_Sizes(face, 0, size_px) != 0) {
-        std::snprintf(fail_msg, fail_msg_len, "set size %d", size_px);
+        std::snprintf(fail_msg, fail_msg_len, Lang::Strings::TTF_SIZE_FAILED_FMT, size_px);
         return false;
     }
     const int asc = static_cast<int>(face->size->metrics.ascender >> 6);
@@ -381,17 +328,17 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
     try {
         recs.reserve(cps.size());
     } catch (...) {
-        std::snprintf(fail_msg, fail_msg_len, "oom reserve %d", size_px);
+        std::snprintf(fail_msg, fail_msg_len, "%s", Lang::Strings::BOOK_OUT_OF_MEMORY);
         return false;
     }
 
     for (size_t ci = 0; ci < cps.size(); ++ci) {
         if (Cancelled()) {
-            std::snprintf(fail_msg, fail_msg_len, "转换已取消");
+            std::snprintf(fail_msg, fail_msg_len, Lang::Strings::TTF_CANCELLED);
             return false;
         }
         if (s_io_failed.load(std::memory_order_acquire)) {
-            std::snprintf(fail_msg, fail_msg_len, "sd io error");
+            std::snprintf(fail_msg, fail_msg_len, "%s", Lang::Strings::TTF_SD_IO_FAILED);
             return false;
         }
         const uint32_t cp = cps[ci];
@@ -443,7 +390,7 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
             auto* next = static_cast<uint8_t*>(heap_caps_realloc(
                 blob.get(), capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
             if (next == nullptr) {
-                std::snprintf(fail_msg, fail_msg_len, "字形缓存内存不足，请减小字号");
+                std::snprintf(fail_msg, fail_msg_len, Lang::Strings::TTF_GLYPH_MEMORY);
                 return false;
             }
             blob.release();
@@ -460,7 +407,7 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
         try {
             recs.push_back(rec);
         } catch (...) {
-            std::snprintf(fail_msg, fail_msg_len, "oom glyph %d", size_px);
+            std::snprintf(fail_msg, fail_msg_len, "%s", Lang::Strings::BOOK_OUT_OF_MEMORY);
             return false;
         }
         ++(*done);
@@ -476,19 +423,19 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
     }
 
     if (recs.empty()) {
-        std::snprintf(fail_msg, fail_msg_len, "no glyphs size %d", size_px);
+        std::snprintf(fail_msg, fail_msg_len, Lang::Strings::TTF_NO_GLYPHS_FMT, size_px);
         return false;
     }
     ESP_LOGI(TAG, "writing %s glyphs=%u bytes=%u", out_path,
              static_cast<unsigned>(recs.size()), static_cast<unsigned>(blob_size));
     if (!WriteEf(out_path, line_height, base_line, recs, blob.get(), blob_size)) {
-        std::snprintf(fail_msg, fail_msg_len, "write %.40s", out_path);
+        std::snprintf(fail_msg, fail_msg_len, "%s", Lang::Strings::TTF_WRITE_FAILED);
         return false;
     }
     // 自校验：复用设备端解析器确认格式可读
     epdfont_t* chk = epdfont_open(out_path);
     if (chk == nullptr || epdfont_glyph_count(chk) != recs.size()) {
-        std::snprintf(fail_msg, fail_msg_len, "verify %u_2", static_cast<unsigned>(size_px));
+        std::snprintf(fail_msg, fail_msg_len, "%s", Lang::Strings::TTF_VERIFY_FAILED);
         if (chk != nullptr) {
             epdfont_close(chk);
         }
@@ -519,33 +466,34 @@ void RunWorker(Job* job) {
 
     sd_access::Transaction transaction;
     if (!transaction || Cancelled()) {
-        Fail("转换已取消或 SD 卡不可用");
+        Fail(Lang::Strings::TTF_CANCELLED_OR_NO_SD);
         release();
         return;
     }
-    const std::string fam = SanitizeFamily(job->ttf_path.c_str());
+    const std::string fam = FontStem(job->ttf_path.c_str());
     std::vector<uint32_t> cps;
     if (!LoadCharset(job->template_path.c_str(), &cps)) {
-        Fail("bad template ef");
+        Fail(job->template_path.empty() ? Lang::Strings::BOOK_OUT_OF_MEMORY
+                                       : Lang::Strings::TTF_TEMPLATE_INVALID);
         release();
         return;
     }
     ESP_LOGI(TAG, "charset %u cps from %s", static_cast<unsigned>(cps.size()),
-             job->template_path.c_str());
+             job->template_path.empty() ? "built-in reading_zh" : job->template_path.c_str());
 
     if (Cancelled()) {
-        Fail("转换已取消");
+        Fail(Lang::Strings::TTF_CANCELLED);
         release();
         return;
     }
     if (FT_Init_FreeType(&lib) != 0) {
         lib = nullptr;  // 半初始化 library 不可 FT_Done_FreeType
-        Fail("FT_Init_FreeType");
+        Fail(Lang::Strings::TTF_ENGINE_INIT_FAILED);
         release();
         return;
     }
-    if (!OpenFace(lib, job->ttf_path.c_str(), &face)) {
-        Fail("open ttf failed");
+    if (!TtfOpenFace(lib, job->ttf_path.c_str(), &face, &s_io_failed)) {
+        Fail(Lang::Strings::TTF_SOURCE_OPEN_FAILED);
         release();
         return;
     }
@@ -557,7 +505,7 @@ void RunWorker(Job* job) {
 
     for (int si = 0; si < job->size_count; ++si) {
         const int size_px = job->sizes[si];
-        char out_path[192];
+        char out_path[SD_FILE_PATH_CAPACITY];
         std::snprintf(out_path, sizeof(out_path), "%s/%s_%d_2.ef", job->out_dir.c_str(),
                       fam.c_str(), size_px);
         if (!RenderOneSize(face, cps, size_px, &done, total, out_path, fail_msg,
@@ -578,7 +526,7 @@ void RunWorker(Job* job) {
 void Worker(void* arg) {
     Job* job = static_cast<Job*>(arg);
     if (job == nullptr) {
-        Fail("null job");
+        Fail(Lang::Strings::TTF_JOB_INVALID);
         ExitWorker();
     }
     // 转换流程正常返回，栈上 std::string/std::vector 析构在此完成，
@@ -593,8 +541,7 @@ void Worker(void* arg) {
 
 bool Start(const char* ttf_path, const char* template_ef_path, const char* out_dir,
            const uint16_t* sizes_px, int size_count) {
-    if (ttf_path == nullptr || ttf_path[0] == '\0' || template_ef_path == nullptr ||
-        template_ef_path[0] == '\0' || out_dir == nullptr || out_dir[0] == '\0' ||
+    if (ttf_path == nullptr || ttf_path[0] == '\0' || out_dir == nullptr || out_dir[0] == '\0' ||
         sizes_px == nullptr || size_count <= 0 || size_count > 3) {
         return false;
     }
@@ -613,17 +560,28 @@ bool Start(const char* ttf_path, const char* template_ef_path, const char* out_d
 
     Job* job = new (std::nothrow) Job();
     if (job == nullptr) {
-        Fail("oom job");
+        Fail(Lang::Strings::BOOK_OUT_OF_MEMORY);
         s_worker_active.store(false, std::memory_order_release);
         return false;
     }
     try {
         job->ttf_path = ttf_path;
-        job->template_path = template_ef_path;
+        job->template_path = template_ef_path != nullptr ? template_ef_path : "";
         job->out_dir = out_dir;
+        const std::string stem = FontStem(ttf_path);
+        for (int i = 0; i < size_count; ++i) {
+            const std::string name = stem + "_" + std::to_string(sizes_px[i]) + "_2.ef";
+            if (!SdIsValidFileName(name.c_str()) ||
+                job->out_dir.size() + 1 + name.size() >= SD_FILE_PATH_CAPACITY) {
+                delete job;
+                Fail(Lang::Strings::TTF_OUTPUT_NAME_TOO_LONG);
+                s_worker_active.store(false, std::memory_order_release);
+                return false;
+            }
+        }
     } catch (...) {
         delete job;
-        Fail("oom paths");
+        Fail(Lang::Strings::BOOK_OUT_OF_MEMORY);
         s_worker_active.store(false, std::memory_order_release);
         return false;
     }
@@ -649,7 +607,7 @@ bool Start(const char* ttf_path, const char* template_ef_path, const char* out_d
                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
-        Fail("task create");
+        Fail(Lang::Strings::TTF_START_FAILED);
         s_worker_active.store(false, std::memory_order_release);
         return false;
     }
@@ -670,7 +628,7 @@ void FamilyFromPath(const char* ttf_path, char* out, size_t out_len) {
     if (out == nullptr || out_len == 0) {
         return;
     }
-    const std::string fam = SanitizeFamily(ttf_path);
+    const std::string fam = FontStem(ttf_path);
     std::snprintf(out, out_len, "%s", fam.c_str());
 }
 
@@ -687,7 +645,7 @@ void FormatOutputFileList(const char* ttf_path, const uint16_t* sizes_px, int si
     if (size_count > 3) {
         size_count = 3;
     }
-    const std::string fam = SanitizeFamily(ttf_path);
+    const std::string fam = FontStem(ttf_path);
     size_t off = 0;
     for (int i = 0; i < size_count && off + 1 < buf_len; ++i) {
         if (i > 0) {

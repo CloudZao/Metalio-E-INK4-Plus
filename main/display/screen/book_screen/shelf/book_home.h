@@ -41,7 +41,7 @@ struct HomeStats {
 void RenderReadingHome();
 /**
  * @brief 汇总首页统计（继续阅读/时长/已看完/最近）
- * @note 不再全库 Peek .pos；最近/继续走 book_home_snapshot MRU
+ * @note 时长和已看完数量从单书内存缓存汇总；最近/继续走 book_home_snapshot MRU
  */
 HomeStats CollectHomeStats(const std::vector<reader::BookInfo>& books);
 /** @brief 首页时长短文案（如 12m / 1h） */

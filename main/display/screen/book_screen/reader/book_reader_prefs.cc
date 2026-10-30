@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <strings.h>
 
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -17,6 +18,7 @@
 static constexpr const char* TAG = "BookPrefs";
 static constexpr const char* kNvsNs = "reader";
 static constexpr const char* kNvsFontKey = "font";
+static constexpr const char* kNvsFontSizeKey = "font_size";
 static constexpr const char* kNvsSpacingKey = "spacing";
 static constexpr const char* kNvsMarginKey = "margin";
 static constexpr const char* kNvsHideProgKey = "hide_prog";
@@ -26,6 +28,7 @@ static constexpr const char* kNvsUnderlineKey = "underline";
 static constexpr const char* kNvsShelfViewKey = "shelf_view";
 static constexpr const char* kNvsShelfPctKey = "shelf_pct";
 static constexpr const char* kNvsOrientKey = "orient";
+static constexpr const char* kNvsTextDirectionKey = "text_dir";
 static constexpr const char* kDefaultFile = "misans_40_2.ef"; // SD 现网默认 40px/2bpp
 static constexpr size_t kMaxFileLen = SD_FILE_NAME_MAX_BYTES;
 static constexpr int kDefaultSpacingPreset = 1;  // 标准
@@ -35,8 +38,8 @@ static constexpr int kDefaultShelfView = kBookReaderShelfViewCover;
 static constexpr int kDefaultShelfPct = 0;  // 进度角标默认关
 
 struct BookSpacingPreset {
-    int line_gap;
-    int para_gap;
+    int line_spacing_percent; // 行间首选留白占字体行框的百分比
+    int para_gap; // 段前额外留白，单位像素
 };
 
 struct BookMarginPreset {
@@ -46,12 +49,12 @@ struct BookMarginPreset {
     int bottom;
 };
 
-// 普通正文使用固定行距，段落仅首行缩进，不额外占用垂直空间。
+// 疏密档位按行框比例计算，段落仅首行缩进，不额外增加段距。
 static constexpr BookSpacingPreset kSpacingTable[kBookReaderSpacingPresetCount] = {
     {0, 0},
-    {4, 0},
-    {14, 0},
-    {22, 0},
+    {10, 0},
+    {25, 0},
+    {40, 0},
 };
 
 // 成套页边距：与分页 viewport 共用，避免只改 UI pad 导致裁切/留白不一致
@@ -63,6 +66,7 @@ static constexpr BookMarginPreset kMarginTable[kBookReaderMarginPresetCount] = {
 };
 
 static char s_font_file[kMaxFileLen + 1] = {};
+static int s_font_size = 0; // .ef 为 0；TTF/OTF 为实际像素字号
 static int s_spacing_preset = kDefaultSpacingPreset;
 static int s_margin_preset = kDefaultMarginPreset;
 static int s_footer_mask = kDefaultFooterMask;
@@ -71,6 +75,7 @@ static int s_underline = 0;
 static int s_background = 0;
 static int s_auto_turn_seconds = 10;
 static int s_writing_mode = kBookReaderWritingHorizontal;
+static int s_text_direction = kBookReaderTextLeftToRight;
 static int s_page_turn = kBookReaderPageTurnSlide;
 static int s_shelf_view = kDefaultShelfView;
 static int s_shelf_pct = kDefaultShelfPct;
@@ -80,6 +85,10 @@ static bool s_ready = false;
 
 static bool IsSafeBasename(const char* name) {
     return SdIsValidFileName(name);
+}
+static bool IsTtfName(const char* name) {
+    const char* extension = std::strrchr(name, '.');
+    return extension && (strcasecmp(extension, ".ttf") == 0 || strcasecmp(extension, ".otf") == 0);
 }
 static int ClampSpacing(int preset) {
     if (preset < 0 || preset >= kBookReaderSpacingPresetCount) {
@@ -128,6 +137,8 @@ static void LoadFromNvs() {
     } else {
         std::snprintf(s_font_file, sizeof(s_font_file), "%s", kDefaultFile);
     }
+    s_font_size = IsTtfName(s_font_file) ?
+        std::clamp<int>(settings.GetInt(kNvsFontSizeKey, 40), 20, 80) : 0;
     s_spacing_preset = ClampSpacing(settings.GetInt(kNvsSpacingKey, kDefaultSpacingPreset));
     s_margin_preset = ClampMargin(settings.GetInt(kNvsMarginKey, kDefaultMarginPreset));
     // foot_msk 优先；无则按旧 hide_prog 迁移
@@ -142,6 +153,8 @@ static void LoadFromNvs() {
     s_underline = ClampUnderline(settings.GetInt(kNvsUnderlineKey, 0));
     s_auto_turn_seconds = std::max(5, std::min<int>(45, settings.GetInt("auto_turn_s", 10)));
     s_writing_mode = settings.GetInt("writing_mode", 0) == 1 ? 1 : 0;
+    s_text_direction = settings.GetInt(kNvsTextDirectionKey, kBookReaderTextLeftToRight) ==
+        kBookReaderTextRightToLeft ? kBookReaderTextRightToLeft : kBookReaderTextLeftToRight;
     s_background = settings.GetInt("background", 0);
     if (s_background < 0 || s_background > 2) s_background = 0;
     s_page_turn = settings.GetInt("page_turn", kBookReaderPageTurnSlide);
@@ -172,6 +185,7 @@ enum class BookPrefsPersistKind : uint8_t {
     kPageTurn = 10,
     kWritingMode = 11,
     kAutoTurnSeconds = 12,
+    kTextDirection = 13,
 };
 
 struct BookPrefsPersistArg {
@@ -192,6 +206,7 @@ static void PersistTask(void* arg) {
         switch (p->kind) {
             case BookPrefsPersistKind::kFont:
                 settings.SetString(kNvsFontKey, p->file);
+                settings.SetInt(kNvsFontSizeKey, p->ival);
                 ESP_LOGI(TAG, "nvs save font=%s", p->file);
                 break;
             case BookPrefsPersistKind::kSpacing:
@@ -217,6 +232,9 @@ static void PersistTask(void* arg) {
                 break;
             case BookPrefsPersistKind::kWritingMode:
                 settings.SetInt("writing_mode", p->ival);
+                break;
+            case BookPrefsPersistKind::kTextDirection:
+                settings.SetInt(kNvsTextDirectionKey, p->ival);
                 break;
             case BookPrefsPersistKind::kPageTurn:
                 settings.SetInt("page_turn", p->ival);
@@ -272,19 +290,27 @@ const char* BookReaderPrefsFontFile(void) {
     return s_font_file[0] != '\0' ? s_font_file : kDefaultFile;
 }
 
-void BookReaderPrefsSetFontFile(const char* filename) {
-    if (!IsSafeBasename(filename)) {
+void BookReaderPrefsSetFontFile(const char* filename, int size_px) {
+    if (!IsSafeBasename(filename) ||
+        (IsTtfName(filename) && (size_px < 20 || size_px > 80))) {
         ESP_LOGW(TAG, "reject bad font name");
         return;
     }
     BookReaderPrefsEnsureLoaded();
     std::snprintf(s_font_file, sizeof(s_font_file), "%s", filename);
+    s_font_size = IsTtfName(filename) ? size_px : 0;
     s_ready = true;
 
     auto* arg = new BookPrefsPersistArg{};
     arg->kind = BookPrefsPersistKind::kFont;
     std::snprintf(arg->file, sizeof(arg->file), "%s", s_font_file);
+    arg->ival = s_font_size;
     StartPersist(arg);
+}
+
+int BookReaderPrefsFontSize(void) {
+    BookReaderPrefsEnsureLoaded();
+    return s_font_size;
 }
 
 char* BookReaderPrefsFontFullPath(char* out, size_t out_len) {
@@ -292,7 +318,8 @@ char* BookReaderPrefsFontFullPath(char* out, size_t out_len) {
         return nullptr;
     }
     const char* file = BookReaderPrefsFontFile();
-    const int n = std::snprintf(out, out_len, "%s/%s", SD_PATH_FONTS, file);
+    const int n = std::snprintf(out, out_len, "%s/%s",
+        s_font_size > 0 ? SD_PATH_FONT_SRC : SD_PATH_FONTS, file);
     if (n <= 0 || static_cast<size_t>(n) >= out_len) {
         return nullptr;
     }
@@ -333,26 +360,12 @@ const char* BookReaderPrefsSpacingLabel(int preset) {
     }
 }
 
-void BookReaderPrefsSpacingGaps(int preset, int* line_gap, int* para_gap) {
-    const BookSpacingPreset& sp = kSpacingTable[ClampSpacing(preset)];
-    if (line_gap != nullptr) {
-        *line_gap = sp.line_gap;
-    }
-    if (para_gap != nullptr) {
-        *para_gap = sp.para_gap;
-    }
-}
-
-int BookReaderPrefsLineGap(void) {
-    int line = kSpacingTable[kDefaultSpacingPreset].line_gap;
-    BookReaderPrefsSpacingGaps(BookReaderPrefsSpacingPreset(), &line, nullptr);
-    return line;
+int BookReaderPrefsLineSpacingPercent(void) {
+    return kSpacingTable[ClampSpacing(BookReaderPrefsSpacingPreset())].line_spacing_percent;
 }
 
 int BookReaderPrefsParaGap(void) {
-    int para = kSpacingTable[kDefaultSpacingPreset].para_gap;
-    BookReaderPrefsSpacingGaps(BookReaderPrefsSpacingPreset(), nullptr, &para);
-    return para;
+    return kSpacingTable[ClampSpacing(BookReaderPrefsSpacingPreset())].para_gap;
 }
 
 int BookReaderPrefsMarginPreset(void) {
@@ -483,14 +496,13 @@ void BookReaderPrefsSetAntialias(int enabled) {
     StartPersist(arg);
 }
 
-int BookReaderPrefsSyncGlyphAa(int immersive_reading) {
+void BookReaderPrefsSyncGlyphAa(int text_visible) {
     const int prev = EpdReaderAaEnabled() ? 1 : 0;
-    const int on = immersive_reading && BookReaderPrefsAntialias() ? 1 : 0;
+    const int on = text_visible && BookReaderPrefsAntialias() ? 1 : 0;
     EpdSetReaderAaEnabled(on != 0);
     if (prev != on) {
         ESP_LOGI(TAG, "glyph aa=%d (%s)", on, on ? "gray4" : "bw");
     }
-    return prev != on ? 1 : 0;
 }
 
 int BookReaderPrefsUnderlineMode(void) {
@@ -589,6 +601,22 @@ void BookReaderPrefsSetWritingMode(int mode) {
     auto* arg = new BookPrefsPersistArg{};
     arg->kind = BookPrefsPersistKind::kWritingMode;
     arg->ival = mode;
+    StartPersist(arg);
+}
+
+int BookReaderPrefsTextDirection() {
+    BookReaderPrefsEnsureLoaded();
+    return s_text_direction;
+}
+
+void BookReaderPrefsSetTextDirection(int direction) {
+    if (direction != kBookReaderTextLeftToRight && direction != kBookReaderTextRightToLeft) return;
+    BookReaderPrefsEnsureLoaded();
+    if (s_text_direction == direction) return;
+    s_text_direction = direction;
+    auto* arg = new BookPrefsPersistArg{};
+    arg->kind = BookPrefsPersistKind::kTextDirection;
+    arg->ival = direction;
     StartPersist(arg);
 }
 

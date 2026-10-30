@@ -45,6 +45,10 @@ WorkBuddy 将墨水屏设备与电脑端本地助理绑定，支持语音指令�
 
 音频采集通过独立模块接入共享音频服务，复用同一输入任务和直通处理器提取 16 kHz 单声道 PCM。WorkBuddy 只持有自身音频占用，不改变百问 AI 的 AFE 和 Opus 发送路径。实时音频使用有界 PSRAM 环形缓冲；finish 包包含累计字节数和 CRC32，服务端最终确认后才提交电脑指令。网络失败或超时不会自动重发已受理的指令。
 
+设备端不设置固定录音时长：持续按住屏幕或 BOOT 键时边采集边上传，松手后停止采集，排空待发送音频并发送 finish。连接中断、服务报错、待发送缓冲满、离页或待机会停止本轮；服务就绪等待和 finish 后最终结果等待分别设有超时。音频缓冲容量不随录音时长增长。服务端及 ASR 的会话限制仍然适用，当前识别全文及指令文本最多 2000 个 UTF-8 字节。
+
+The device has no fixed recording duration. While the screen or BOOT key is held, it captures and uploads audio continuously. Releasing the input stops capture, drains pending audio and sends finish. Disconnection, service errors, a full pending buffer, leaving the page or standby stop the turn. Waiting for service readiness and for the final result after finish each has a timeout. Audio buffer capacity does not grow with recording duration. Server and ASR session limits still apply; recognized text and command text are each limited to 2000 UTF-8 bytes.
+
 网络任务持有独立上下文，离页、换绑和待机通过取消门闩停止请求。录音启停交给音频工作任务，NVS 操作使用内部 RAM 栈；LVGL 生命周期不等待网络或硬件收尾。硬件未就绪、任务栈分配失败和并发名额不足均显示明确错误。
 
 应用在前台声明软保网需求，不刷新用户无操作计时，不阻止自动待机，并尊重手动关闭 Wi-Fi 的设置。待机时停止录音、回复读取和状态查询，释放页面保网；用户唤醒后恢复连接，不自动录音或重复发送指令。已提交到电脑的任务可能继续执行，可用“同步消息”查看。具体电源策略见 [电源策略](../boards/common/power_policy/README.md)。

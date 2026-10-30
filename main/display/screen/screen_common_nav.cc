@@ -22,6 +22,7 @@ namespace {
 struct UiMessage {
     void (*callback)(void*); // 仅由 UI 线程执行
     void* context; // 接收成功后交给回调释放
+    int64_t queued_us; // 用于定位排队与执行两个阶段
 };
 
 struct UiMailboxes {
@@ -141,7 +142,7 @@ bool ScreenLvAsync(void (*cb)(void*), void* user_data) {
         ESP_LOGW(TAG, "ScreenLvAsync: adapter not ready");
         return false;
     }
-    const UiMessage message{cb, user_data};
+    const UiMessage message{cb, user_data, esp_timer_get_time()};
     return xQueueSend(Mailboxes().normal, &message, 0) == pdTRUE;
 }
 
@@ -153,7 +154,7 @@ bool ScreenLvAsyncUrgent(void (*cb)(void*), void* user_data) {
         ESP_LOGW(TAG, "ScreenLvAsyncUrgent: adapter not ready");
         return false;
     }
-    const UiMessage message{cb, user_data};
+    const UiMessage message{cb, user_data, esp_timer_get_time()};
     return xQueueSend(Mailboxes().urgent, &message, 0) == pdTRUE;
 }
 
@@ -164,7 +165,20 @@ void ScreenLvAsyncDrain() {
     for (unsigned count = 0; count < 8; ++count) {
         if (xQueueReceive(queues.urgent, &message, 0) != pdTRUE &&
             xQueueReceive(queues.normal, &message, 0) != pdTRUE) break;
+        const int64_t started = esp_timer_get_time();
         message.callback(message.context);
+        const int64_t finished = esp_timer_get_time();
+        if (finished - started > 20000 || started - message.queued_us > 200000) {
+            static int64_t last_log = 0;
+            static unsigned suppressed = 0;
+            if (last_log == 0 || finished - last_log >= 5000000) {
+                ESP_LOGW(TAG, "UI callback=%p wait=%lldms run=%lldms suppressed=%u",
+                    reinterpret_cast<void*>(message.callback),
+                    static_cast<long long>((started - message.queued_us) / 1000),
+                    static_cast<long long>((finished - started) / 1000), suppressed);
+                last_log = finished; suppressed = 0;
+            } else ++suppressed;
+        }
         // 单个回调可能绘制整页；本轮完成后交还输入采样与刷新。
         if (esp_timer_get_time() - begin >= 5000) break;
     }

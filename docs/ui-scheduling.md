@@ -1,0 +1,45 @@
+# UI 调度与阅读任务 / UI scheduling and reader work
+
+## 中文
+
+触摸采样只记录输入、投递盖板按键边沿并触发早震。短按、长按和抬起在 UI 任务中按序分发；页面切换会作废旧页面的积压输入。边沿队列溢出时取消未完成的按压，防止长按连翻持续运行。
+
+UI 回调负责界面状态、任务提交和结果发布。耗时处理应复用 `Application::Schedule` 的既有任务域，或复用阅读器已有工作任务；回调中不等待任务完成，不同步读写 SD、重建章节或生成正文位图。工作结果应持有自己的数据，使用会话代次校验迟到结果。UI 队列接收成功后由回调释放上下文；投递失败时由提交方释放或保留重试。
+
+阅读根容器由正文区和固定高度的信息栏区组成，两区上下紧接，信息标签在底栏内居中；底栏高度为界面字体行高加上下各 2 个纵向缩放像素，不随正文字号改变。四边阅读页边距只约束正文可绘制区域。行距四档采用字体行高的 0%、10%、25%、40% 作为首选留白比例；行框统一预留装饰空间，横排容纳 2px 净空与 2px 线宽，竖排容纳 1px 线宽，再按可绘制长度计算行数并均分剩余像素到各行上下。装饰开关不改变行框。横排下划线位于本行字形底沿下方，保留至少 2px 净空，线宽为 2px；分页、正文位图及标签回退使用同一行布局，短页保留相同的单行几何。段距与章后距单独计入；竖排沿列方向分配。设置页按可见选项调整横线上方区域，底部四项导航的高度和位置固定。正文、信息栏、设置卡片和顶栏的遮挡顺序在建屏时确定，更新尺寸不改变层级；开关设置保留正文抗锯齿状态，未修改排版时复用原页面。
+
+阅读翻页、目录跳转、阅读进度和书签定位统一使用 `RequestReaderNavigation`。`book_nav` 持有请求状态并统一调度前台导航、后台扫描和回收；正文工作模块只接收任务、准备页面并交回结果，不反向调用导航模块。UI 创建独立导航游标，后台任务通过独立只读句柄读取索引和页面，完成目标章节分页、字体预热及正文位图后，UI 才发布当前位置与像素。页面直接发布已有 TXT 预览、物化页或章节缓存，不再保留额外的当前页副本；书签请求只复制目标位置。失败或作废结果保留原阅读位置。相对翻页增量有界累加，绝对跳转保留最新目标。等待中的绝对跳转之后发生的翻页按顺序执行。
+
+后台编排不禁用书签、自动翻页和章节导航。TXT 预览以原文字节范围保存和定位书签；上下章提交相对目录增量，在前一个结果提交后计算下一目标。TXT 已识别目录按至多 32 项分批发布，UI 每 100ms 非阻塞接收进度，卡片和目录重绘仍由原队列合并，滚动结束补齐尚未显示的目录变化。普通 TXT 导航等待后台在安全点确认暂停，保留同一次扫描的文件位置、折行状态与已写索引；当前页完成准备、发布并空闲后原地继续。换字体、修改布局、待机或离页时才取消 TXT 扫描；字体使用者退出后才验证和切换新字体，失败保留原字体与偏好。推白方向按真实源位置判断，不使用估算总页码，并随正文像素发布。
+
+前台导航异步等待 TXT 暂停确认或章节计页退出，UI 不等待章节互斥锁。准备期间保留当前底栏，导航成功后更新页码。正文请求结束并空闲后恢复后台统计。全书计页在同一排版下保留已完成章节，从尚未完成的章节继续；只有字体、几何或排版参数变化才清空统计，未完成的单章可重新计页。字体或几何改变须等待现有字体使用者退出，再应用新参数；TXT 当前页预览也在后台计算。阅读背景按几何复用，背景像素和正文合成在工作任务中生成。阅读背景与下划线只影响绘制，开关不改变正文边距、视口、行数和分页。方格以约 32px 的目标间距均分固定内容区，四边完整，边格与内格的像素取整误差不超过 1px；内容区尺寸不变时，翻页不改变格数。
+
+排版与计页完成结果保留在固定交接槽，由 UI 轮询接收，不依赖回调队列容量。分页和 TXT 工作索引完成后关闭写句柄，使 FatFS 文件长度对独立读句柄可见。索引克隆使用实际记录数，TXT 工作文件按会话编号隔离。导航游标在后台交付结果前关闭文件句柄，保留已物化页面，避免延迟回收持续占用文件句柄或删除新会话的索引。
+
+进度保存提交独立 POS3 快照，同一本书尚未执行的保存合并为最新快照；重新打开时也会读取尚未落盘的快照。排队写入及资源回收通过 `sd_access::DeferredTransaction` 预留 SD 事务，卸卡须等其完成。退出前提交最终进度，后台析构不再保存旧位置。`SaveProgress()` 返回成功表示快照已接纳；实际写盘失败另有错误日志。
+
+电量由系统监控任务采样，界面读取原子快照。`DisplayLockGuard` 获取失败时调用方立即返回，只有成功持锁的实例执行解锁。UI 回调日志区分排队与执行耗时，正文准备日志区分排队、导航和栅格化耗时；慢调用按五秒限频并累计省略数。墨水屏波形耗时仍由显示层单独记录。
+
+导航、正文准备和进度写入按上述边界移出 UI 执行路径；书签添加与删除仍在设置回调中同步保存。书籍解析、SD 访问和墨水屏波形仍各有完成时间，硬件驱动内单次阻塞访问需要返回后才能取消。
+
+## English
+
+Touch sampling records input, queues cover-key edges and triggers early haptic feedback. The UI task dispatches click, long-press and release events in order. Screen changes invalidate queued input from previous screens. Queue overflow cancels incomplete presses to stop page-repeat actions safely.
+
+UI callbacks update state, submit work and publish results. Reuse the existing `Application::Schedule` task domains or reader workers for expensive operations. Callbacks must not wait for workers, access SD synchronously, rebuild chapters or generate page pixels. Results own their data and carry a session generation. Accepted UI messages transfer context ownership to the callback; rejected messages remain the submitter's responsibility.
+
+The reading root contains an upper reading area and a fixed-height information footer. They meet without a gap, and the footer label is centered. Footer height is the UI font line height plus two vertically scaled pixels on each side, independent of the body font size. Reading margins constrain only the drawable content area. The four spacing presets prefer 0%, 10%, 25%, or 40% of the font line height as blank space. Every row reserves decoration space: two clear pixels and a two-pixel horizontal underline, or a one-pixel vertical rule. Layout determines complete rows and distributes remaining pixels above and below them. Decoration switches never change the row geometry. Horizontal underlines leave at least two clear pixels below the row's glyph bounds and are two pixels thick. Pagination, raster output, and label fallback share this layout; short pages retain the same row geometry. Paragraph and post-heading gaps are added separately. Vertical writing distributes space between columns. Visible settings resize the area above the divider while the four bottom navigation items keep their height and position. Screen creation fixes the stacking order of body, footer, settings and top bar; resizing preserves that order. Opening and closing settings preserves body antialiasing and reuses the page when layout has not changed.
+
+Page turns, table-of-contents jumps, progress seeking and bookmark navigation share `RequestReaderNavigation`. The `book_nav` controller owns requests and schedules foreground preparation, background scans and cleanup. The page worker only accepts work, prepares pages and returns results; it never calls back into navigation logic. The UI creates an independent navigation cursor. A worker reads indexes and pages through separate read-only handles, paginates target chapters, prewarms fonts and rasterizes text. The UI then publishes the position and pixels using the existing TXT preview, materialized page or chapter cache, without an additional current-page copy. Bookmark requests copy only the target position. Failed or invalidated results preserve the previous position. Relative turns accumulate within a fixed limit; absolute requests retain the latest target. Turns queued after a pending absolute request execute afterward.
+
+Background layout does not disable bookmarks, automatic page turns or chapter navigation. TXT previews save and restore bookmarks by source byte range. Chapter buttons submit relative table-of-contents increments, resolved after the preceding navigation commits. Recognized TXT headings are published in batches of at most 32 entries. The UI receives progress without blocking every 100ms; existing queues coalesce card and contents rendering, and scrolling completion applies unseen contents changes. Ordinary TXT navigation waits for a pause acknowledgement at a safe point, preserving the same scan, file position, line-breaking state and written indexes. Scanning continues in place after page preparation, publication and an idle interval. Font or layout changes, standby and leaving the reader cancel TXT scanning. Font replacement waits for existing font users, validates the new font and preserves the old font and preference on failure. Wipe direction follows actual source positions rather than estimated page numbers and is published with page pixels.
+
+Foreground navigation asynchronously waits for a TXT pause acknowledgement or for chapter counting to stop. The UI never waits for the chapter mutex. The footer retains its current content during preparation and updates after successful navigation. Background scans resume after foreground work becomes idle, keeping completed chapter counts for the same layout and continuing with unfinished chapters. Only font, geometry or layout changes invalidate those counts; an interrupted chapter may restart. Font and geometry changes wait for existing font users before applying new parameters. TXT preview layout also runs in a worker. Background layers reuse matching geometry; workers generate background pixels and compose them with text. Backgrounds and underlines affect drawing only; switching them keeps margins, the viewport, row counts and pagination unchanged. Grid mode divides the fixed content area at a target spacing near 32px, with complete edges and at most one pixel of rounding difference between edge and interior cells. Page turns keep the same grid count unless the content area changes.
+
+Fixed completion slots retain layout and counting results until the UI polls them, independent of callback queue capacity. Completed page stores and TXT work indexes close their write handles so independent FatFS readers see the final file lengths. Index clones use the actual record count, and TXT work files have session-specific names. Navigation cursors close file handles before handing results to the UI while retaining materialized pages, so delayed cleanup neither holds file handles nor deletes a newer session's indexes.
+
+Progress saves submit independent POS3 snapshots. Pending saves for the same book merge into the latest snapshot, which reopening also consults before disk data. Queued writes and resource cleanup reserve SD access through `sd_access::DeferredTransaction`, so unmounting waits for completion. Closing submits the final snapshot before ownership transfer; delayed destruction never saves an obsolete position. Successful `SaveProgress()` means acceptance; disk failures are logged separately.
+
+The system monitor samples the battery; UI code reads an atomic snapshot. Callers return when `DisplayLockGuard` fails, and only an acquired guard unlocks. Rate-limited diagnostics separate UI queue and callback time, and reader queue, navigation and rasterization time. Suppressed slow calls are counted. Display-layer logs measure the e-paper waveform separately.
+
+These boundaries move navigation, page preparation and progress writes outside the UI execution path. Bookmark additions and deletions still save synchronously from settings callbacks. Parsing, SD operations and e-paper waveforms take time; cancellation must wait for an individual blocking driver operation to return.

@@ -268,10 +268,8 @@ lv_obj_t* CreateInfoRow(lv_obj_t* parent, const SettingsAboutInfoItem& item, boo
     lv_obj_t* row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, lv_pct(100));
-    lv_obj_set_height(row, item.firmware_row ? LV_SIZE_CONTENT : kSettingsInfoRowH);
-    if (item.firmware_row) {
-        lv_obj_set_style_min_height(row, kSettingsInfoRowH, 0);
-    }
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_min_height(row, kSettingsInfoRowH, 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(row, 0, 0);
     if (with_divider) {
@@ -298,7 +296,7 @@ lv_obj_t* CreateInfoRow(lv_obj_t* parent, const SettingsAboutInfoItem& item, boo
     lv_obj_t* title = lv_label_create(row);
     lv_label_set_text(title, item.label);
     lv_obj_set_width(title, lv_pct(100));
-    lv_label_set_long_mode(title, item.firmware_row ? LV_LABEL_LONG_WRAP : LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(title, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(title, lv_color_black(), 0);
     lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
@@ -306,7 +304,7 @@ lv_obj_t* CreateInfoRow(lv_obj_t* parent, const SettingsAboutInfoItem& item, boo
     lv_obj_t* subtitle = lv_label_create(row);
     lv_label_set_text(subtitle, item.value);
     lv_obj_set_width(subtitle, lv_pct(100));
-    lv_label_set_long_mode(subtitle, item.firmware_row ? LV_LABEL_LONG_WRAP : LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(subtitle, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(subtitle, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(subtitle, lv_color_black(), 0);
     lv_obj_clear_flag(subtitle, LV_OBJ_FLAG_CLICKABLE);

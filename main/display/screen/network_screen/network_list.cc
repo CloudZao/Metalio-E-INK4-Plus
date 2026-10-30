@@ -1,3 +1,4 @@
+#include "assets/lang_network.h"
 // network_list.cc — split from parent .cc
 #include "network_screen/network_screen.h"
 #include "network_screen_priv.h"
@@ -209,7 +210,7 @@ static void RebuildTransferLists() {
         lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_font(message, Network_UiFont(), 0);
         lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
-        lv_label_set_text(message, st.transfer_scan_message.empty() ? "正在扫描" : st.transfer_scan_message.c_str());
+        lv_label_set_text(message, st.transfer_scan_message.empty() ? Lang::Strings::NETWORK_SCANNING_SHORT : st.transfer_scan_message.c_str());
         lv_obj_center(message);
         return;
     }
@@ -249,7 +250,7 @@ static void RebuildTransferLists() {
         lv_obj_set_height(section, heading_h + box_h[group]);
         lv_obj_set_flex_flow(section, LV_FLEX_FLOW_COLUMN);
         auto* heading = lv_label_create(section);
-        lv_label_set_text_fmt(heading, known ? "已保存（%d）" : "未保存（%d）", counts[group]);
+        lv_label_set_text_fmt(heading, known ? Lang::Strings::NETWORK_SAVED_COUNT_FMT : Lang::Strings::NETWORK_UNSAVED_COUNT_FMT, counts[group]);
         lv_obj_set_style_text_font(heading, Network_UiFont(), 0);
         lv_obj_set_height(heading, heading_h);
         auto* box = lv_obj_create(section);
@@ -310,7 +311,7 @@ static void RebuildTransferLists() {
             auto* hint = lv_label_create(rows);
             lv_obj_set_width(hint, LV_PCT(100));
             lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
-            lv_label_set_text(hint, known ? "附近暂无已保存网络" : "附近暂无未保存网络");
+            lv_label_set_text(hint, known ? Lang::Strings::NETWORK_NO_SAVED_NEARBY : Lang::Strings::NETWORK_NO_UNSAVED_NEARBY);
             lv_obj_set_style_text_font(hint, Network_UiFont(), 0);
         }
     }
@@ -321,7 +322,7 @@ static void RebuildTransferLists() {
     lv_obj_set_style_pad_bottom(footer, footer_pad_bottom, 0);
     lv_obj_set_flex_flow(footer, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(footer, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    st.ui.scan_btn = Network_MakeBtn(footer, "刷新", kActionBtnW, kActionBtnH, Network_OnScanClicked);
+    st.ui.scan_btn = Network_MakeBtn(footer, Lang::Strings::CLOUD_REFRESH, kActionBtnW, kActionBtnH, Network_OnScanClicked);
 }
 
 int Network_NearbyPageCount() {

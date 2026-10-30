@@ -89,18 +89,13 @@ public:
         FullRefresh();
     }
 
-    /** @brief EPDiy 无双平面；降级为下一帧强制 GC16（勿同步 refr） */
-    void RequestDualPlanePartial() {
-        RequestFullOnNextCommit();
-    }
-
-    /** @brief 进待机：只攒 FB 不上墨，随后 Park 推白带出画面（对齐 397 defer） */
+    /** @brief 进待机：只攒 FB 不上墨，随后 Park 全刷清理并推白显示画面。 */
     void BeginStandbyEnterPaint();
 
-    /** @brief 待机定格：冻结 flush 后推白上屏，成功返回 true */
+    /** @brief 待机定格：冻结 flush 后先全刷白屏，再推白上屏，成功返回 true。 */
     bool ParkEpdForStandby();
 
-    /** @brief 退出待机：解冻；下一帧推白恢复界面 */
+    /** @brief 退出待机：解冻；下一帧先全刷白屏，再推白恢复界面。 */
     void WakeEpdFromStandby();
 
     /** @brief 下一帧实际落墨后再恢复前光（配合退出待机） */

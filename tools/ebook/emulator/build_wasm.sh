@@ -48,6 +48,7 @@ CXXSRC=(
   "$ROOT/src/font/epdfont_emulator.cc"
   "$ESP_MAIN/display/font/epdfont.cc"
   "$ESP_MAIN/reader/book_session.cc"
+  "$ESP_MAIN/reader/book_session_nav.cc"
   "$ESP_MAIN/reader/book_disk_cache.cc"
   "$ESP_MAIN/reader/book_bookmarks.cc"
   "$ESP_MAIN/reader/ebook_document.cc"

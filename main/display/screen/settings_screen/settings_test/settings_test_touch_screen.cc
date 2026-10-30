@@ -1,6 +1,5 @@
 #include "settings_test_touch_screen.h"
 
-#include "assets/lang_config.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "lv_adapter_epdiy.h"
@@ -13,23 +12,15 @@
 #include <esp_log.h>
 #include <esp_random.h>
 
-// lang_config.h 为生成文件，新增界面文案的声明保留在源码中。
-namespace Lang::Strings {
-extern const char* SETTINGS_TEST_TOUCH_SIZE;
-extern const char* SETTINGS_TEST_TOUCH_SMALL;
-extern const char* SETTINGS_TEST_TOUCH_LARGE;
-}
-
 static constexpr const char* TAG = "SettingsTestTouch";
 static constexpr const char* kScreenId = "settings_test_touch";
 
-// 小档准星几何；大档尺寸加倍，点击热区同步放大。
-static constexpr lv_coord_t kTargetHit = UiSx(32);  // 点击热区边长
-static constexpr lv_coord_t kRingSize = UiSx(24);   // 外环直径
-static constexpr lv_coord_t kCrossLen = UiSx(28);   // 十字臂长
+static constexpr lv_coord_t kTargetHit = UiSx(32) * 2; // 点击热区边长
+static constexpr lv_coord_t kRingSize = UiSx(24) * 2;  // 外环直径
+static constexpr lv_coord_t kCrossLen = UiSx(28) * 2;  // 十字臂长
 static constexpr lv_coord_t kCrossThick = UiSx(1);  // 十字线宽
-static constexpr lv_coord_t kCoreSize = UiSx(5);    // 中心实心点
-static constexpr lv_coord_t kCoreClear = UiSx(8);   // 中心留白
+static constexpr lv_coord_t kCoreSize = UiSx(5) * 2;   // 中心实心点
+static constexpr lv_coord_t kCoreClear = UiSx(8) * 2;  // 中心留白
 static constexpr lv_coord_t kEdgeInset = UiSx(48);   // 左右/上边距
 static constexpr lv_coord_t kBottomInset = UiSy(96); // 底排上移，序号不被挡住
 static constexpr lv_coord_t kCenterGap = UiSx(70);   // 中心两点左右间距的一半
@@ -37,11 +28,8 @@ static constexpr int kFixedCount = 10;
 
 static lv_obj_t* s_scr = nullptr;
 static lv_obj_t* s_field = nullptr;
-static lv_obj_t* s_size_picker = nullptr;
-static int s_target_scale = 1;
 static int s_remaining = 0;
 static bool s_random_mode = false;
-static bool s_testing = false;
 
 // 全屏无顶栏：摘掉上一页状态栏指针，避免 UpdateStatusBar 写已释放对象
 static void ClearStatusBindings() {
@@ -69,7 +57,7 @@ static void SpawnRandomTarget() {
     }
     const lv_coord_t fw = lv_obj_get_width(s_field);
     const lv_coord_t fh = lv_obj_get_height(s_field);
-    const lv_coord_t half = kTargetHit * s_target_scale / 2;
+    const lv_coord_t half = kTargetHit / 2;
     const lv_coord_t min_x = half;
     const lv_coord_t max_x = fw > half ? (fw - half) : half;
     const lv_coord_t min_y = half;
@@ -120,25 +108,22 @@ static void SpawnTarget(lv_coord_t cx, lv_coord_t cy, int index) {
     // 透明热区；内部画「外环 + 十字 + 中心点」准星
     lv_obj_t* t = lv_obj_create(s_field);
     lv_obj_remove_style_all(t);
-    const lv_coord_t hit_size = kTargetHit * s_target_scale;
-    const lv_coord_t ring_size = kRingSize * s_target_scale;
-    const lv_coord_t cross_len = kCrossLen * s_target_scale;
-    lv_obj_set_size(t, hit_size, hit_size);
+    lv_obj_set_size(t, kTargetHit, kTargetHit);
     lv_obj_set_style_bg_opa(t, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(t, 0, 0);
     lv_obj_set_style_pad_all(t, 0, 0);
     lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_pos(t, cx - hit_size / 2, cy - hit_size / 2);
+    lv_obj_set_pos(t, cx - kTargetHit / 2, cy - kTargetHit / 2);
 
-    lv_obj_t* hbar = MakeBar(t, cross_len, kCrossThick);
+    lv_obj_t* hbar = MakeBar(t, kCrossLen, kCrossThick);
     lv_obj_center(hbar);
-    lv_obj_t* vbar = MakeBar(t, kCrossThick, cross_len);
+    lv_obj_t* vbar = MakeBar(t, kCrossThick, kCrossLen);
     lv_obj_center(vbar);
 
     lv_obj_t* ring = lv_obj_create(t);
     lv_obj_remove_style_all(ring);
-    lv_obj_set_size(ring, ring_size, ring_size);
+    lv_obj_set_size(ring, kRingSize, kRingSize);
     lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(ring, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(ring, 2, 0);
@@ -150,7 +135,7 @@ static void SpawnTarget(lv_coord_t cx, lv_coord_t cy, int index) {
 
     lv_obj_t* clear = lv_obj_create(t);
     lv_obj_remove_style_all(clear);
-    lv_obj_set_size(clear, kCoreClear * s_target_scale, kCoreClear * s_target_scale);
+    lv_obj_set_size(clear, kCoreClear, kCoreClear);
     lv_obj_set_style_radius(clear, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(clear, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(clear, LV_OPA_COVER, 0);
@@ -160,7 +145,7 @@ static void SpawnTarget(lv_coord_t cx, lv_coord_t cy, int index) {
 
     lv_obj_t* core = lv_obj_create(t);
     lv_obj_remove_style_all(core);
-    lv_obj_set_size(core, kCoreSize * s_target_scale, kCoreSize * s_target_scale);
+    lv_obj_set_size(core, kCoreSize, kCoreSize);
     lv_obj_set_style_radius(core, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(core, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(core, LV_OPA_COVER, 0);
@@ -176,7 +161,7 @@ static void SpawnTarget(lv_coord_t cx, lv_coord_t cy, int index) {
         lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
         lv_obj_set_style_text_font(lbl, fontpack_lv_font_ui(), 0);
         lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_pos(lbl, cx - 6, cy + ring_size / 2 + 2);
+        lv_obj_set_pos(lbl, cx - 6, cy + kRingSize / 2 + 2);
         lv_obj_set_user_data(t, lbl);
     } else {
         lv_obj_set_user_data(t, nullptr);
@@ -217,51 +202,14 @@ static void SpawnFixedSymmetric() {
     ESP_LOGI(TAG, "fullscreen %dx%d fixed=%d", static_cast<int>(w), static_cast<int>(h), kFixedCount);
 }
 
-static void StartTesting() {
-    if (s_testing || s_scr == nullptr || !lv_obj_is_valid(s_scr)) {
-        return;
-    }
-    s_testing = true;
-
-    if (s_size_picker != nullptr && lv_obj_is_valid(s_size_picker)) {
-        lv_obj_delete(s_size_picker);
-        s_size_picker = nullptr;
-    }
-    lv_obj_clear_flag(s_scr, LV_OBJ_FLAG_CLICKABLE);
-
-    s_field = lv_obj_create(s_scr);
-    lv_obj_remove_style_all(s_field);
-    lv_obj_set_size(s_field, LV_HOR_RES, LV_VER_RES);
-    lv_obj_align(s_field, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_set_style_bg_color(s_field, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(s_field, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_field, 0, 0);
-    lv_obj_set_style_pad_all(s_field, 0, 0);
-    lv_obj_clear_flag(s_field, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(s_field, LV_OBJ_FLAG_CLICKABLE);
-
-    SpawnFixedSymmetric();
-}
-
-static void OnSizeClicked(lv_event_t* e) {
-    if (s_testing) {
-        return;
-    }
-    s_target_scale = lv_event_get_user_data(e) == nullptr ? 1 : 2;
-    HapticPulseIfEnabled();
-    StartTesting();
-}
-
 static void OnDeleted(lv_event_t* e) {
     if (lv_event_get_target(e) != s_scr) {
         return;
     }
     s_scr = nullptr;
     s_field = nullptr;
-    s_size_picker = nullptr;
     s_remaining = 0;
     s_random_mode = false;
-    s_testing = false;
 }
 
 lv_obj_t* SettingsTestTouchScreen::Create() {
@@ -269,7 +217,6 @@ lv_obj_t* SettingsTestTouchScreen::Create() {
     ScreenSetIsHome(false);
     ClearStatusBindings();
 
-    s_testing = false;
     s_field = nullptr;
     s_remaining = 0;
     s_random_mode = false;
@@ -281,41 +228,19 @@ lv_obj_t* SettingsTestTouchScreen::Create() {
     lv_obj_set_style_text_font(scr, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(scr, lv_color_black(), 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_CLICKABLE);
-    s_target_scale = 1;
 
-    s_size_picker = lv_obj_create(scr);
-    lv_obj_remove_style_all(s_size_picker);
-    lv_obj_set_size(s_size_picker, UiSx(320), UiSy(220));
-    lv_obj_center(s_size_picker);
-    lv_obj_clear_flag(s_size_picker, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(s_size_picker, LV_OBJ_FLAG_SCROLLABLE);
+    s_field = lv_obj_create(scr);
+    lv_obj_remove_style_all(s_field);
+    lv_obj_set_size(s_field, LV_HOR_RES, LV_VER_RES);
+    lv_obj_align(s_field, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(s_field, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(s_field, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_field, 0, 0);
+    lv_obj_set_style_pad_all(s_field, 0, 0);
+    lv_obj_clear_flag(s_field, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_field, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t* title = lv_label_create(s_size_picker);
-    lv_label_set_text(title, Lang::Strings::SETTINGS_TEST_TOUCH_SIZE);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
-
-    for (int i = 0; i < 2; ++i) {
-        lv_obj_t* button = lv_button_create(s_size_picker);
-        lv_obj_remove_style_all(button);
-        lv_obj_set_size(button, UiSx(280), UiSy(60));
-        lv_obj_align(button, LV_ALIGN_TOP_MID, 0, UiSy(60 + i * 90));
-        lv_obj_set_style_bg_color(button, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_color(button, lv_color_black(), 0);
-        lv_obj_set_style_border_width(button, 2, 0);
-        lv_obj_set_style_radius(button, UiSx(8), 0);
-        lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_clear_flag(button, LV_OBJ_FLAG_SCROLLABLE);
-
-        lv_obj_t* label = lv_label_create(button);
-        lv_label_set_text(label, i == 0 ? Lang::Strings::SETTINGS_TEST_TOUCH_SMALL
-                                      : Lang::Strings::SETTINGS_TEST_TOUCH_LARGE);
-        lv_obj_center(label);
-        lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(button, OnSizeClicked, LV_EVENT_CLICKED,
-                            i == 0 ? nullptr : &s_target_scale);
-    }
+    SpawnFixedSymmetric();
     lv_obj_add_event_cb(scr, OnDeleted, LV_EVENT_DELETE, nullptr);
     VkKey_AttachScreen(scr, kScreenId, VkKeyScreenDesc{SettingsTestTouchScreen::Create});
     return scr;

@@ -208,6 +208,13 @@ static void BuildTab(SettingsTab id) {
             SettingsAboutTab_Build(page);
             break;
     }
+    for (uint32_t i = 0; i < lv_obj_get_child_count(page); ++i) {
+        auto* child = lv_obj_get_child(page, i);
+        if (lv_obj_check_type(child, &lv_label_class)) {
+            lv_obj_set_width(child, LV_PCT(100));
+            lv_label_set_long_mode(child, LV_LABEL_LONG_WRAP);
+        }
+    }
     s_ui.content_built = true;
 }
 
@@ -359,8 +366,10 @@ static lv_obj_t* CreateInternal() {
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(content, kSettingsOptionGap, 0);
-    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(content, LV_DIR_NONE);
+    lv_obj_add_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_set_scroll_dir(content, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(content, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_clear_flag(content, LV_OBJ_FLAG_CLICKABLE);
     s_ui.content_page = content;
 

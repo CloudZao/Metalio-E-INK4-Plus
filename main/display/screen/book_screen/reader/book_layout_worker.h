@@ -4,6 +4,8 @@
 
 /** @brief 启动全文/章节重排 worker */
 void StartLayoutWorker();
+/** @brief 在 UI 任务接收排版与计页终态，不依赖回调队列容量。 */
+void PollReaderLayoutWork();
 /** @brief 启动章节内翻页 worker */
 void StartChapterPageWorker();
 /** @brief 偏好变更后重开正文会话 */

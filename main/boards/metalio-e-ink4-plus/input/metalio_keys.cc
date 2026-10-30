@@ -87,6 +87,14 @@ void refresh_p1() {
     epd_board_metalio_eink4_plus_ioexp_read_port(0, &p0); // 清 TCA INT
 }
 
+void latch_power_long_press(int64_t now) {
+    if (g_power_down_us != 0 && !g_power_long_fired && now - g_power_down_us >= kPowerLongUs) {
+        g_power_long_fired = true;
+        ESP_LOGI(TAG, "POWER long press %dms -> shutdown pulse", POWER_LONG_PRESS_MS);
+        g_shutdown_pulse_req = true;
+    }
+}
+
 void apply_edge(KeySlot& k, bool down, int64_t now) {
     if (down == k.prev_down) {
         return;
@@ -104,6 +112,7 @@ void apply_edge(KeySlot& k, bool down, int64_t now) {
             g_power_down_us = now;
             g_power_long_fired = false;
         } else {
+            latch_power_long_press(now);
             if (g_power_down_us != 0 && !g_power_long_fired) {
                 g_power_click.store(true, std::memory_order_release);
             }
@@ -120,12 +129,7 @@ void sample_all() {
     for (auto& k : g_keys) {
         apply_edge(k, is_down(k), now);
     }
-    if (g_power_down_us != 0 && !g_power_long_fired && is_down(g_keys[kPower]) &&
-        (now - g_power_down_us) >= kPowerLongUs) {
-        g_power_long_fired = true;
-        ESP_LOGI(TAG, "POWER long press %dms -> shutdown pulse", POWER_LONG_PRESS_MS);
-        g_shutdown_pulse_req = true;
-    }
+    if (is_down(g_keys[kPower])) latch_power_long_press(now);
 }
 
 void IRAM_ATTR boot_isr(void* /*arg*/) {
@@ -229,6 +233,8 @@ extern "C" void MetalioKeys_ResumeAfterSleep(void) {
         k.prev_down = is_down(k);
         k.last_change_us = esp_timer_get_time();
     }
+    // 将后续 SD、串口和显示总线的恢复耗时计入本次电源键长按。
+    if (g_keys[kPower].prev_down) g_power_down_us = esp_timer_get_time();
     g_ready = true;
 }
 

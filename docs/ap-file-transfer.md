@@ -126,7 +126,25 @@ SDK 默认处理 WebSocket PING/CLOSE，PONG 继续投递上传任务，用于�
 
 阅读设置每次打开或切换到字体页签时，先在字体容器内显示“字体加载中…”，再由单个低优先级任务扫描 `metalio/e-ink/fonts` 本层；完成后由 UI 发布列表。切走页签、关闭阅读或待机会作废扫描结果，快速返回时等待旧任务退出后再启动新一轮，后台不操作控件或共享字体列表。扫描失败显示容器内错误提示，空目录显示原有空态；列表重绘和多选操作不重复扫描。AP 上传或 App 推送的 `.ef` 字体在下次进入该页签时显示，不要求重开书籍，扩展名不区分大小写。
 
-TTF/OTF 保存在 `metalio/e-ink/fonts_ttf`，通过“导入 TTF”转换后加入已安装字体列表。字号范围为 20–80px，默认 40px，长按加减按钮可连续调节。确认页和进度页保留与字体列表等大的外框及底部导航，仅文件列表显示分页按钮；长文件名单行居中省略，保留首尾。转换进度约每 3 秒刷新，完成后返回 TTF 列表并显示 3 秒黑底白字顶部提示。
+TTF/OTF 保存在 `metalio/e-ink/fonts_ttf`，通过“导入 TTF”转换后加入已安装字体列表。字号范围为 20–80px，默认 40px，长按加减按钮可连续调节。字体卡片一页显示六项；TTF 确认页和进度页与字体列表共用加高后的卡片，内容固定在一页内且不可滚动，仅文件列表显示分页按钮；长文件名单行居中省略，保留首尾。“开始转换”保留源文件名（去掉最后一个扩展名），追加 `_字号_2.ef`，例如 `霞鹜臻楷.ttf` → `霞鹜臻楷_40_2.ef`，中文、空格和原有标点均保留；输出名称过长时提示缩短源文件名，不自动改名。转换进度约每 3 秒刷新，完成后返回 TTF 列表并显示 3 秒黑底白字顶部提示。“直接应用”按所选字号直接加载源 TTF/OTF，返回阅读正文，无需生成 `.ef`；字体与字号会保存，并在重开书籍或待机唤醒后恢复。直接加载期间需保留 SD 卡中的源字体文件，字形按需读取和渲染；整页图片书籍仅保存字体选择，进入文字书籍后生效。
+
+The font card shows six entries per page. TTF confirmation and progress use the same taller card, with all content visible on one page and scrolling disabled. In Import TTF, choose a size from 20–80px (default 40px). Convert preserves the source filename without its final extension and appends `_size_2.ef`, preserving Chinese characters, spaces, and punctuation. If the output name exceeds the filename limit, shorten the source filename; it is never renamed automatically. Apply directly loads the source TTF/OTF at the selected size and returns to reading without generating an `.ef` file. The font and size are saved and restored when reopening a book or waking from standby. Keep the source font on the SD card: glyphs are read and rendered on demand. Image-only books save the selection for use in text books.
+
+直接应用复用验证成功的字体实例。分页使用独立的测宽视图，可选占用 128 KiB PSRAM 缓存 BMP 字符的准确步进，避免反复测宽挤占绘制缓存；申请失败时沿用原度量路径，非 BMP 字符按需测量。绘制前分批预热当前页字形，已缓存的批次直接复用。完整度量和 A8 位图采用四路组相联缓存，减少字形相互覆盖；位图缓存上限为 384 KiB。字体流另使用最多 64 KiB 的 PSRAM 读窗口，申请失败时回退直接读取；预取失败时重试本次所需范围。缓存随字体关闭释放。正文绘制后再启动整书页数统计，翻页中断后保留已完成章节的统计。字体读取及渲染错误日志保留 FreeType 错误码和字形索引；同一字体实例的重复错误按 5 秒间隔限频，并记录抑制次数。缺字及正常待机取消不打印错误日志。
+
+Direct application reuses the validated font instance. A separate layout view optionally uses 128 KiB of PSRAM to retain exact BMP character advances, keeping repeated measurement out of the drawing cache. Allocation failure uses the original metric path; non-BMP characters are measured on demand. Visible-page glyphs are warmed in batches, and cached batches are reused immediately. Full metrics and A8 bitmaps use four-way set-associative caches to reduce collisions, with a 384 KiB bitmap budget. The font stream uses up to 64 KiB of PSRAM read windows, falling back to direct reads if allocation fails. Failed prefetches retry only the requested range. Caches are released when the font closes. Whole-book page counting starts after the page is drawn and retains completed chapter counts when interrupted by navigation. Font read and render logs include FreeType error codes and glyph indices. Repeated errors from the same font instance are limited to one message per five seconds, including the suppressed count. Missing glyphs and normal standby cancellation do not produce error logs.
+
+“直接应用”与“开始转换”等宽对齐。后台正在编排时仍接受应用请求，取消旧编排并待其退出后验证新字体；验证成功才更新字体偏好，失败保留原字体。等待期间再次选择字体时使用最新选择。
+
+Apply directly aligns with Convert at the same width. Requests are accepted during background layout; the old layout is cancelled before validating the new font. Preferences change only after validation succeeds, and failure preserves the previous font. A newer font choice replaces a pending selection.
+
+TTF/OTF 文件列表支持长按进入多选、全选、取消及删除，可跨页选择。删除源字体不会删除已转换的 `.ef` 文件；删除当前直接应用的源字体时，先切回已安装字体或默认字体。
+
+Long-press a TTF/OTF file to enter selection mode, select files across pages, select all, cancel, or delete. Deleting source fonts keeps converted `.ef` files. Deleting the active source font first switches reading to an installed or default font.
+
+已有字体时复用当前字体的字集；字体列表为空时使用内置阅读字集，无需预先放置 `.ef` 文件。内置范围与 PC 工具的 `reading_zh` 一致，包含基础拉丁字符、常用汉字及中英文标点；仅转换源 TTF/OTF 中实际存在的字形。转换耗时和内存占用取决于可用字形数量及所选字号，内存不足时可减小字号。
+
+When fonts are installed, conversion reuses the current font's character set. An empty font list uses the built-in reading character set and requires no existing `.ef` file. Its ranges match the PC tool's `reading_zh` preset, covering basic Latin characters, common Chinese characters, and Chinese and English punctuation. Only glyphs present in the source TTF/OTF are converted. Conversion time and memory use depend on the available glyphs and selected size; reduce the size if memory is insufficient.
 
 同名 .ef 文件将被覆盖，转换期间请勿拔出 SD 卡。取消、返回、切换页签、退出阅读、待机及正常关机均请求取消，后台关闭文件并清理临时输出后退出，收尾期间不能启动新转换。确认或转换中返回、取消以及待机唤醒后回到“导入 TTF”文件列表；列表页再次返回才退出到“选择字体”页。
 

@@ -2,18 +2,26 @@
 
 待机或关机壁纸解码达到 1 秒且仍未完成时，在原有画面上显示顶部“壁纸正在加载中...”提示；解码在 1 秒内完成时直接显示壁纸。加载期间保留原有方向及提示区域外的像素，解码完成后再切换方向并绘制壁纸。
 
+开机首页准备完成后，先对全白帧执行一次完整 48 相 GC16 全刷，再推白显现首页。全刷清理阶段不绘制首页；保留边框在此次全刷中只推白，成功后恢复不驱动边框。刷新失败仍执行原有清屏恢复，后续时钟、电量和网络状态更新沿用普通刷新策略。
+
+Once the home screen is ready, startup first performs one complete 48-phase GC16 refresh to white, then reveals the home screen with a wipe. The home screen is not drawn during cleaning. The reserved border receives only whitening pulses during the full refresh and remains undriven after success. Refresh failures retain the existing clear-and-recover path. Later clock, battery and network updates use the ordinary refresh policy.
+
 入口：**设置 → 屏幕**。刷新模式与黑色深度独立保存，重启后恢复。刷新选项分两行：清晰 / 均衡、快速 / 极速；电压和波形相数只在本说明中列出，设备界面不显示。
 
 普通 App 页面切换使用从左向右的 10 条窄条推进（随屏幕旋转），一次连续驱动完成擦白和新页显示。清晰 / 均衡的擦白和黑白重绘使用完整 20 相 DU，快速使用 8 相短 DU；极速恢复8相短DU擦白和8相短DU重绘；10 个条带各错开 1 相启动。纯黑白应用切页：清晰 / 均衡为 20+20+9=49 相，快速为 8+8+9=25 相，极速为8+8+9=25相。任一页面含灰阶时，条带擦白后立即使用当前档位 GL16 绘制新灰度：清晰 20+48+9=77 相、均衡 20+37+9=66 相、快速 8+37+9=54 相、极速8+30+9=47相。白到白像素保持不驱动，成功后才提交新页作为面板基线；灰度与条带延迟分别保存。擦白只属于应用切页动画，普通 DU / GL 更新不必预先擦白。缺少动画缓冲或动画失败时回退完整 GC16。实际耗时和残影需上机观察。
 
 ### 四种刷新模式
 
+进入待机、退出待机和关机共用开机的清理顺序：先用完整 48 相 GC16 将旧画面全刷至白底，再推白显示目标画面。白屏清理中的白到白像素也执行完整调理脉冲，不因像素相同而跳过。两个阶段由同一刷新任务顺序完成，复用已有动画缓冲，不增加全屏缓存；清理失败时停止后续绘制，待机和关机继续沿用原有失败重试。待机定格或断电须等待目标画面完成，唤醒前光在目标画面完成后恢复。该流程增加等待时间并产生可见闪屏，普通页面切换和壁纸加载提示沿用原有策略。
+
+Entering or leaving standby and shutting down use the same cleaning sequence as startup: refresh the old frame to white with the complete 48-phase GC16 waveform, then reveal the target with a wipe. Equal white pixels retain conditioning pulses during cleaning. One refresh worker runs both stages using the existing animation buffer, with no additional full-screen allocation. A cleaning failure stops subsequent drawing; standby and shutdown retain their existing retry behavior. Parking or power-off waits for the target frame, and wake restores the frontlight after that frame completes. These transitions take longer and visibly flash; ordinary navigation and wallpaper loading notices keep their existing policy.
+
 - **清晰**：优先显示细节与擦除余量。图片和灰阶界面使用完整 16 级灰阶表，GC16 / GL16 各 48 相；黑白局部刷新使用 20 相 DU。适合重视图片层次、字体边缘和残影控制的场景，刷新相对较慢。
 - **均衡（新设备默认）**：保留 16 级灰阶，GC16 / GL16 裁剪为 36 / 37 相，黑白局部刷新仍为 20 相 DU。兼顾显示效果和速度，建议作为日常起点。
 - **快速**：GC16 / GL16 使用 36 / 37 相裁剪表，保留 16 级灰阶；普通 DU 在按钮、滚动和阅读中使用 14 相表，黑向推 13 相、白向推 14 相；切页擦白和黑白重绘仍使用 8 相短表。速度优先，可能增加残影。
 - **极速**：GC16仍使用16级、36相裁剪表；GL16使用8级、30相表；DU各场景恢复8相短表，包括按钮、滚动、阅读、切页擦白和黑白重绘。黑向推7相、白向推8相。灰阶层次减少，可能增加残影。
 
-**完整 GC 清理是四档共同的例外。** 模式切换后的首帧、手动全刷、周期清残影、故障恢复均使用完整 48 相 GC；这些波形与清理条件不变。普通波形测试遵循所选档位，明确要求 GC 深度清理时也使用完整表。刷新相数不等于实际耗时，驱动准备、供电和扫描也占用时间。
+**完整 GC 清理是四档共同的例外。** 开机、进出待机和关机前的白屏清理、模式切换后的首帧、手动全刷、周期清残影、故障恢复均使用完整 48 相 GC。普通波形测试遵循所选档位，明确要求 GC 深度清理时也使用完整表。刷新相数不等于实际耗时，驱动准备、供电和扫描也占用时间。
 
 升级时保留旧档位的对应行为：原“均衡（完整表）”映射到清晰，原“快速（裁剪表）”映射到均衡；已经保存的新档位不变。当前不使用文字专用 GL16 波形。
 

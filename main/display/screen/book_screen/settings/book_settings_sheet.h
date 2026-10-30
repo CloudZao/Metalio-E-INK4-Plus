@@ -4,6 +4,9 @@
 
 struct BookUiState;
 
+/** @brief 漫画下提示文字设置已保存，返回是否应跳过即时应用 */
+bool DeferComicTextSetting();
+
 /** @brief 重建排版设置卡控件树 */
 void RebuildSettingsSheet();
 void ResizeReadingBottomSheet();

@@ -1,3 +1,4 @@
+#include "assets/lang_reader.h"
 #pragma GCC optimize("O1")
 
 #include "book_screen/settings/book_tap_ui.h"
@@ -33,11 +34,11 @@ const char* TapZoneActionLabel(BookTapZoneAction action) {
         case BookTapZoneAction::kToc:
             return Lang::Strings::BOOK_TOC;
         case BookTapZoneAction::kBookmarks:
-            return "书签";
+            return Lang::Strings::BOOK_BOOKMARKS;
         case BookTapZoneAction::kFontSettings:
-            return "字体";
+            return Lang::Strings::BOOK_FONT_TITLE;
         case BookTapZoneAction::kSettings:
-            return "设置";
+            return Lang::Strings::HOME_APP_SETTINGS;
         case BookTapZoneAction::kFullRefresh:
             return Lang::Strings::BOOK_TAP_ZONE_FULL_REFRESH;
         case BookTapZoneAction::kNone:
@@ -120,12 +121,12 @@ void TapZonesRebuildContent() {
     lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_align(back, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_t* title = lv_label_create(head);
-    lv_label_set_text(title, picking ? "选择动作" : "触摸分区");
+    lv_label_set_text(title, picking ? Lang::Strings::BOOK_TAP_ZONES_PICK : Lang::Strings::BOOK_TAP_ZONES_TITLE);
     lv_obj_set_style_text_font(title, Book_ListFont(), 0);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 48, 0);
     lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
     if (!picking) {
-        auto* reset = make_action(head, "恢复默认", OnTapZoneReset, 0);
+        auto* reset = make_action(head, Lang::Strings::BOOK_TAP_ZONES_RESET, OnTapZoneReset, 0);
         // 边框设在固定高度按钮上，避免子对象超高时被裁剪。
         lv_obj_set_height(reset, 42);
         lv_obj_set_style_border_width(reset, 1, 0);
@@ -361,7 +362,7 @@ void OnTapZoneActionPicked(lv_event_t* e) {
         return;
     }
     if (!BookTapZonesSetAction(cell, action)) {
-        ScreenShowToast("至少保留一个菜单唤醒区域");
+        ScreenShowToast(Lang::Strings::BOOK_TAP_MENU_REQUIRED);
         return;
     }
     st.tap.tap_zone_ui = BookUiState::TapZoneUi::kGrid;

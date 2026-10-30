@@ -1,3 +1,5 @@
+#include "assets/lang_workbuddy.h"
+#include "assets/lang_config.h"
 #include "workbuddy_chat.h"
 
 #include "fontpack_lvgl.h"
@@ -16,11 +18,14 @@
 #include <esp_random.h>
 
 namespace {
-constexpr const char* kWelcomeMessages[] = {
-    "已经准备好了，随时可以开始对话。",
-    "今天想处理些什么？我来帮你一起完成。",
-    "有什么想法或安排，都可以说给我听。"
-};
+constexpr size_t kWelcomeMessageCount = 3; // 欢迎语数量
+
+const char* WelcomeMessage(size_t index) {
+    const char* messages[] = {Lang::Strings::WB_WELCOME_READY, Lang::Strings::WB_WELCOME_TASK,
+                              Lang::Strings::WB_WELCOME_IDEAS};
+    static_assert(sizeof(messages) / sizeof(messages[0]) == kWelcomeMessageCount);
+    return messages[index % kWelcomeMessageCount];
+}
 constexpr size_t kMessageBytes = 4096; // 单条消息的 UTF-8 字节上限
 constexpr int32_t kPad = 20; // 气泡内边距
 constexpr int32_t kLineSpace = 8; // 物理行间距
@@ -84,8 +89,8 @@ lv_obj_t* Rectangle(lv_obj_t* parent, int32_t x, int32_t y, int32_t width, int32
 }
 
 void WorkBuddyChat::Create(lv_obj_t* parent) {
-    welcome_index_ = esp_random() % (sizeof(kWelcomeMessages) / sizeof(kWelcomeMessages[0]));
-    intro_ = "正在检查绑定，请稍候…";
+    welcome_index_ = esp_random() % kWelcomeMessageCount;
+    intro_ = Lang::Strings::WB_LINK_CHECKING;
     lv_obj_update_layout(parent);
     body_ = lv_obj_create(parent);
     lv_obj_remove_style_all(body_);
@@ -166,7 +171,7 @@ bool WorkBuddyChat::ReflowWithTrim(bool follow) {
             decltype(fragments_){}.swap(fragments_);
             page_ = 0;
             page_count_ = 1;
-            intro_ = "历史内存不足，请稍后重试";
+            intro_ = Lang::Strings::WB_HISTORY_MEMORY;
             return false;
         }
     }
@@ -183,13 +188,13 @@ void WorkBuddyChat::SetMessage(uint32_t id, bool mine, const std::string& text, 
         return;
     }
     if (!StoreMessage(id, mine, text)) {
-        ScreenShowToast("历史内存不足，请稍后重试");
+        ScreenShowToast(Lang::Strings::WB_HISTORY_MEMORY);
         ReflowWithTrim(false);
         Paint();
         return;
     }
     intro_.clear();
-    if (!ReflowWithTrim(follow)) ScreenShowToast("历史内存不足，请稍后重试");
+    if (!ReflowWithTrim(follow)) ScreenShowToast(Lang::Strings::WB_HISTORY_MEMORY);
     Paint();
 }
 
@@ -342,7 +347,7 @@ void WorkBuddyChat::Paint() try {
         return;
     }
     if (!intro_.empty() || messages_.empty()) {
-        auto* label = Text(body_, intro_.empty() ? kWelcomeMessages[welcome_index_] : intro_.c_str(), lv_obj_get_width(body_) - UiSx(40));
+        auto* label = Text(body_, intro_.empty() ? WelcomeMessage(welcome_index_) : intro_.c_str(), lv_obj_get_width(body_) - UiSx(40));
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_center(label);
         return;
@@ -356,7 +361,7 @@ void WorkBuddyChat::Paint() try {
             bubble_width = std::clamp<int32_t>(m.lines[f.begin].width + kPad * 2 + 2, UiSx(60), max_bubble_width);
         }
         const int32_t x = m.mine ? lv_obj_get_width(body_) - UiSx(16) - bubble_width : UiSx(16);
-        auto* name = Text(body_, m.mine ? "我：" : "助理：", max_bubble_width);
+        auto* name = Text(body_, m.mine ? Lang::Strings::WB_ME_PREFIX : Lang::Strings::WB_ASSISTANT_PREFIX, max_bubble_width);
         lv_obj_set_style_text_align(name, m.mine ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_set_pos(name, m.mine ? lv_obj_get_width(body_) - UiSx(16) - max_bubble_width : UiSx(16), f.y);
         auto* bubble = Rectangle(body_, x, f.y + SpeakerHeight(), bubble_width, f.height, m.mine ? 0xeeeeee : 0xffffff);

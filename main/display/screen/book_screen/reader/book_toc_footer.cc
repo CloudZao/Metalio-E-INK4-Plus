@@ -401,7 +401,7 @@ void RenderTocList() {
         }
         if (title.empty() || title == "未知" || title == "未命名") {
             char b[48];
-            std::snprintf(b, sizeof(b), Lang::Strings::BOOK_CHAPTER_FMT, i + 1);
+            std::snprintf(b, sizeof(b), st.reader.session->IsPageImagesMode() ? Lang::Strings::BOOK_PAGE_FMT : Lang::Strings::BOOK_CHAPTER_FMT, i + 1);
             title = b;
         }
         const bool is_cur = (i == cur);

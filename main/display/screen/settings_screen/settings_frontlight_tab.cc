@@ -2,13 +2,24 @@
 
 #include "assets/lang_config.h"
 #include "assets/lang_screen.h"
-#include "fontpack_lvgl.h"
+#include "application.h"
 #include "epd_refresh.h"
+#include "fontpack_lvgl.h"
+#include "frontlight.h"
+#include "haptic_feedback.h"
+#include "settings.h"
 #include "settings_common.h"
+
+#include <algorithm>
+#include <cstdio>
+#include <esp_log.h>
 
 namespace {
 
 struct SettingsFrontlightUi {
+    lv_obj_t* light_options[4] = {}; // 色温与关闭选项
+    lv_obj_t* brightness_slider = nullptr; // 亮度滑条
+    lv_obj_t* brightness_label = nullptr; // 目标亮度
     lv_obj_t* profiles[4] = {}; // 刷新模式选项
     lv_obj_t* refresh_hint = nullptr; // 刷新模式说明
     lv_obj_t* depths[3] = {}; // 黑色深度选项
@@ -16,7 +27,38 @@ struct SettingsFrontlightUi {
 };
 
 static SettingsFrontlightUi s_ui;
+constexpr FrontlightCct kLightModes[] = {
+    FrontlightCct::kCool, FrontlightCct::kWarm, FrontlightCct::kBoth, FrontlightCct::kOff,
+};
+
+static void SaveFrontlight() {
+    auto& light = Frontlight::GetInstance();
+    const int brightness = light.target_brightness();
+    const int warmth = light.warmth();
+    const int cct = static_cast<int>(light.cct());
+    if (!Application::GetInstance().Schedule([brightness, warmth, cct] {
+        Settings settings("frontlight", true);
+        settings.SetInt("brightness", brightness);
+        settings.SetInt("warmth", warmth);
+        settings.SetInt("cct", cct);
+    }, Application::TaskDomain::Storage)) {
+        ESP_LOGW("SettingsFl", "frontlight save request failed");
+    }
+}
+
 static void RefreshOptions() {
+    auto& light = Frontlight::GetInstance();
+    for (int i = 0; i < 4; ++i) {
+        if (s_ui.light_options[i]) SettingsStyleSelectable(s_ui.light_options[i],
+            lv_obj_get_child(s_ui.light_options[i], 0), light.cct() == kLightModes[i]);
+    }
+    if (s_ui.brightness_slider) {
+        lv_slider_set_value(s_ui.brightness_slider, light.target_brightness(), LV_ANIM_OFF);
+        char text[48];
+        std::snprintf(text, sizeof(text), Lang::Strings::SETTINGS_FRONTLIGHT_BRIGHTNESS_FMT,
+                      static_cast<int>(light.target_brightness()));
+        lv_label_set_text(s_ui.brightness_label, text);
+    }
     const auto profile = EpdGetRefreshProfile();
     for (int i=0;i<4;++i) {
         if (s_ui.profiles[i]) SettingsStyleSelectable(s_ui.profiles[i],
@@ -62,6 +104,44 @@ static void OnProfileClicked(lv_event_t* e) {
     const auto profile=static_cast<EpdRefreshProfile>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
     EpdSetRefreshProfile(profile);
     RefreshOptions();
+}
+
+static void OnLightOptionClicked(lv_event_t* event) {
+    auto& light = Frontlight::GetInstance();
+    if (!light.initialized()) return;
+    const int index = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(event)));
+    light.SetCct(kLightModes[index]);
+    if (kLightModes[index] != FrontlightCct::kOff && light.target_brightness() == 0)
+        light.SetBrightness(40);
+    RefreshOptions();
+    SaveFrontlight();
+}
+
+static void OnBrightnessChanged(lv_event_t* event) {
+    auto& light = Frontlight::GetInstance();
+    if (!light.initialized()) return;
+    const auto code = lv_event_get_code(event);
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        light.SetBrightness(static_cast<uint8_t>(lv_slider_get_value(s_ui.brightness_slider)));
+        if (light.cct() == FrontlightCct::kOff) light.SetWarmth(light.warmth());
+        RefreshOptions();
+    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        SaveFrontlight();
+    }
+}
+
+static void OnBrightnessStep(lv_event_t* event) {
+    auto& light = Frontlight::GetInstance();
+    if (!light.initialized()) return;
+    const auto code = lv_event_get_code(event);
+    if (code == LV_EVENT_PRESSED || code == LV_EVENT_LONG_PRESSED_REPEAT) {
+        const int delta = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(event)));
+        light.SetBrightness(static_cast<uint8_t>(std::clamp<int>(light.target_brightness() + delta, 0, 100)));
+        if (light.cct() == FrontlightCct::kOff) light.SetWarmth(light.warmth());
+        RefreshOptions();
+    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        SaveFrontlight();
+    }
 }
 
 } // namespace
@@ -122,5 +202,50 @@ void SettingsFrontlightTab_Build(lv_obj_t* page) {
     lv_obj_set_style_text_font(s_ui.depth_hint,fontpack_lv_font_ui(),0);
     lv_obj_set_style_text_color(s_ui.depth_hint,lv_color_black(),0);
     lv_obj_clear_flag(s_ui.depth_hint,LV_OBJ_FLAG_CLICKABLE);
+    auto* separator = lv_obj_create(page);
+    lv_obj_remove_style_all(separator);
+    lv_obj_set_size(separator, lv_pct(100), kSettingsSplitLineW);
+    lv_obj_set_style_bg_color(separator, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(separator, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(separator, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(separator, LV_OBJ_FLAG_SCROLLABLE);
+    auto* title = lv_label_create(page);
+    lv_label_set_text(title, Lang::Strings::SETTINGS_FRONTLIGHT_TITLE);
+    lv_obj_set_style_text_font(title, fontpack_lv_font_ui(), 0);
+    const char* light_names[] = {Lang::Strings::SETTINGS_FRONTLIGHT_COOL,
+        Lang::Strings::SETTINGS_FRONTLIGHT_WARM, Lang::Strings::SETTINGS_FRONTLIGHT_BOTH,
+        Lang::Strings::SETTINGS_FRONTLIGHT_OFF};
+    lv_obj_t* light_row = nullptr;
+    for (int i = 0; i < 4; ++i) {
+        if (i % 2 == 0) light_row = OptionRow(page);
+        s_ui.light_options[i] = SettingsCreateSelectableOption(light_row, light_names[i], OnLightOptionClicked, i);
+        FitRowButton(s_ui.light_options[i]);
+    }
+    s_ui.brightness_label = lv_label_create(page);
+    lv_obj_set_style_text_font(s_ui.brightness_label, fontpack_lv_font_ui(), 0);
+    auto* brightness_row = OptionRow(page);
+    lv_obj_set_height(brightness_row, kSettingsOptionH);
+    lv_obj_set_flex_align(brightness_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    for (int delta : {-1, 1}) {
+        auto* step = lv_button_create(brightness_row);
+        auto* label = lv_label_create(step);
+        SettingsStyleBrightnessButton(step);
+        lv_obj_clear_flag(step, LV_OBJ_FLAG_SCROLLABLE);
+        HapticAttachClick(step);
+        for (auto code : {LV_EVENT_PRESSED, LV_EVENT_LONG_PRESSED_REPEAT, LV_EVENT_RELEASED, LV_EVENT_PRESS_LOST})
+            lv_obj_add_event_cb(step, OnBrightnessStep, code, reinterpret_cast<void*>(static_cast<intptr_t>(delta)));
+        lv_label_set_text(label, delta < 0 ? Lang::Strings::SETTINGS_FRONTLIGHT_BRIGHTNESS_DEC :
+                                           Lang::Strings::SETTINGS_FRONTLIGHT_BRIGHTNESS_INC);
+        lv_obj_center(label);
+        if (delta > 0) continue;
+        s_ui.brightness_slider = lv_slider_create(brightness_row);
+        lv_obj_set_width(s_ui.brightness_slider, 0);
+        lv_obj_set_flex_grow(s_ui.brightness_slider, 1);
+        lv_obj_set_height(s_ui.brightness_slider, UiSy(16));
+        lv_obj_clear_flag(s_ui.brightness_slider, LV_OBJ_FLAG_SCROLLABLE);
+        lv_slider_set_range(s_ui.brightness_slider, 0, 100);
+        for (auto code : {LV_EVENT_VALUE_CHANGED, LV_EVENT_RELEASED, LV_EVENT_PRESS_LOST})
+            lv_obj_add_event_cb(s_ui.brightness_slider, OnBrightnessChanged, code, nullptr);
+    }
     RefreshOptions();
 }

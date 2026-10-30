@@ -1,3 +1,5 @@
+#include "assets/lang_screen.h"
+#include "assets/lang_config.h"
 #include "settings_test_display_screen.h"
 
 #include "epd_refresh.h"
@@ -6,6 +8,7 @@
 #include "lv_adapter_epdiy.h"
 #include "power_policy.h"
 #include "screen_common.h"
+#include "screen_text.h"
 #include "vk_key_handler.h"
 
 #include <cstring>
@@ -14,13 +17,14 @@ namespace {
 lv_obj_t* s_screen = nullptr;
 lv_obj_t* s_note = nullptr;
 
-lv_obj_t* Label(lv_obj_t* parent, const char* text, int x, int y, int width) {
+lv_obj_t* Label(lv_obj_t* parent, const char* text, int x, int y, int width, int height = 64) {
     auto* label = lv_label_create(parent);
     lv_label_set_text(label, text);
     lv_obj_set_pos(label, x, y);
     lv_obj_set_width(label, width);
     lv_obj_set_style_text_font(label, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(label, lv_color_black(), 0);
+    ScreenFitLabel(label, width, height);
     return label;
 }
 
@@ -29,8 +33,8 @@ void RunGray() {
     // Metalio's native-gray path physically clears before GC16. Never use DU.
     const bool ok = EpdTestRequest(EpdPattern::Gray, MODE_GC16, true);
     if (s_note) lv_label_set_text(s_note, ok
-        ? "清屏后显示 16 阶原生灰度；00 为黑，15 为白。"
-        : "屏幕忙，请稍后重试。");
+        ? Lang::Strings::SETTINGS_DISPLAY_GRAY_HINT
+        : Lang::Strings::SETTINGS_DISPLAY_BUSY);
 }
 
 void Button(lv_obj_t* parent, const char* text, int x, int y, int width, lv_event_cb_t callback) {
@@ -46,6 +50,8 @@ void Button(lv_obj_t* parent, const char* text, int x, int y, int width, lv_even
     auto* label = lv_label_create(button);
     lv_label_set_text(label, text);
     lv_obj_set_style_text_font(label, fontpack_lv_font_ui(), 0);
+    lv_obj_update_layout(button);
+    ScreenFitLabel(label, lv_obj_get_content_width(button), lv_obj_get_content_height(button));
     lv_obj_center(label);
     lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, nullptr);
 }
@@ -68,17 +74,17 @@ lv_obj_t* SettingsTestDisplayScreen::Create() {
     ScreenSetIsHome(false);
     ScreenCreateStatusBar(screen);
 
-    Label(screen, "显示测试", 24, 76, 620);
-    Label(screen, "点击“16 阶灰阶”开始测试。\n下方应显示从黑到白的 16 条灰阶，编号 00–15。", 24, 130, 620);
-    Button(screen, "16 阶灰阶", 24, 250, 300, [](lv_event_t*) { RunGray(); });
-    Button(screen, "点阵灰阶对照", 344, 250, 300, [](lv_event_t*) {
+    Label(screen, Lang::Strings::SETTINGS_TEST_DISPLAY, 24, 76, 620);
+    Label(screen, Lang::Strings::SETTINGS_DISPLAY_START_HINT, 24, 130, 620, 110);
+    Button(screen, Lang::Strings::SETTINGS_DISPLAY_GRAY, 24, 250, 300, [](lv_event_t*) { RunGray(); });
+    Button(screen, Lang::Strings::SETTINGS_DISPLAY_DITHER, 344, 250, 300, [](lv_event_t*) {
         EpdSetTestActive(true);
         const bool ok = EpdTestRequest(EpdPattern::Dither, MODE_GC16, true);
         if (s_note) lv_label_set_text(s_note, ok
-            ? "黑白点阵对照：用黑白像素模拟灰度。"
-            : "屏幕忙，请稍后重试。");
+            ? Lang::Strings::SETTINGS_DISPLAY_DITHER_HINT
+            : Lang::Strings::SETTINGS_DISPLAY_BUSY);
     });
-    s_note = Label(screen, "可重复点击测试；NEXT 重测，PREV 返回。", 24, 350, 620);
+    s_note = Label(screen, Lang::Strings::SETTINGS_DISPLAY_RETEST_HINT, 24, 350, 620, 170);
 
     // Match Metalio's native Pattern() preview (logical y=540..1089).
     auto* frame = lv_obj_create(screen);
@@ -90,7 +96,7 @@ lv_obj_t* SettingsTestDisplayScreen::Create() {
     lv_obj_set_style_radius(frame, 0, 0);
     lv_obj_remove_flag(frame, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(frame, LV_OBJ_FLAG_SCROLLABLE);
-    Button(screen, "返回", 24, 1110, 620, [](lv_event_t*) { ScreenNavigateBack(); });
+    Button(screen, Lang::Strings::SETTINGS_TEST_BACK, 24, 1110, 620, [](lv_event_t*) { ScreenNavigateBack(); });
 
     lv_obj_add_event_cb(screen, [](lv_event_t* e) {
         if (lv_event_get_target(e) != s_screen) return;

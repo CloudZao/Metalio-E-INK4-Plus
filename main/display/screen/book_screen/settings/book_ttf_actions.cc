@@ -1,3 +1,5 @@
+#include "assets/lang_reader.h"
+#include "assets/lang_config.h"
 #pragma GCC optimize("O1")
 
 #include "book_screen/settings/book_ttf_actions.h"
@@ -8,6 +10,9 @@
 #include "book_screen/reader/book_reader_overlay.h"
 #include "book_screen/settings/book_settings_sheet.h"
 #include "book_screen/book_nav.h"
+#include "book_screen/book_font_runtime.h"
+#include "book_screen/reader/book_layout_debounce.h"
+#include "book_screen/reader/book_reader_prefs.h"
 
 #include "screen_common.h"
 #include "book_screen/book_text_util.h"
@@ -15,17 +20,22 @@
 #include <lvgl.h>
 #include <esp_timer.h>
 #include <cstdint>
+#include <algorithm>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <string>
+#include <unistd.h>
 
 #include "display/font/ttf_convert.h"
 #include "sd_paths.h"
+#include "sd_access.h"
 
 void OnFontImportClick(lv_event_t* e) {
     lv_event_stop_bubbling(e);
     auto& st = Book_State();
     if (ttf_convert::Busy()) {
-        ScreenShowToast("转换任务正在收尾，请稍后重试");
+        ScreenShowToast(Lang::Strings::TTF_FINISHING);
         return;
     }
     if (st.reader.opening.load() || st.settings.font_scan_loading) {
@@ -53,10 +63,89 @@ void OnTtfRowClick(lv_event_t* e) {
     if (idx < 0 || idx >= static_cast<int>(st.ttf.ttf_files.size())) {
         return;
     }
+    if (!st.ttf.ttf_selected.empty()) {
+        st.ttf.ttf_selected[idx] ^= 1;
+        RebuildSettingsSheet();
+        return;
+    }
     st.ttf.ttf_pick = st.ttf.ttf_files[static_cast<size_t>(idx)];
-    st.ttf.ttf_size_px = kTtfConvertSizeDefault;
+    st.ttf.ttf_size_px = st.ttf.ttf_pick == BookReaderPrefsFontFile() && BookReaderPrefsFontSize() > 0 ?
+        BookReaderPrefsFontSize() : kTtfConvertSizeDefault;
     st.ttf.ttf_mode = BookUiState::TtfMode::kConfirm;
     TtfRebuildContent();
+}
+
+int TtfSelectedCount() {
+    const auto& selected = Book_State().ttf.ttf_selected;
+    return static_cast<int>(std::count(selected.begin(), selected.end(), uint8_t{1}));
+}
+
+void OnTtfRowLongPressed(lv_event_t* e) {
+    lv_event_stop_bubbling(e);
+    auto& st = Book_State();
+    if (st.reader.opening.load() || ttf_convert::Busy()) return;
+    auto* row = static_cast<lv_obj_t*>(lv_event_get_target(e));
+    const int idx = static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(row)));
+    if (idx < 0 || idx >= static_cast<int>(st.ttf.ttf_files.size())) return;
+    if (st.ttf.ttf_selected.empty()) st.ttf.ttf_selected.assign(st.ttf.ttf_files.size(), 0);
+    st.ttf.ttf_selected[idx] ^= 1;
+    RebuildSettingsSheet();
+}
+
+void OnTtfMultiCancel(lv_event_t* e) {
+    lv_event_stop_bubbling(e);
+    Book_State().ttf.ttf_selected.clear();
+    RebuildSettingsSheet();
+}
+
+void OnTtfMultiSelectAll(lv_event_t* e) {
+    lv_event_stop_bubbling(e);
+    auto& ttf = Book_State().ttf;
+    if (ttf.ttf_selected.empty()) return;
+    const bool all = TtfSelectedCount() == static_cast<int>(ttf.ttf_files.size());
+    std::fill(ttf.ttf_selected.begin(), ttf.ttf_selected.end(), all ? 0 : 1);
+    RebuildSettingsSheet();
+}
+
+void OnTtfMultiRemove(lv_event_t* e) {
+    lv_event_stop_bubbling(e);
+    auto& st = Book_State();
+    if (st.ttf.ttf_selected.empty() || ttf_convert::Busy()) return;
+    if (ReaderWorkersBusy() || st.reader.prefs_reopen_pending) {
+        ScreenShowToast(Lang::Strings::BOOK_LAYOUT_WAIT);
+        return;
+    }
+    sd_access::Transaction transaction;
+    if (!transaction) {
+        ScreenShowToast(Lang::Strings::BOOK_DELETE_FAILED);
+        return;
+    }
+    std::vector<std::string> files;
+    for (size_t i = 0; i < st.ttf.ttf_files.size(); ++i) {
+        if (st.ttf.ttf_selected[i]) files.push_back(st.ttf.ttf_files[i]);
+    }
+    if (BookReaderPrefsFontSize() > 0 &&
+        std::find(files.begin(), files.end(), BookReaderPrefsFontFile()) != files.end()) {
+        if (!st.reader.session || !st.reader.session->IsOpen() || st.reader.standby_paused ||
+            st.reader.viewport_w <= 0 || st.reader.viewport_h <= 0) return;
+        const char* fallback = st.settings.font_entries.empty() ?
+            std::strrchr(kBookFontPath, '/') + 1 : st.settings.font_entries.front().file.c_str();
+        BookReaderPrefsSetFontFile(fallback);
+        // 同步完成旧字体关闭与 session/正文重绑，再删除源文件。
+        ApplyReaderLayoutLive(true);
+    }
+    bool failed = false;
+    for (const auto& name : files) {
+        if (!IsTtfFileName(name.c_str())) {
+            failed = true;
+            continue;
+        }
+        const std::string path = std::string(SD_PATH_FONT_SRC) + "/" + name;
+        if (unlink(path.c_str()) != 0 && errno != ENOENT) failed = true;
+    }
+    TtfScanFiles();
+    RebuildSettingsSheet();
+    if (failed) ScreenShowToast(Lang::Strings::BOOK_DELETE_FAILED);
 }
 
 void ClampTtfSizePx() {
@@ -80,7 +169,7 @@ void RefreshTtfConfirmTexts() {
     SetSheetBtnEnabled(st.ttf.ttf_size_inc, st.ttf.ttf_size_px < kTtfConvertSizeMax);
     if (st.ttf.ttf_msg_lbl != nullptr && lv_obj_is_valid(st.ttf.ttf_msg_lbl)) {
         const uint16_t sz = static_cast<uint16_t>(st.ttf.ttf_size_px);
-        char out_name[80];
+        char out_name[SD_FILE_NAME_CAPACITY + 10];
         ttf_convert::FormatOutputFileList(st.ttf.ttf_pick.c_str(), &sz, 1, out_name, sizeof(out_name));
         Book_SetFilenameMiddle(st.ttf.ttf_msg_lbl, out_name);
     }
@@ -141,13 +230,11 @@ void OnTtfPageNext(lv_event_t* e) {
 void TtfStartConvert() {
     auto& st = Book_State();
     ClampTtfSizePx();
-    // 字集模板：当前选中 .ef；无则回退默认 misans
+    // 已有字体复用其字集；空列表使用转换器内置阅读字集。
     std::string tmpl;
     const int fi = CurrentFontIndex();
     if (fi >= 0 && fi < static_cast<int>(st.settings.font_entries.size())) {
         tmpl = std::string(SD_PATH_FONTS) + "/" + st.settings.font_entries[static_cast<size_t>(fi)].file;
-    } else {
-        tmpl = SD_PATH_BOOK_FONT;
     }
     const std::string ttf_path = std::string(SD_PATH_FONT_SRC) + "/" + st.ttf.ttf_pick;
     const uint16_t sizes[1] = {static_cast<uint16_t>(st.ttf.ttf_size_px)};
@@ -173,6 +260,19 @@ void OnTtfConfirmYes(lv_event_t* e) {
     TtfStartConvert();
 }
 
+void OnTtfApply(lv_event_t* e) {
+    lv_event_stop_bubbling(e);
+    auto& st = Book_State();
+    if (st.ttf.ttf_mode != BookUiState::TtfMode::kConfirm || ttf_convert::Busy()) return;
+    ClampTtfSizePx();
+    if (!PrepareBookTtfFont(st.ttf.ttf_pick.c_str(), st.ttf.ttf_size_px)) {
+        ScreenShowToast(Lang::Strings::TTF_APPLY_FAILED);
+        return;
+    }
+    ScheduleLayoutApply(true);
+    HideReadChrome();
+}
+
 void ReturnToTtfList() {
     StopTtfPollTimer();
     Book_State().ttf.ttf_mode = BookUiState::TtfMode::kList;
@@ -186,7 +286,9 @@ void OnTtfConfirmNo(lv_event_t* e) {
 
 void OnTtfClose(lv_event_t* e) {
     lv_event_stop_bubbling(e);
-    if (Book_State().ttf.ttf_mode == BookUiState::TtfMode::kList) {
+    if (!Book_State().ttf.ttf_selected.empty()) {
+        OnTtfMultiCancel(e);
+    } else if (Book_State().ttf.ttf_mode == BookUiState::TtfMode::kList) {
         SelectReadingSheetTab(1);
     } else {
         ReturnToTtfList();

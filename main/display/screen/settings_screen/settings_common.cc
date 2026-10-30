@@ -2,6 +2,7 @@
 
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
+#include "screen_text.h"
 
 void SettingsStyleBrightnessButton(lv_obj_t* button) {
     lv_obj_set_size(button, kSettingsBrightnessButtonW, kSettingsBrightnessButtonH);
@@ -45,6 +46,7 @@ lv_obj_t* SettingsCreateSelectableOption(lv_obj_t* parent, const char* title, lv
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(lbl);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn, ScreenFitButtonLabelOnSize, LV_EVENT_SIZE_CHANGED, lbl);
 
     SettingsStyleSelectable(btn, lbl, false);
     return btn;
