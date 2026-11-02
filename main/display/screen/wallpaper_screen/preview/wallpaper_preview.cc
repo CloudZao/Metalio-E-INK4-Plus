@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <new>
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 #include <freertos/idf_additions.h>
@@ -20,6 +21,7 @@
 #include "reader/reader.h"
 
 void ClearPreviewImage() {
+    Wallpaper_State().preview.decode_error = reader::ImageDecodeError::kNone;
     if (Wallpaper_State().ui.preview_img != nullptr) {
         lv_image_set_src(Wallpaper_State().ui.preview_img, nullptr);
         lv_obj_add_flag(Wallpaper_State().ui.preview_img, LV_OBJ_FLAG_HIDDEN);
@@ -36,6 +38,20 @@ void ClearPreviewImage() {
     Wallpaper_State().preview.mirror_h = false;
 }
 
+static void ShowPreviewDecodeFailure(reader::ImageDecodeError error) {
+    auto& st = Wallpaper_State();
+    st.preview.decode_error = error == reader::ImageDecodeError::kNone ? reader::ImageDecodeError::kFailed : error;
+    if (st.ui.preview_status) {
+        char message[80] = {};
+        Wallpaper_FormatDecodeFailure(message, sizeof(message), st.preview.decode_error);
+        lv_label_set_text(st.ui.preview_status, message);
+        lv_obj_clear_flag(st.ui.preview_status, LV_OBJ_FLAG_HIDDEN);
+    }
+    UpdateEnableButtonUi();
+    UpdateDeleteButtonUi();
+    UpdateAdjustUi();
+}
+
 struct LoadWork {
     int index = -1;
     uint32_t epoch = 0;
@@ -48,7 +64,7 @@ struct LoadResultMsg {
     uint32_t epoch = 0;
     uint32_t generation = 0;
     bool ok = false;
-    char err[80] = {};
+    reader::ImageDecodeError error = reader::ImageDecodeError::kFailed; // 解码或预览准备失败原因
     reader::RasterImage* img = nullptr;
 };
 
@@ -80,14 +96,7 @@ void ApplyPreviewAsync(void* p) {
 
     ClearPreviewImage();
     if (!msg->ok || msg->img == nullptr || msg->img->empty()) {
-        if (Wallpaper_State().ui.preview_status != nullptr) {
-            lv_label_set_text(Wallpaper_State().ui.preview_status,
-                              msg->err[0] != '\0' ? msg->err : Lang::Strings::WALLPAPER_PREVIEW_FAIL);
-            lv_obj_clear_flag(Wallpaper_State().ui.preview_status, LV_OBJ_FLAG_HIDDEN);
-        }
-        UpdateEnableButtonUi();
-        UpdateDeleteButtonUi();
-        UpdateAdjustUi();
+        ShowPreviewDecodeFailure(msg->error);
         delete msg->img;
         delete msg;
         return;
@@ -97,8 +106,14 @@ void ApplyPreviewAsync(void* p) {
     msg->img = nullptr;
     TrimBakedLetterbox(*Wallpaper_State().preview.raster);
     Wallpaper_State().preview.raster->BindDsc();
-    delete Wallpaper_State().preview.base;
-    Wallpaper_State().preview.base = new reader::RasterImage(*Wallpaper_State().preview.raster);
+    try {
+        Wallpaper_State().preview.base = new reader::RasterImage(*Wallpaper_State().preview.raster);
+    } catch (const std::bad_alloc&) {
+        ClearPreviewImage();
+        ShowPreviewDecodeFailure(reader::ImageDecodeError::kNoMemory);
+        delete msg;
+        return;
+    }
     Wallpaper_State().preview.rot_cw = 0;
     Wallpaper_State().preview.mirror_h = false;
 
@@ -128,18 +143,22 @@ void LoadPreviewTask(void* arg) {
     auto* work = static_cast<LoadWork*>(arg);
     auto* msg = new LoadResultMsg{};
     if (work == nullptr) {
-        std::snprintf(msg->err, sizeof(msg->err), "%s", Lang::Strings::WALLPAPER_FILE_INVALID);
+        msg->error = reader::ImageDecodeError::kInvalidArgument;
     } else {
         msg->index = work->index;
         msg->epoch = work->epoch;
         msg->generation = work->generation;
         WallpaperDecodeToken token{work->epoch, work->generation};
-        auto* img = new reader::RasterImage();
-        if (!reader::DecodeImageFileToL8(work->path, 0, 0, *img, Wallpaper_DecodeCancelled, &token) ||
-            !reader::ScaleRasterToFit(*img, FrameInner(kPreviewMaxW, kBorderW),
-                                     FrameInner(kPreviewMaxH, kBorderW), *img)) {
+        auto* img = new (std::nothrow) reader::RasterImage();
+        if (!img) {
+            msg->error = reader::ImageDecodeError::kNoMemory;
+        } else if (!reader::DecodeImageFileToL8(work->path, 0, 0, *img, Wallpaper_DecodeCancelled, &token,
+                                               &msg->error)) {
             delete img;
-            std::snprintf(msg->err, sizeof(msg->err), "%s", Lang::Strings::WALLPAPER_DECODE_FAIL);
+        } else if (!reader::ScaleRasterToFit(*img, FrameInner(kPreviewMaxW, kBorderW),
+                                            FrameInner(kPreviewMaxH, kBorderW), *img)) {
+            msg->error = reader::ImageDecodeError::kNoMemory;
+            delete img;
         } else {
             msg->ok = true;
             msg->img = img;
@@ -169,6 +188,7 @@ void ScheduleLoadPreview(int index) {
         return;
     }
     auto* work = new LoadWork{};
+    Wallpaper_State().preview.decode_error = reader::ImageDecodeError::kNone;
     work->index = index;
     work->epoch = Wallpaper_State().epoch;
     work->generation = Wallpaper_State().decode_generation.load();
@@ -196,12 +216,7 @@ void ScheduleLoadPreview(int index) {
         delete work;
         Wallpaper_State().workers.load_busy.store(false);
         Wallpaper_State().workers.load_task = nullptr;
-        if (Wallpaper_State().ui.preview_status != nullptr) {
-            lv_label_set_text(Wallpaper_State().ui.preview_status,
-                              largest_psram < kPreviewStack ? Lang::Strings::WALLPAPER_PREVIEW_OOM
-                                                            : Lang::Strings::WALLPAPER_PREVIEW_START_FAIL);
-            lv_obj_clear_flag(Wallpaper_State().ui.preview_status, LV_OBJ_FLAG_HIDDEN);
-        }
+        ShowPreviewDecodeFailure(reader::ImageDecodeError::kNoMemory);
     } else {
         ESP_LOGI(TAG, "preview task started index=%d path=%s", index, work->path);
     }
@@ -213,7 +228,7 @@ void OpenPreview(int index) {
     }
     CancelThumbFill();
     Wallpaper_State().decode_generation.fetch_add(1);
-    CloseOverwriteDialog();
+    Wallpaper_CloseDialog();
     Wallpaper_State().preview.adjust_open = false;
     ResetOrientState();
     Wallpaper_State().preview.idx = index;
@@ -239,7 +254,7 @@ void OpenPreview(int index) {
 
 void ClosePreview() {
     Wallpaper_State().decode_generation.fetch_add(1);
-    CloseOverwriteDialog();
+    Wallpaper_CloseDialog();
     if (Wallpaper_State().workers.save_busy.load()) {
         ++Wallpaper_State().epoch;  // 作废在途保存
         Wallpaper_State().workers.save_busy.store(false);

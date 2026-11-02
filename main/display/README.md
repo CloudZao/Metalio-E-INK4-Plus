@@ -61,6 +61,40 @@ Entering or leaving standby and shutting down use the same cleaning sequence as 
 
 30 相图片表参考来自 [read-pico-reader](https://github.com/wegooo-cell/read-pico-reader/tree/main/components/e0470_epaper_waveform)，保留 Apache-2.0 许可证。我们保留 S31 / E0470A14-AF 的扫描时序与 TPS65185 电源驱动，显示效果须在本机验收。
 
+### 绘制调度与资源准备 / Rendering and resource preparation
+
+`ScreenPaintCoalesce` 统一合并重绘请求，在物理更新期间保留最新目标。通用导航延后实际建屏，并在执行前校验来源屏幕与待机状态；返回栈在导航执行时更新。业务无需单独判断刷新忙状态。底层 `ScreenLoadReplace` 只负责装载已创建的屏幕，耗时准备应在调用前移到后台。
+
+建屏、控件重建与 LVGL 实际绘制共用同一屏障，协调物理更新的开始时机，并支持同一 UI 任务的嵌套绘制。等待绘制期间，输入、取消、短 UI 提交和其他 LVGL 定时器继续执行。待提交帧不等同于物理更新忙，不能据此暂停整个 UI。同步绘制区内不得调用 `EpdWait`；需要等待落墨的流程应先结束绘制，再提交或等待刷新。
+
+更新任务的优先级高于 UI、低于供数任务；等待扫描和供数时通过信号量阻塞。空间灰阶推图逐相检查分带查表：可按旧灰阶或目标灰阶分解时合并两个像素查表，混合映射保留原表，当前无驱动的分带直接填零。模式复用现有 LUT 缓冲，保持原波形的逐像素输出。
+
+书架及其他共用封面单元先创建占位控件，读取、解码和缩放由单个后台任务完成。待处理任务只保留最新目标，逐张等待 UI 接收结果，避免图片结果积压。页面切换通过序号使旧结果失效，控件销毁后不再回填；加载失败保留占位，不将一般 I/O 或内存错误记为永久缺图。
+
+S31 板型将 LVGL 异步调用及取消统一转入 UI 队列，后台不再操作异步定时器链表。取消按回调和参数匹配所有尚未开始的调用，不释放参数；调度记录由 UI 消费后回收。队列满或记录分配失败时返回 `LV_RESULT_INVALID`，调用方须按原接口处理失败。后台仍不得直接操作其他 LVGL 对象或定时器。
+
+`ScreenPaintCoalesce` merges repaint requests and retains the latest target during physical updates. Common navigation delays screen construction and validates the originating screen and standby state before execution; the back stack changes only when navigation executes. Pages do not need individual refresh-busy checks. The low-level `ScreenLoadReplace` loads an already-created screen; expensive preparation belongs in background work before that call.
+
+Screen construction, widget rebuilding and LVGL rendering share one admission gate with physical updates, including nested rendering on the same UI task. Input, cancellation, short UI submissions and other LVGL timers continue while rendering waits. A queued frame is distinct from an active physical update and must not pause the entire UI. `EpdWait` is not allowed inside synchronous rendering; operations that wait for the panel must finish rendering before submitting or waiting for an update.
+
+The update task runs above the UI and below the refill tasks, blocking on semaphores while waiting for scans or refill. Spatial gray transitions inspect each band's LUT on every phase. Mappings that depend only on the old or target gray value use paired-pixel lookup; mixed mappings retain the original table, and inactive bands output zero. Mode data reuses the existing LUT buffer and preserves the waveform's per-pixel output.
+
+Shared book-cover cells create placeholders first. One background worker reads, decodes and scales images, retains only the latest pending target and waits for UI acknowledgement after each image to bound pending results. Sequence checks discard stale results after navigation, and deleted controls are never updated. Load failures retain placeholders; ordinary I/O or allocation failures are not cached as permanent missing images.
+
+On S31 boards, LVGL asynchronous calls and cancellation use the shared UI queue instead of modifying asynchronous timers from background tasks. Cancellation matches all calls with the same callback and context that have not started; it does not free the context. The UI consumer releases dispatch records. A full queue or allocation failure returns `LV_RESULT_INVALID`, which callers must handle as with the original API. Other LVGL objects and timers must still be accessed on the UI thread or under its lock.
+
+S31 板型通过链接包装，将可能访问 Flash 的 NVS C 接口与完整面板波形串行化，包括只读打开和读取。最外层 NVS 调用排空并持有共享 I2C，锁顺序为 Flash → I2C → NVS。日志设置在文件锁外持久化；持有普通 I2C 锁时，以及活动波形、供数回调内，不得调用 NVS。包装保留原同步行为和返回值；直接 NVS C++ 接口及其他裸 Flash 操作不在此保护范围内。
+
+普通 I2C 准入等待不将受控 Flash 独占窗口计入争用超时；实际传输使用独立的超时限制。非阻塞尝试和无限等待保留原有语义。
+
+On S31 boards, linker wrappers serialize NVS C APIs that can access Flash, including read-only open and reads, against complete panel waveforms. The outer NVS call drains and holds shared I2C; lock order is Flash → I2C → NVS. Log settings are persisted outside the file lock. Do not call NVS while holding I2C or from active waveform or refill callbacks. Return values and synchronous behavior remain unchanged. Direct NVS C++ access and other raw Flash operations are outside this protection.
+
+Ordinary I2C admission excludes controlled Flash ownership from its contention timeout. Actual transfers retain a separate timeout. Nonblocking attempts and indefinite waits preserve their original behavior.
+
+崩溃镜像转存先取得 Flash 门闩，再取得文件锁；仅在 SDK 的 Flash 读写、擦除期间排空并持有 I2C，SD 文件操作不持有 I2C。普通 I2C 持锁区不得取得 Flash 门闩或日志文件锁。镜像成功同步到 SD 后才允许擦除 Flash；等待擦除时，换卡、卸载或清空日志会撤销旧副本的擦除请求。
+
+Crash-image export takes the Flash gate before the file lock. Only SDK Flash operations drain and hold I2C; SD file operations do not hold I2C. Ordinary I2C lock holders must not acquire the Flash gate or log file lock. Flash is erased only after the SD copy is synced successfully. Mount changes, unmounting or clearing logs cancel pending erasure of a previous copy.
+
 ### 通用短提示
 
 页面包含 `screen_common.h` 后，调用 `ScreenShowToast("提示文本")` 即可显示短提示。提示位于顶部状态栏下方，采用黑底白字和圆角，尺寸随文本调整，长文本自动换行，3 秒后自动消失。连续调用会替换上一条并重新计时；空指针或空字符串不显示。

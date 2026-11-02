@@ -78,13 +78,15 @@ void push_edge(void) {
     xQueueSend(g_evt_q, &one, 0);
 }
 
-void refresh_p1() {
+bool refresh_p1() {
     uint8_t p1 = g_p1;
-    if (epd_board_metalio_eink4_plus_ioexp_read_port(1, &p1)) {
+    const bool p1_ok = epd_board_metalio_eink4_plus_ioexp_read_port(1, &p1);
+    if (p1_ok) {
         g_p1 = p1;
     }
     uint8_t p0 = 0;
-    epd_board_metalio_eink4_plus_ioexp_read_port(0, &p0); // 清 TCA INT
+    const bool p0_ok = epd_board_metalio_eink4_plus_ioexp_read_port(0, &p0); // 清 TCA INT
+    return p1_ok && p0_ok;
 }
 
 void latch_power_long_press(int64_t now) {
@@ -211,24 +213,28 @@ extern "C" void MetalioKeys_Init(void) {
     xTaskCreate(keys_task, "metalio_keys", 3072, nullptr, 5, &g_keys_task);
 }
 
-extern "C" void MetalioKeys_MaskForSleep(void) {
+extern "C" esp_err_t MetalioKeys_MaskForSleep(void) {
     std::lock_guard<std::mutex> lock(g_sample_mu);
     // 先停扫描再驱脚：否则输出低会被 PollSideKeys 当成音量键按下，g_ready 变 false 后再「松开」→ 假 +10
     g_ready = false;
-    epd_board_metalio_eink4_plus_ioexp_mask_for_sleep();
+    const esp_err_t err = epd_board_metalio_eink4_plus_ioexp_mask_for_sleep();
+    if (err != ESP_OK) return err;
     ESP_LOGI(TAG, "ioexp ports masked for sleep");
+    return ESP_OK;
 }
 
-extern "C" void MetalioKeys_ResumeAfterSleep(void) {
+extern "C" esp_err_t MetalioKeys_ResumeAfterSleep(void) {
     std::lock_guard<std::mutex> lock(g_sample_mu);
-    epd_board_metalio_eink4_plus_ioexp_restore_keys();
+    g_ready = false;
+    const esp_err_t err = epd_board_metalio_eink4_plus_ioexp_restore_keys();
+    if (err != ESP_OK) return err;
     g_shutdown_pulse_req = false;
     g_power_down_us = 0;
     g_power_long_fired = false;
 
     // 输出→输入后上拉拉高需短暂稳定；稳定前保持 !ready，避免侧键轮询采到假沿
     vTaskDelay(pdMS_TO_TICKS(20));
-    refresh_p1();
+    if (!refresh_p1()) return ESP_FAIL;
     for (auto& k : g_keys) {
         k.prev_down = is_down(k);
         k.last_change_us = esp_timer_get_time();
@@ -236,6 +242,7 @@ extern "C" void MetalioKeys_ResumeAfterSleep(void) {
     // 将后续 SD、串口和显示总线的恢复耗时计入本次电源键长按。
     if (g_keys[kPower].prev_down) g_power_down_us = esp_timer_get_time();
     g_ready = true;
+    return ESP_OK;
 }
 
 extern "C" bool MetalioKeys_IsReady(void) {

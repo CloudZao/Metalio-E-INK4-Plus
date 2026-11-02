@@ -3,10 +3,12 @@
 
 #include <lvgl.h>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
 #include "assets/lang_config.h"
+#include "assets/lang_wallpaper.h"
 #include "screen_text.h"
 #include "fontpack_lvgl.h"
 #include "reader/reader.h"
@@ -102,6 +104,18 @@ void Wallpaper_DisableScroll(lv_obj_t* obj) {
     }
     lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_OFF);
+}
+
+void Wallpaper_CloseDialog() {
+    auto& state = Wallpaper_State();
+    lv_obj_t* mask = state.ui.dialog_mask;
+    state.ui.dialog_mask = nullptr;
+    if (mask && state.screen_alive) lv_obj_delete(mask);
+}
+
+void Wallpaper_FormatDecodeFailure(char* out, size_t capacity, reader::ImageDecodeError error) {
+    const auto code = error == reader::ImageDecodeError::kNone ? reader::ImageDecodeError::kFailed : error;
+    std::snprintf(out, capacity, Lang::Strings::WALLPAPER_DECODE_FAIL_CODE, static_cast<unsigned>(code));
 }
 
 bool EndsWithIgnoreCase(const char* name, const char* ext) {

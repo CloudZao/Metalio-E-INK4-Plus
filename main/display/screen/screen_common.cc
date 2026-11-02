@@ -6,12 +6,16 @@
 
 #include "assets/lang_config.h"
 #include "board.h"
+#include "book_screen/book_nav.h"
+#include "display_orient.h"
 #include "fontpack_lvgl.h"
 #include "epd_refresh.h"
 #include "haptic_feedback.h"
+#include "home_screen/home_screen.h"
 #include "lv_adapter_epdiy.h"
 #include "network_screen/network_screen.h"
 #include "settings_screen/settings_network_tab.h"
+#include "standby_screen/standby_screen.h"
 #include "vk_key_handler.h"
 
 #include <cstring>
@@ -31,37 +35,137 @@ lv_coord_t ScreenStatusBarHeight() {
 }
 
 namespace {
-lv_timer_t* navigation_retry = nullptr;
-lv_obj_t* navigation_origin = nullptr;
-void (*pending_navigation)(void*) = nullptr;
+enum class NavigationKind {
+    None, // 无待处理导航
+    To, // 打开指定页面
+    Home, // 返回首页
+    Back, // 返回上一页面
+};
 
-// Keep navigation on the LVGL thread, without rebuilding a screen while the
-// two LCD feeder tasks are still publishing the previous waveform's rows.
-bool DeferNavigationWhileRefreshing(void (*navigate)(void*)) {
-    if (!EpdGetStats().busy && pending_navigation == nullptr) return false;
-    if (navigation_retry == nullptr) {
-        navigation_retry = lv_timer_create([](lv_timer_t* timer) {
-            if (EpdGetStats().busy) return;
-            auto callback = pending_navigation;
-            auto* origin = navigation_origin;
-            pending_navigation = nullptr;
-            navigation_origin = nullptr;
-            lv_timer_pause(timer);
-            // A different navigation may have completed during the wait.
-            if (callback != nullptr && origin == lv_screen_active()) callback(nullptr);
-        }, 20, nullptr);
-        if (navigation_retry == nullptr) {
-            ESP_LOGW(TAG, "cannot defer navigation while refreshing");
-            return true;
+struct PendingNavigation {
+    NavigationKind kind = NavigationKind::None; // 尚未执行的最新导航意图
+    ScreenFactory factory = nullptr; // To 目标的建屏工厂
+    lv_obj_t* origin = nullptr; // 发起导航的活动屏幕
+    bool standby = false; // 待机 Overlay 不改变活动屏幕，需单独校验
+};
+
+lv_timer_t* navigation_retry = nullptr;
+PendingNavigation pending_navigation;
+
+void ClearPendingNavigation() {
+    pending_navigation = {};
+    if (navigation_retry != nullptr) lv_timer_pause(navigation_retry);
+}
+
+void GoHomeNow() {
+    if (DisplayUiSetOrient(kDisplayUiPortrait)) {
+        if (auto* disp = LvAdapterEpdiy::Instance()) {
+            disp->RequestFullOnNextCommit();
         }
     }
-    // Repeated back presses during one waveform produce one navigation.
-    if (pending_navigation != ScreenCommon_GoHomeAsync) pending_navigation = navigate;
-    navigation_origin = lv_screen_active();
+    ScreenCommon_ClearBackStack();
+    ScreenCommon_on_home = true;
+    ScreenLoadReplace(HomeScreen::Create());
+}
+
+void ExecuteNavigation(const PendingNavigation& target) {
+    ReleaseReaderForSystemHome();
+    if (target.kind == NavigationKind::To) {
+        const char* cur = VkKey_ActiveScreen();
+        if (cur != nullptr && std::strcmp(cur, kHomeScreen) != 0 &&
+            std::strcmp(cur, "none") != 0) {
+            if (ScreenFactory factory = VkKey_GetScreenFactory(cur)) {
+                ScreenCommon_PushBackFactory(factory);
+                ESP_LOGI(TAG, "navigate to: push back factory for %s (depth=%d)", cur, ScreenCommon_back_depth);
+            }
+        }
+        ScreenCommon_on_home = false;
+        ScreenLoadReplace(target.factory());
+    } else if (target.kind == NavigationKind::Back) {
+        ScreenFactory prev = ScreenCommon_PopBackFactory();
+        if (prev != nullptr) {
+            ESP_LOGI(TAG, "navigate back -> recreate (stack left=%d)", ScreenCommon_back_depth);
+            ScreenCommon_on_home = false;
+            ScreenLoadReplace(prev());
+        } else {
+            ESP_LOGI(TAG, "navigate back -> home (empty stack)");
+            GoHomeNow();
+        }
+    } else if (target.kind == NavigationKind::Home) {
+        ESP_LOGI(TAG, "-> home (clear back stack depth was %d)", ScreenCommon_back_depth);
+        GoHomeNow();
+    }
+}
+
+void ProcessPendingNavigation(lv_timer_t*) {
+    if (pending_navigation.kind == NavigationKind::None ||
+        pending_navigation.origin != lv_screen_active() ||
+        pending_navigation.standby != StandbyScreen::IsActive()) {
+        ClearPendingNavigation();
+        return;
+    }
+    if (!EpdTryBeginUiRender()) return;
+    struct UiGuard {
+        ~UiGuard() { EpdEndUiRender(); }
+    } guard;
+    const PendingNavigation target = pending_navigation;
+    ClearPendingNavigation();
+    ExecuteNavigation(target);
+}
+
+void RequestNavigation(NavigationKind kind, ScreenFactory factory = nullptr, bool next_tick = false) {
+    // 先取消旧翻页，再等待落墨结束；合并期间不创建页面或修改返回栈。
+    EpdCancelPageTurn();
+    pending_navigation = {kind, factory, lv_screen_active(), StandbyScreen::IsActive()};
+    if (!next_tick) {
+        ProcessPendingNavigation(nullptr);
+        if (pending_navigation.kind == NavigationKind::None) return;
+    }
+    if (navigation_retry == nullptr) {
+        navigation_retry = lv_timer_create(ProcessPendingNavigation, 20, nullptr);
+        if (navigation_retry == nullptr) {
+            ClearPendingNavigation();
+            ESP_LOGW(TAG, "cannot defer navigation while refreshing");
+            return;
+        }
+    }
     lv_timer_resume(navigation_retry);
-    return true;
 }
 } // namespace
+
+void ScreenNavigateTo(lv_obj_t* (*create)()) {
+    if (create != nullptr) RequestNavigation(NavigationKind::To, create);
+}
+
+void ScreenNavigateBack() {
+    if (ScreenFrontlightIsVisible()) {
+        ScreenFrontlightHide();
+        return;
+    }
+    auto* disp = LvAdapterEpdiy::Instance();
+    if (disp == nullptr || !disp->IsReady()) {
+        ESP_LOGW(TAG, "ScreenNavigateBack: adapter not ready");
+        return;
+    }
+    const char* active = VkKey_ActiveScreen();
+    if (active == nullptr || std::strcmp(active, kHomeScreen) == 0 ||
+        std::strcmp(active, "none") == 0) {
+        EpdCancelPageTurn();
+        ClearPendingNavigation();
+        ESP_LOGI(TAG, "ScreenNavigateBack: skip stale back from screen=%s", active ? active : "null");
+        return;
+    }
+    // 在事件回调中只记录来源和意图，下一轮定时器再执行建屏。
+    RequestNavigation(NavigationKind::Back, nullptr, true);
+}
+
+void ScreenGoHome() {
+    RequestNavigation(NavigationKind::Home);
+}
+
+void ScreenCommon_CancelPendingNavigation() {
+    ClearPendingNavigation();
+}
 
 LVAdapterDisplay* ScreenCommon_GetAdapterDisplay() {
     return LVAdapterDisplay::Instance();
@@ -119,25 +223,16 @@ void ScreenCommon_GoHomeAsync(void* /*user_data*/) {
         return;
     }
     if (ScreenCommon_on_home) {
+        EpdCancelPageTurn();
+        ClearPendingNavigation();
         ESP_LOGI(TAG, "home ignored (already home)");
         return;
     }
-    if (DeferNavigationWhileRefreshing(ScreenCommon_GoHomeAsync)) return;
-    ESP_LOGI(TAG, "-> home (clear back stack depth was %d)", ScreenCommon_back_depth);
     ScreenGoHome();
 }
 
 void ScreenCommon_NavigateBackAsync(void* /*user_data*/) {
-    if (DeferNavigationWhileRefreshing(ScreenCommon_NavigateBackAsync)) return;
-    ScreenFactory prev = ScreenCommon_PopBackFactory();
-    if (prev != nullptr) {
-        ESP_LOGI(TAG, "navigate back -> recreate (stack left=%d)", ScreenCommon_back_depth);
-        ScreenCommon_on_home = false;
-        ScreenLoadReplace(prev());
-        return;
-    }
-    ESP_LOGI(TAG, "navigate back -> home (empty stack)");
-    ScreenGoHome();
+    RequestNavigation(NavigationKind::Back);
 }
 
 void ScreenShowToast(const char* text) {

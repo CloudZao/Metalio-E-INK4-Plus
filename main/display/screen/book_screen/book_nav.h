@@ -22,7 +22,7 @@ bool ReaderWorkersBusy();
 void WarnReaderWorkersBusy(const char* where);
 /** @brief 与进百问同源：open_token 失效 worker 回调；opening 时 deferred_cleanup，避免 UAF/泄漏 */
 void ReleaseReaderSessionForLeave();
-/** @brief 系统回首页前清理仍存活的阅读屏（LVGL 任务） */
+/** @brief 导航真正执行前清理当前活动阅读屏；须在 LVGL 任务调用。 */
 void ReleaseReaderForSystemHome();
 /** @brief 从目录/设置等返回已有正文屏 */
 lv_obj_t* ResumeReaderScreen();

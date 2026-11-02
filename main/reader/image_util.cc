@@ -1,5 +1,6 @@
 #include "image_util.h"
 #include "image_stream.h"
+#include "image_geometry.h"
 #include "sd_access.h"
 
 #include <algorithm>
@@ -158,90 +159,117 @@ void Rgb565ToL8Scaled(const uint8_t* rgb565, int src_w, int src_h, size_t stride
 }  // namespace
 
 bool DecodeImageToL8(const uint8_t* data, size_t len, int max_w, int max_h, RasterImage& out,
-                     ImageDecodeCancelled cancelled, void* context) try {
+                     ImageDecodeCancelled cancelled, void* context, ImageDecodeError* error) try {
     out.Reset();
-    if (cancelled != nullptr && cancelled(context)) return false;
+    if (error) *error = ImageDecodeError::kInvalidData;
+    auto finish = [error](bool ok) {
+        if (ok && error) *error = ImageDecodeError::kNone;
+        return ok;
+    };
+    if (cancelled != nullptr && cancelled(context)) {
+        if (error) *error = ImageDecodeError::kCancelled;
+        return false;
+    }
     const bool original_size = max_w == 0 && max_h == 0;
     if (data == nullptr || len == 0 || (!original_size && (max_w <= 0 || max_h <= 0))) {
+        if (error) *error = ImageDecodeError::kInvalidArgument;
         return false;
     }
     if (LooksLikePng(data, len)) {
-        return DecodePngMemoryToL8(data, len, max_w, max_h, out, cancelled, context);
+        return DecodePngMemoryToL8(data, len, max_w, max_h, out, cancelled, context, error);
+    }
+    const bool a2l8 = len >= 4 && std::memcmp(data, "A2L8", 4) == 0;
+    const bool known = a2l8 || LooksLikeJpeg(data, len) ||
+        (len >= 4 && (!std::memcmp(data, "A2I1", 4) || !std::memcmp(data, "EBGR", 4)));
+    if (!known) {
+        if (error) *error = ImageDecodeError::kUnsupported;
+        ESP_LOGW(TAG, "unknown image format (%u bytes)", static_cast<unsigned>(len));
+        return false;
     }
     if (original_size && !PeekRasterSize(data, len, &max_w, &max_h)) return false;
 
-    if (ValidateA2l8Bytes(data,len)) {
+    if (a2l8) {
+        if (!ValidateA2l8Bytes(data, len)) return false;
         const int width=data[4]|(data[5]<<8),height=data[6]|(data[7]<<8);
         const double scale=std::min({1.0,double(max_w)/width,double(max_h)/height});
         out.width=std::max(1,int(width*scale)); out.height=std::max(1,int(height*scale));
         out.pixels.resize(size_t(out.width)*out.height);
         for(int y=0;y<out.height;++y) for(int x=0;x<out.width;++x)
             out.pixels[size_t(y)*out.width+x]=data[8+size_t(int64_t(y)*height/out.height)*width+int64_t(x)*width/out.width];
-        out.BindDsc(); return true;
+        out.BindDsc(); return finish(true);
     }
     if (LooksLikeA2i1(data, len)) {
-        return DecodeA2i1ToL8(data, len, max_w, max_h, out);
+        return finish(DecodeA2i1ToL8(data, len, max_w, max_h, out));
     }
     if (LooksLikeEbgr(data, len)) {
-        return DecodeEbgrToL8(data, len, max_w, max_h, out);
+        return finish(DecodeEbgrToL8(data, len, max_w, max_h, out));
     }
 
     if (LooksLikeJpeg(data, len)) {
         if (IsProgressiveJpeg(data, len)) {
-            return DecodeProgressiveJpeg(data, len, max_w, max_h, out, cancelled, context);
+            return DecodeProgressiveJpeg(data, len, max_w, max_h, out, cancelled, context, error);
         }
 #ifndef CONFIG_IDF_TARGET_ESP32
         uint8_t* rgb565 = nullptr;
         size_t out_len = 0, w = 0, h = 0, stride = 0;
         // 解码阶段按 max 缩小（最多约 1/8）+ PSRAM，避免大封面全尺寸 RGB565 OOM
-        if (jpeg_to_image_fit(data, len, max_w, max_h, &rgb565, &out_len, &w, &h, &stride) != ESP_OK ||
-            rgb565 == nullptr) {
+        const esp_err_t status = jpeg_to_image_fit(data, len, max_w, max_h, &rgb565, &out_len, &w, &h, &stride);
+        std::unique_ptr<uint8_t, decltype(&heap_caps_free)> decoded(rgb565, heap_caps_free);
+        if (status != ESP_OK || !decoded) {
+            if (error) *error = status == ESP_ERR_NO_MEM ? ImageDecodeError::kNoMemory :
+                status == ESP_ERR_NOT_SUPPORTED ? ImageDecodeError::kUnsupported : ImageDecodeError::kFailed;
             ESP_LOGW(TAG, "jpeg decode failed");
             return false;
         }
-        std::unique_ptr<uint8_t, decltype(&heap_caps_free)> decoded(rgb565, heap_caps_free);
         Rgb565ToL8Scaled(decoded.get(), static_cast<int>(w), static_cast<int>(h), stride, max_w, max_h, out);
-        return !out.empty();
+        return finish(!out.empty());
 #else
+        if (error) *error = ImageDecodeError::kUnsupported;
         ESP_LOGW(TAG, "jpeg not supported on esp32");
         return false;
 #endif
     }
 
-    ESP_LOGW(TAG, "unknown image format (%u bytes)", static_cast<unsigned>(len));
     return false;
 } catch (const std::bad_alloc&) {
+    if (error) *error = ImageDecodeError::kNoMemory;
     out.Reset();
     ESP_LOGW(TAG, "image decode allocation failed");
     return false;
 }
 
 bool DecodeImageFileToL8(const char* path, int max_w, int max_h, RasterImage& out,
-                     ImageDecodeCancelled cancelled, void* context) {
+                     ImageDecodeCancelled cancelled, void* context, ImageDecodeError* error) {
     out.Reset();
-    if (cancelled != nullptr && cancelled(context)) return false;
-    if (path == nullptr) {
+    if (error) *error = ImageDecodeError::kInvalidData;
+    if (cancelled != nullptr && cancelled(context)) {
+        if (error) *error = ImageDecodeError::kCancelled;
         return false;
     }
     const bool original_size = max_w == 0 && max_h == 0;
-    if (!original_size && (max_w <= 0 || max_h <= 0)) return false;
-    FILE* fp = std::fopen(path, "rb");
-    if (fp == nullptr) {
+    if (!path || !path[0] || (!original_size && (max_w <= 0 || max_h <= 0))) {
+        if (error) *error = ImageDecodeError::kInvalidArgument;
         return false;
     }
+    std::unique_ptr<FILE, decltype(&std::fclose)> file(std::fopen(path, "rb"), std::fclose);
+    if (!file) {
+        if (error) *error = ImageDecodeError::kFileIo;
+        return false;
+    }
+    FILE* fp = file.get();
     uint8_t signature[8];
     const size_t signature_size = std::fread(signature, 1, sizeof(signature), fp);
     if (LooksLikePng(signature, signature_size)) {
-        std::fclose(fp);
-        return DecodePngFileToL8(path, max_w, max_h, out, cancelled, context);
+        file.reset();
+        return DecodePngFileToL8(path, max_w, max_h, out, cancelled, context, nullptr, error);
     }
-    if (std::fseek(fp, 0, SEEK_END) != 0) {
-        std::fclose(fp);
+    if (std::ferror(fp) || std::fseek(fp, 0, SEEK_END) != 0) {
+        if (error) *error = ImageDecodeError::kFileIo;
         return false;
     }
     const long sz = std::ftell(fp);
     if (sz <= 0 || (!original_size && sz > 4 * 1024 * 1024)) {
-        std::fclose(fp);
+        if (error && sz != 0) *error = sz < 0 ? ImageDecodeError::kFileIo : ImageDecodeError::kUnsupported;
         return false;
     }
     std::rewind(fp);
@@ -249,7 +277,7 @@ bool DecodeImageFileToL8(const char* path, int max_w, int max_h, RasterImage& ou
         static_cast<uint8_t*>(heap_caps_malloc(static_cast<size_t>(sz), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
         heap_caps_free);
     if (!buf || (cancelled != nullptr && cancelled(context))) {
-        std::fclose(fp);
+        if (error) *error = cancelled && cancelled(context) ? ImageDecodeError::kCancelled : ImageDecodeError::kNoMemory;
         return false;
     }
     size_t read = 0;
@@ -260,9 +288,12 @@ bool DecodeImageFileToL8(const char* path, int max_w, int max_h, RasterImage& ou
         read += n;
         if (n != count) break;
     }
-    std::fclose(fp);
-    if (read != static_cast<size_t>(sz)) return false;
-    const bool ok = DecodeImageToL8(buf.get(), static_cast<size_t>(sz), max_w, max_h, out, cancelled, context);
+    if (read != static_cast<size_t>(sz)) {
+        if (error) *error = cancelled && cancelled(context) ? ImageDecodeError::kCancelled : ImageDecodeError::kFileIo;
+        return false;
+    }
+    file.reset();
+    const bool ok = DecodeImageToL8(buf.get(), static_cast<size_t>(sz), max_w, max_h, out, cancelled, context, error);
     if (!ok && (cancelled == nullptr || !cancelled(context))) {
         ESP_LOGW(TAG, "image decode failed: %s (%ld bytes)", path, sz);
     }
@@ -284,18 +315,10 @@ bool PeekA2i1Size(const uint8_t* data, size_t len, int* w, int* h) {
 }
 
 bool ScaleRasterToFit(const RasterImage& src, int max_w, int max_h, RasterImage& out) try {
-    if (src.empty() || max_w <= 0 || max_h <= 0) {
+    int dst_w = 0, dst_h = 0;
+    if (src.empty() || !FitImageSize(src.width, src.height, max_w, max_h, &dst_w, &dst_h)) {
         out.Reset();
         return false;
-    }
-    int dst_w = src.width;
-    int dst_h = src.height;
-    if (dst_w > max_w || dst_h > max_h) {
-        const float sx = static_cast<float>(max_w) / static_cast<float>(dst_w);
-        const float sy = static_cast<float>(max_h) / static_cast<float>(dst_h);
-        const float s = sx < sy ? sx : sy;
-        dst_w = std::max(1, static_cast<int>(dst_w * s));
-        dst_h = std::max(1, static_cast<int>(dst_h * s));
     }
     if (dst_w == src.width && dst_h == src.height) {
         if (&out != &src) {

@@ -2,11 +2,11 @@
 
 #include <mutex>
 
-// A complete panel waveform needs uninterrupted cache/PSRAM access. OTA flash
-// operations must wait for it, and a waveform must wait for an ongoing write.
+// A complete panel waveform needs uninterrupted cache/PSRAM access. Flash/NVS
+// operations wait for it; nested accesses on the owning task share the same gate.
 // Never hold this gate while waiting for LVGL callbacks or network data.
-inline std::mutex& EpdFlashMutex() {
-    static std::mutex mutex;
+inline std::recursive_mutex& EpdFlashMutex() {
+    static std::recursive_mutex mutex;
     return mutex;
 }
 
@@ -15,5 +15,5 @@ public:
     EpdFlashGuard() : lock_(EpdFlashMutex()) {}
 
 private:
-    std::lock_guard<std::mutex> lock_;
+    std::lock_guard<std::recursive_mutex> lock_;
 };

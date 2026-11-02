@@ -182,6 +182,7 @@ void CollectWallpapers() try {
                 continue;
             }
             next_thumbs[i] = std::move(Wallpaper_State().list.thumbs[j]);
+            next_files[i].thumb_error = Wallpaper_State().list.files[j].thumb_error;
             break;
         }
     }
@@ -253,6 +254,8 @@ void ShowCellStatus(lv_obj_t* cell, const char* text) {
     lv_obj_t* lbl = lv_label_create(cell);
     lv_label_set_text(lbl, text);
     // 布局前单元格尺寸尚未确定，使用网格宽度计算可用区域，避免负宽裁切。
+    lv_obj_set_width(lbl, FrameInner(Wallpaper_State().list.grid_cell_w, kGridFrameBorder));
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(lbl, Wallpaper_UiFont(), 0);
     lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
@@ -277,7 +280,9 @@ void PaintCellThumb(int index) {
         return;
     }
     if (img->empty()) {
-        ShowCellStatus(cell, Lang::Strings::WALLPAPER_DECODE_FAIL);
+        char message[80] = {};
+        Wallpaper_FormatDecodeFailure(message, sizeof(message), Wallpaper_State().list.files[static_cast<size_t>(index)].thumb_error);
+        ShowCellStatus(cell, message);
         return;
     }
     img->BindDsc();

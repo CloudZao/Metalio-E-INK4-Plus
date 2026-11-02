@@ -85,8 +85,6 @@ struct BookUiState {
             reader::RasterImage* slot = nullptr;  // recent/shelf/detail_cover，非拥有
         };
         std::vector<ListCoverPending> list_cover_pending;
-        // 已确认无内嵌封面的路径（进程内）；避免每次回书架重复 Open 抽封面
-        std::vector<std::string> cover_embed_miss;
     } shelf;
 
     struct Detail {

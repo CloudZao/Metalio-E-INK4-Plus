@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <esp_err.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,13 +15,15 @@ void MetalioKeys_Init(void);
 
 /**
  * @brief 睡前：先停扫描，再把 TCA 口改输出以屏蔽 INT；按键脚驱到空闲高，P17 随后改输入唤醒
+ * @return 成功返回 ESP_OK；失败时保持停止扫描，调用方须恢复后退出休眠流程
  */
-void MetalioKeys_MaskForSleep(void);
+esp_err_t MetalioKeys_MaskForSleep(void);
 
 /**
  * @brief 浅睡醒后：恢复 IO 口方向与按键扫描状态
+ * @return 配置及采样成功返回 ESP_OK；失败时保持扫描不可用
  */
-void MetalioKeys_ResumeAfterSleep(void);
+esp_err_t MetalioKeys_ResumeAfterSleep(void);
 
 /**
  * @brief 按键扫描是否可用（睡中 mask 期间为 false）

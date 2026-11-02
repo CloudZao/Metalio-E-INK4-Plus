@@ -16,6 +16,7 @@
 #include "metalio_accel.h"
 #include "metalio_audio.h"
 #include "metalio_keys.h"
+#include "metalio_vibe.h"
 #include "metalio_sd.h"
 #include "epd_board_metalio_eink4_plus.h"
 #include "lv_adapter_display.h"
@@ -51,7 +52,6 @@ extern "C" bool usb_serial_jtag_is_connected(void);
 
 static constexpr uint32_t kPwrOffStack = 16 * 1024; // LVGL 同步绘制栈，与显示任务一致，分配到 PSRAM
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED
-static constexpr int kUsjReviveDisconnectMs = 150;
 static constexpr int kUsjReviveWaitConnectedMs = 800;
 #endif
 
@@ -66,6 +66,7 @@ void power_hw_cellular_resume(void) {
 
 static std::atomic<int> s_main_rail_state{-1}; // -1=未知，0=关闭，1=开启；策略与联网任务共享
 static bool s_sd_parked = false;
+static bool s_standby_rails_prepared = false; // 待机任务持有，首次断电尝试后即承担恢复责任
 static bool s_gpio_wake_boot_low = false;
 static bool s_gpio_wake_power_low = false;
 
@@ -118,7 +119,7 @@ static bool EnableGpio2Wake(void) {
 }
 
 /**
- * tip 增量阶段。SD/CNNT hold 与 USJ 同域：浅睡可开 kLsSd，但醒后须在 Sd_Init 之后 ReviveUsj。
+ * 浅睡硬件停用范围；SD/CNNT 恢复后确认副控制台时钟与 PHY。
  */
 enum : unsigned {
     kLsSd = 1u << 0,    // HoldPinsLow + Latch + 醒后 Sd_Init
@@ -129,14 +130,12 @@ enum : unsigned {
 constexpr unsigned kLightSleepHw = kLsSd | kLsTps | kLsBus | kLsRails;
 
 /**
- * @brief SD/CNNT 折腾后恢复副 console（须在 MetalioSd_Init 之后）
- * @note 醒后立刻踢 pad 无效；要等 SDMMC 把 ded_sel 拉回后再软拔插逼主机重枚举
+ * @brief SD/CNNT 恢复后恢复副控制台时钟与 PHY
+ * @note 在 MetalioSd_Init 之后调用，保持已有 USB 配置。
  */
 static void ReviveUsjAfterSdRestore(void) {
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED
     usb_serial_jtag_ll_enable_bus_clock(true);
-    usb_serial_jtag_ll_phy_enable_pad(false);
-    vTaskDelay(pdMS_TO_TICKS(kUsjReviveDisconnectMs));
     usb_serial_jtag_ll_phy_set_defaults();
     usb_serial_jtag_ll_phy_enable_pad(true);
 
@@ -174,26 +173,66 @@ esp_err_t power_hw_sd_restore(void) {
     return mounted ? ESP_OK : ESP_FAIL;
 }
 
+static esp_err_t CutStandbyRails(void) {
+    if (!s_standby_rails_prepared) {
+        Frontlight::GetInstance().ForceAllLow();
+        if (auto* cell = CellularBoard()) cell->PreparePowerOff();
+        MetalioAudio_OnPowerOff();
+        // 写失败也可能已改变部分输出，首次尝试前即登记恢复责任。
+        s_standby_rails_prepared = true;
+    }
+    return epd_board_metalio_eink4_plus_sleep_cut_rails();
+}
+
+static esp_err_t RestoreStandbyRails(void) {
+    if (!s_standby_rails_prepared) return ESP_OK;
+    const esp_err_t err = epd_board_metalio_eink4_plus_sleep_restore_rails();
+    if (err == ESP_OK) {
+        s_standby_rails_prepared = false;
+        MetalioAudio_OnPowerRestored();
+        if (auto* cell = CellularBoard()) cell->OnPowerRestored();
+    }
+    Frontlight::GetInstance().ForceAllLow();
+    return err;
+}
+
+esp_err_t power_hw_standby_rails_park(void) {
+    if (!s_standby_rails_prepared) {
+        const esp_err_t err = epd_board_metalio_eink4_plus_tps_enter_sleep();
+        if (err != ESP_OK) return err;
+        epd_board_metalio_eink4_plus_bus_hold_low();
+    }
+    return CutStandbyRails();
+}
+
+esp_err_t power_hw_standby_rails_restore(void) {
+    const esp_err_t err = RestoreStandbyRails();
+    if (err == ESP_OK) epd_board_metalio_eink4_plus_bus_restore();
+    return err;
+}
+
 static void SleepAbort(const char* why, unsigned applied) {
     ESP_LOGW(TAG, "%s (applied=0x%x)", why, applied);
     if ((applied & kLsRails) != 0) {
-        epd_board_metalio_eink4_plus_sleep_restore_rails();
-        MetalioAudio_OnPowerRestored();
-        if (auto* cell = CellularBoard()) cell->OnPowerRestored();
-        Frontlight::GetInstance().ForceAllLow();
+        const esp_err_t err = RestoreStandbyRails();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "sleep abort: rail restore failed: %s", esp_err_to_name(err));
+        }
     }
     if ((applied & kLsBus) != 0) {
         epd_board_metalio_eink4_plus_bus_restore();
     }
-    MetalioKeys_ResumeAfterSleep();
+    const esp_err_t keys_err = MetalioKeys_ResumeAfterSleep();
+    if (keys_err != ESP_OK) {
+        ESP_LOGE(TAG, "sleep abort: key restore failed: %s", esp_err_to_name(keys_err));
+    }
     if ((applied & kLsSd) != 0) {
         power_hw_sd_restore();
     }
 }
 
 esp_err_t power_hw_pa_set(bool on) {
-    MetalioAudio_SetPa(on);
-    return ESP_OK;
+    return MetalioAudio_SetPa(on);
 }
 
 esp_err_t power_hw_bt_power_reset(void) {
@@ -204,6 +243,7 @@ esp_err_t power_hw_bt_power_reset(void) {
         // 等当前波形结束，并阻止 P14 断电期间探测/启动 TPS。
         // 4G 清理与恢复可能更新 UI，必须放在此锁之外。
         EpdFlashGuard panel_guard;
+        MetalioVibe_Set(false);
         MetalioAudio_SetPa(false);
         MetalioAudio_OnPowerOff();
         err = epd_board_metalio_eink4_plus_bt_power_reset();
@@ -383,7 +423,7 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us) {
     }
     sd_access::Transition transition;
     if (!transition) return ESP_ERR_TIMEOUT;
-    unsigned applied = 0;
+    unsigned applied = s_standby_rails_prepared ? kLsTps | kLsBus | kLsRails : 0;
     s31_sleep::BeginCycle();
     s31_sleep::Checkpoint(s31_sleep::Phase::Admission, applied); // admission passed
     ESP_LOGI(TAG, "light sleep once max_us=%llu hw=0x%x (sd=%d tps=%d bus=%d rails=%d)",
@@ -395,18 +435,26 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us) {
         if (power_hw_sd_park() != ESP_OK) return ESP_ERR_INVALID_STATE;
         applied |= kLsSd;
     }
-    if ((kLightSleepHw & kLsTps) != 0) {
-        epd_board_metalio_eink4_plus_tps_enter_sleep();
+    if ((kLightSleepHw & kLsTps) != 0 && !s_standby_rails_prepared) {
+        const esp_err_t err = epd_board_metalio_eink4_plus_tps_enter_sleep();
+        if (err != ESP_OK) {
+            SleepAbort("abort light sleep: TPS sleep failed", applied);
+            return err;
+        }
         applied |= kLsTps;
     }
-    if ((kLightSleepHw & kLsBus) != 0) {
+    if ((kLightSleepHw & kLsBus) != 0 && !s_standby_rails_prepared) {
         epd_board_metalio_eink4_plus_bus_hold_low();
         applied |= kLsBus;
     }
 
     MetalioAccel_ReleaseIntLine();
     s31_sleep::Checkpoint(s31_sleep::Phase::HardwareParked, applied); // SD/TPS/bus parked
-    MetalioKeys_MaskForSleep();
+    const esp_err_t mask_err = MetalioKeys_MaskForSleep();
+    if (mask_err != ESP_OK) {
+        SleepAbort("abort light sleep: key mask failed", applied);
+        return mask_err;
+    }
     if (MetalioKeys_HasPowerClick() || StandbyScreen::HasWakeRequest()) {
         SleepAbort("abort light sleep: pending POWER exit", applied);
         return ESP_ERR_INVALID_STATE;
@@ -437,11 +485,13 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us) {
 
     if ((kLightSleepHw & kLsRails) != 0) {
         s31_sleep::Checkpoint(s31_sleep::Phase::WakeArmed, applied); // wake sources armed; about to cut rails
-        Frontlight::GetInstance().ForceAllLow();
-        if (auto* cell = CellularBoard()) cell->PreparePowerOff();
-        MetalioAudio_OnPowerOff();
-        epd_board_metalio_eink4_plus_sleep_cut_rails();
+        // 写失败也可能已改变部分输出，恢复责任在首次关轨尝试前登记。
         applied |= kLsRails;
+        const esp_err_t err = CutStandbyRails();
+        if (err != ESP_OK) {
+            SleepAbort("abort light sleep: rail cut failed", applied);
+            return err;
+        }
     }
     if ((kLightSleepHw & kLsBus) != 0) {
         epd_board_metalio_eink4_plus_bus_latch_for_sleep();
@@ -462,14 +512,19 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us) {
     if (max_sleep_us > 0) {
         esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
     }
-    MetalioKeys_ResumeAfterSleep();
-    s31_sleep::Checkpoint(s31_sleep::Phase::KeysRestored, applied); // key/IO-expander access returned
+    const esp_err_t keys_err = MetalioKeys_ResumeAfterSleep();
+    if (keys_err == ESP_OK) {
+        s31_sleep::Checkpoint(s31_sleep::Phase::KeysRestored, applied);
+    } else {
+        ESP_LOGE(TAG, "wake: key restore failed: %s", esp_err_to_name(keys_err));
+        if (err == ESP_OK) err = keys_err;
+    }
     if ((applied & kLsRails) != 0) {
-        epd_board_metalio_eink4_plus_sleep_restore_rails();
-        MetalioAudio_OnPowerRestored();
-        if (auto* cell = CellularBoard()) cell->OnPowerRestored();
-        // P14 回来时 LEDC 可能仍有旧占空比 → 背光闪一下；待机/关机路径保持灭
-        Frontlight::GetInstance().ForceAllLow();
+        const esp_err_t rail_err = RestoreStandbyRails();
+        if (rail_err != ESP_OK) {
+            ESP_LOGE(TAG, "wake: rail restore failed: %s", esp_err_to_name(rail_err));
+            if (err == ESP_OK) err = rail_err;
+        }
     }
     if ((applied & kLsSd) != 0 && cause != ESP_SLEEP_WAKEUP_TIMER) {
         s31_sleep::Checkpoint(s31_sleep::Phase::BeforeSdRestore, applied); // rails restored; about to restore SD/USB console
@@ -479,9 +534,9 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us) {
         s31_sleep::Checkpoint(s31_sleep::Phase::BeforeBusRestore, applied); // about to reinitialize display bus
         epd_board_metalio_eink4_plus_bus_restore();
     }
-    ESP_LOGI(TAG, "light_sleep wake err=%s cause=%d power_low=%d restore done applied=0x%x",
+    ESP_LOGI(TAG, "light_sleep wake err=%s cause=%d power_low=%d restore result applied=0x%x",
              esp_err_to_name(err), (int)cause, s_gpio_wake_power_low ? 1 : 0, applied);
-    s31_sleep::Checkpoint(s31_sleep::Phase::Restored, applied); // hardware restore complete
+    if (err == ESP_OK) s31_sleep::Checkpoint(s31_sleep::Phase::Restored, applied);
     return err;
 }
 

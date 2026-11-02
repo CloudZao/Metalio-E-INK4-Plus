@@ -210,15 +210,8 @@ void UpdateAdjustUi() {
     }
 }
 
-void CloseOverwriteDialog() {
-    if (Wallpaper_State().ui.dialog_mask != nullptr && Wallpaper_State().screen_alive) {
-        lv_obj_delete(Wallpaper_State().ui.dialog_mask);
-    }
-    Wallpaper_State().ui.dialog_mask = nullptr;
-}
-
 void ExitAdjustMode(bool restore_preview) {
-    CloseOverwriteDialog();
+    Wallpaper_CloseDialog();
     if (!Wallpaper_State().preview.adjust_open) {
         UpdateAdjustUi();
         return;
@@ -287,17 +280,17 @@ void OnMirrorHClicked(lv_event_t* /*e*/) {
 }
 
 void OnSaveAsClicked(lv_event_t* /*e*/) {
-    CloseOverwriteDialog();
+    Wallpaper_CloseDialog();
     ScheduleSaveTransform(true);
 }
 
 void OnOverwriteClicked(lv_event_t* /*e*/) {
-    CloseOverwriteDialog();
+    Wallpaper_CloseDialog();
     ScheduleSaveTransform(false);
 }
 
 void OnSaveCancelClicked(lv_event_t* /*e*/) {
-    CloseOverwriteDialog();
+    Wallpaper_CloseDialog();
 }
 
 void ShowOverwriteDialog() {

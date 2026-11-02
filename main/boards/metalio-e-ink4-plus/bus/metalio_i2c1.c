@@ -5,11 +5,16 @@
 #include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <hal/i2c_ll.h>
 
 static StaticSemaphore_t s_mu_storage;
 static SemaphoreHandle_t s_mu;
 static portMUX_TYPE s_init_mux = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE s_flash_time_mux = portMUX_INITIALIZER_UNLOCKED;
+static TickType_t s_flash_ticks;
+static TickType_t s_flash_started;
+static bool s_flash_active;
 static i2c_master_bus_handle_t s_bus;
 static gpio_num_t s_sda, s_scl;
 #define DEVICE_SLOTS 16
@@ -25,10 +30,47 @@ static void ensure_mu(void) {
     portEXIT_CRITICAL(&s_init_mux);
 }
 
+typedef struct {
+    TickType_t wall; // 与 RTOS 等待使用同一时基
+    TickType_t flash; // 累计受控占用，含尚未结束的窗口
+} i2c_wait_time_t;
+
+static i2c_wait_time_t wait_time_snapshot(void) {
+    portENTER_CRITICAL(&s_flash_time_mux);
+    const TickType_t now = xTaskGetTickCount();
+    const i2c_wait_time_t result = {
+        .wall = now,
+        .flash = s_flash_ticks + (s_flash_active ? now - s_flash_started : 0),
+    };
+    portEXIT_CRITICAL(&s_flash_time_mux);
+    return result;
+}
+
 bool metalio_i2c1_lock(int timeout_ms) {
     ensure_mu();
-    const TickType_t ticks = timeout_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
-    return s_mu != NULL && xSemaphoreTake(s_mu, ticks) == pdTRUE;
+    if (s_mu == NULL) return false;
+    if (xSemaphoreTake(s_mu, 0) == pdTRUE) return true;
+    if (timeout_ms == 0) return false;
+    if (timeout_ms < 0) return xSemaphoreTake(s_mu, portMAX_DELAY) == pdTRUE;
+
+    // 先扩宽再换算，正 int 毫秒不能因 TickType_t 的乘法溢出而缩短预算。
+    uint64_t remaining = (uint64_t)timeout_ms * configTICK_RATE_HZ / 1000;
+    if (remaining == 0) return false;
+    i2c_wait_time_t previous = wait_time_snapshot();
+    while (remaining != 0) {
+        const TickType_t chunk = remaining >= portMAX_DELAY ? portMAX_DELAY - 1 : (TickType_t)remaining;
+        // 队列在边界成功时保持原成功语义，不在取锁后追溯判为超时。
+        if (xSemaphoreTake(s_mu, chunk) == pdTRUE) return true;
+        const i2c_wait_time_t current = wait_time_snapshot();
+        const TickType_t elapsed = current.wall - previous.wall;
+        const TickType_t excluded = current.flash - previous.flash;
+        // 两个时刻来自同一短临界区快照；分段差值支持 tick 与累计值回绕。
+        const TickType_t charged = elapsed - excluded;
+        if (charged >= remaining || (excluded == 0 && remaining <= chunk)) return false;
+        remaining -= charged;
+        previous = current;
+    }
+    return false;
 }
 
 static void quiet_idle_interrupts(void) {
@@ -40,7 +82,14 @@ static void quiet_idle_interrupts(void) {
 }
 
 bool metalio_i2c1_lock_for_flash(int timeout_ms) {
+    ensure_mu();
+    const TaskHandle_t owner = s_mu != NULL ? xSemaphoreGetMutexHolder(s_mu) : NULL;
+    if (owner != NULL && owner == xTaskGetCurrentTaskHandle()) return false;
     if (!metalio_i2c1_lock(timeout_ms)) return false;
+    portENTER_CRITICAL(&s_flash_time_mux);
+    s_flash_started = xTaskGetTickCount();
+    s_flash_active = true;
+    portEXIT_CRITICAL(&s_flash_time_mux);
     quiet_idle_interrupts();
     return true;
 }
@@ -48,6 +97,12 @@ bool metalio_i2c1_lock_for_flash(int timeout_ms) {
 void metalio_i2c1_unlock(void) {
     if (s_mu != NULL) {
         quiet_idle_interrupts();
+        portENTER_CRITICAL(&s_flash_time_mux);
+        if (s_flash_active) {
+            s_flash_ticks += xTaskGetTickCount() - s_flash_started;
+            s_flash_active = false;
+        }
+        portEXIT_CRITICAL(&s_flash_time_mux);
         xSemaphoreGive(s_mu);
     }
 }

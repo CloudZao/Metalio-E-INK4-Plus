@@ -28,6 +28,7 @@ struct DecodeContext {
     size_t used = 0; // 当前已分配字节数
     size_t limit = 0; // 本次可用预算
     bool failed = false; // 取消或预算不足后不再读取
+    bool no_memory = false; // 分配失败或超出 PSRAM 预算
     TickType_t last_yield = 0; // 防止持续解码饿死同核空闲任务
 };
 DecodeContext* s_decode = nullptr; // 仅在持有解码互斥量期间访问
@@ -39,20 +40,24 @@ bool Cancelled(DecodeContext& ctx) {
 }
 void* JpegMalloc(size_t size) {
     auto& ctx = *s_decode;
-    if (Cancelled(ctx) || size > ctx.limit || sizeof(Allocation) > ctx.limit - size ||
+    if (Cancelled(ctx)) return nullptr;
+    if (size > ctx.limit || sizeof(Allocation) > ctx.limit - size ||
         size + sizeof(Allocation) > ctx.limit - ctx.used) {
         ctx.failed = true;
+        ctx.no_memory = true;
         return nullptr;
     }
     const size_t bytes = sizeof(Allocation) + size;
     const size_t free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (free < kPsramReserve || bytes > free - kPsramReserve) {
         ctx.failed = true;
+        ctx.no_memory = true;
         return nullptr;
     }
     auto* allocation = static_cast<Allocation*>(heap_caps_aligned_alloc(16, bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (allocation == nullptr) {
         ctx.failed = true;
+        ctx.no_memory = true;
         return nullptr;
     }
     allocation->size = bytes;
@@ -144,13 +149,21 @@ bool IsProgressiveJpeg(const uint8_t* data, size_t len) {
 }
 
 bool DecodeProgressiveJpeg(const uint8_t* data, size_t len, int max_w, int max_h,
-                           RasterImage& out, ImageDecodeCancelled cancelled, void* context) {
+                           RasterImage& out, ImageDecodeCancelled cancelled, void* context,
+                           ImageDecodeError* error) {
     out.Reset();
+    if (error) *error = ImageDecodeError::kInvalidArgument;
     if (data == nullptr || len > INT_MAX || max_w <= 0 || max_h <= 0) return false;
     SemaphoreHandle_t mutex = DecodeMutex();
-    if (mutex == nullptr) return false;
+    if (mutex == nullptr) {
+        if (error) *error = ImageDecodeError::kNoMemory;
+        return false;
+    }
     while (xSemaphoreTake(mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
-        if (cancelled != nullptr && cancelled(context)) return false;
+        if (cancelled != nullptr && cancelled(context)) {
+            if (error) *error = ImageDecodeError::kCancelled;
+            return false;
+        }
     }
     DecodeContext ctx{cancelled, context, data, len};
     const size_t free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -173,13 +186,18 @@ bool DecodeProgressiveJpeg(const uint8_t* data, size_t len, int max_w, int max_h
         const size_t psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         ok = bytes <= ctx.limit - ctx.used && psram >= kPsramReserve && bytes <= psram - kPsramReserve &&
             bytes <= heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!ok) ctx.no_memory = true;
         if (ok) {
             try {
                 out.pixels.resize(bytes);
             } catch (const std::bad_alloc&) {
                 ctx.failed = true;
+                ctx.no_memory = true;
             }
-            if (bytes > 4096 && !esp_ptr_external_ram(out.pixels.data())) ctx.failed = true;
+            if (bytes > 4096 && !esp_ptr_external_ram(out.pixels.data())) {
+                ctx.failed = true;
+                ctx.no_memory = true;
+            }
             for (int y = 0; y < h && !Cancelled(ctx); ++y) {
                 for (int x = 0; x < w; ++x) {
                     out.pixels[static_cast<size_t>(y) * w + x] =
@@ -203,6 +221,9 @@ bool DecodeProgressiveJpeg(const uint8_t* data, size_t len, int max_w, int max_h
     }
     s_decode = nullptr;
     xSemaphoreGive(mutex);
+    if (error) *error = ok ? ImageDecodeError::kNone :
+        cancelled && cancelled(context) ? ImageDecodeError::kCancelled :
+        ctx.no_memory ? ImageDecodeError::kNoMemory : ImageDecodeError::kInvalidData;
     return ok;
 }
 } // namespace reader

@@ -15,6 +15,7 @@
 #include "bq27220_gauge.h"
 #include "display_orient.h"
 #include "lv_adapter_display.h"
+#include "wallpaper_frame.h"
 #include "power_policy.h"
 #include "screen_common.h"
 #include "task_screen/task_screen.h"
@@ -92,6 +93,7 @@ static void MountVariant(lv_obj_t* root, bool as_overlay) {
 
 static void TeardownHostState() {
     TeardownVariant();
+    WallpaperFrame_Clear();
     DisplayUiSetFullScreen(false);
     s_host_alive = false;
     s_as_overlay = false;
@@ -143,6 +145,7 @@ void StandbyScreen::Show() {
         ESP_LOGW(TAG, "show: no active screen");
         return;
     }
+    if (auto* disp = LVAdapterDisplay::Instance()) disp->PrepareWallpaperOverlay();
     ESP_LOGI(TAG, "show overlay on screen=%p", static_cast<void*>(under));
     if (!PreferWallpaperVariant()) {
         EnsureStandbyPortrait();

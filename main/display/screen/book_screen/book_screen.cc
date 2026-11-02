@@ -138,20 +138,6 @@ static lv_obj_t* CreateBookHome(bool continue_latest) {
     st.shelf.books.clear();
     // 优先复用开机/上次扫库缓存，未命中再扫盘
     reader::LoadBookLibrary(reader::kDefaultBooksDir, st.shelf.books);
-    // 仅丢掉已不在书库的 miss；保留仍在库中的，避免回首页再进又重复 Open 抽封面
-    if (!st.shelf.cover_embed_miss.empty()) {
-        st.shelf.cover_embed_miss.erase(
-            std::remove_if(st.shelf.cover_embed_miss.begin(), st.shelf.cover_embed_miss.end(),
-                           [&](const std::string& path) {
-                               for (const auto& b : st.shelf.books) {
-                                   if (b.path == path) {
-                                       return false;
-                                   }
-                               }
-                               return true;
-                           }),
-            st.shelf.cover_embed_miss.end());
-    }
     RenderReadingHome();
 
     // factory=Create：进百问后返回阅读首页

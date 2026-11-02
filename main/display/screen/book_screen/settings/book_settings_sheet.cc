@@ -451,9 +451,12 @@ static void SheetPreset(lv_event_t* e) {
     if (encoded < 10) {
         if (encoded == BookReaderPrefsMarginPreset()) return;
         BookReaderPrefsSetMarginPreset(encoded);
-    } else {
+    } else if (encoded < 20) {
         if (encoded - 10 == BookReaderPrefsSpacingPreset()) return;
         BookReaderPrefsSetSpacingPreset(encoded - 10);
+    } else {
+        if (encoded - 20 == BookReaderPrefsParaGapPreset()) return;
+        BookReaderPrefsSetParaGapPreset(encoded - 20);
     }
     RequestSettingsSheetPaint();
     if (encoded >= 10 && DeferComicTextSetting()) return;
@@ -539,7 +542,7 @@ static lv_obj_t* SettingsRow(lv_obj_t* parent, const char* title, int count, con
                              lv_event_cb_t event, const int* values, int selected, bool mask = false, int slots = 0) {
     lv_obj_update_layout(parent);
     const int w = lv_obj_get_content_width(parent);
-    const int h = lv_obj_get_content_height(parent) / (LV_HOR_RES > LV_VER_RES ? 6 : 12);
+    const int h = lv_obj_get_content_height(parent) / (LV_HOR_RES > LV_VER_RES ? 7 : 13);
     auto* row = SheetBox(parent, w, h);
     auto* label = SheetLabel(row, title);
     lv_obj_align(label, LV_ALIGN_LEFT_MID, 0, 0);
@@ -681,7 +684,7 @@ static void BuildSheetSettings(lv_obj_t* body) {
     SettingsRow(left, Lang::Strings::BOOK_TURN_TITLE, 2, page_turns, SheetPageTurn, page_turn_values, BookReaderPrefsPageTurn());
     lv_obj_update_layout(left);
     const int auto_w = lv_obj_get_content_width(left);
-    const int auto_h = lv_obj_get_content_height(left) / (landscape ? 6 : 12);
+    const int auto_h = lv_obj_get_content_height(left) / (landscape ? 7 : 13);
     auto* auto_row = SheetBox(left, auto_w, auto_h);
     const int gap = UiSx(8);
     const int title_w = std::min<lv_coord_t>(UiSx(94), auto_w / 3);
@@ -720,6 +723,9 @@ static void BuildSheetSettings(lv_obj_t* body) {
     SettingsRow(left, Lang::Strings::BOOK_MARGIN_TITLE, 4, presets, SheetPreset, values, BookReaderPrefsMarginPreset());
     const int spacing[] = {10,11,12,13};
     SettingsRow(right, Lang::Strings::BOOK_SPACING_TITLE, 4, presets, SheetPreset, spacing, 10 + BookReaderPrefsSpacingPreset());
+    const int para_gap_values[] = {20, 21, 22, 23};
+    SettingsRow(right, Lang::Strings::BOOK_PARA_GAP_TITLE, kBookReaderParaGapPresetCount,
+        presets, SheetPreset, para_gap_values, 20 + BookReaderPrefsParaGapPreset());
     const char* backgrounds[] = {Lang::Strings::BOOK_BACKGROUND_GRID, Lang::Strings::BOOK_BACKGROUND_DOTS}; const int bg_values[] = {1,2};
     SettingsRow(right, Lang::Strings::BOOK_BACKGROUND_TITLE, 2, backgrounds, SheetBackground, bg_values, BookReaderPrefsBackground());
     const char* foot[] = {Lang::Strings::BOOK_FOOTER_TITLE, Lang::Strings::BOOK_FOOTER_TIME, Lang::Strings::BOOK_FOOTER_PROGRESS, Lang::Strings::BOOK_FOOTER_BATTERY};
@@ -1366,7 +1372,10 @@ bool RefreshReadingSheetInPlace() {
     if (FitReadingSettingsHeight()) ApplyReadingPanelRules(st.settings.settings_sheet, SheetNavHeight() + 2);
     for(const auto& binding:s_sheet_bindings) {
         int selected=-1;
-        if(binding.event==SheetPreset)selected=binding.value<10?BookReaderPrefsMarginPreset():10+BookReaderPrefsSpacingPreset();
+        if(binding.event==SheetPreset) {
+            selected=binding.value<10?BookReaderPrefsMarginPreset():binding.value<20
+                ?10+BookReaderPrefsSpacingPreset():20+BookReaderPrefsParaGapPreset();
+        }
         else if(binding.event==OnSheetOrientMode)selected=BookReaderPrefsOrient();
         else if(binding.event==SheetAutoTurnToggle)selected=ReaderAutoTurnEnabled()?1:0;
         else if(binding.event==SheetWritingMode)selected=BookReaderPrefsWritingMode();

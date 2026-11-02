@@ -41,6 +41,7 @@ struct ThumbOneMsg {
     int index = -1; // 文件列表索引
     char path[SD_FILE_PATH_CAPACITY] = {}; // 图片文件路径
     reader::RasterImage* img = nullptr; // 交由 UI 接收的解码结果
+    reader::ImageDecodeError error = reader::ImageDecodeError::kNone; // 本次缩略图解码错误
 };
 
 void ApplyThumbOne(void* p) {
@@ -65,6 +66,7 @@ void ApplyThumbOne(void* p) {
     }
     // 在途结果也遵守当前页及相邻页的缓存范围。
     Wallpaper_State().list.thumbs[static_cast<size_t>(msg->index)].reset(msg->img);
+    Wallpaper_State().list.files[static_cast<size_t>(msg->index)].thumb_error = msg->error;
     msg->img = nullptr;
     if (Wallpaper_State().mode == UiMode::kList) {
         PaintCellThumb(msg->index);
@@ -92,8 +94,9 @@ void RunThumbWork(ThumbFillWork* work) {
             auto* ctx = static_cast<CancelContext*>(p);
             return s_thumb_seq.load() != ctx->work->seq || Wallpaper_DecodeCancelled(&ctx->token);
         };
+        reader::ImageDecodeError error = reader::ImageDecodeError::kNone;
         const bool ok = reader::DecodeImageFileToL8(item.path, work->decode_w, work->decode_h,
-                                                   *img, cancelled, &cancel) && !img->empty();
+                                                   *img, cancelled, &cancel, &error) && !img->empty();
         if (cancelled(&cancel)) { delete img; break; }
         if (!ok) {
             img->Reset();
@@ -113,6 +116,7 @@ void RunThumbWork(ThumbFillWork* work) {
         msg->index = item.index;
         std::snprintf(msg->path, sizeof(msg->path), "%s", item.path);
         msg->img = img;
+        msg->error = error;
         if (!ScreenLvAsync(ApplyThumbOne, msg)) {
             delete msg->img;
             delete msg;

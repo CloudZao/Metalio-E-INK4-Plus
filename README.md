@@ -64,14 +64,14 @@ Product data lives under SD `metalio/e-ink/`. Cloud APIs use **ink-screen** push
 - **Library**: 3x3 cover grid -> detail -> body; `.ebook` / `.epub` / `.txt`
 - **UI scheduling**: reader navigation and page pixels are prepared in background workers; input dispatch and result publication stay on the UI task. See [UI scheduling](docs/ui-scheduling.md).
 - **Fonts**: UI fontpack on Flash `font_data`; reader `.ef` fonts on SD or via Transfer
-- **Text layout**: Spacing presets express relative density. Font size and the content area determine each line's top and bottom space; backgrounds and underlines change drawing only, preserving pagination. The reading area meets a fixed footer with centered information. Full body-text pages keep the same line count for the same layout preferences; paragraphs retain first-line indentation, while headings, images, and chapter endings may reduce the count. See [reader layout](docs/ui-scheduling.md).
+- **Text layout**: Line spacing presets express relative density. Font size and the content area determine each line's top and bottom space. Paragraph gaps can be set independently and are saved automatically. Backgrounds and underlines change drawing only, preserving pagination. The reading area meets a fixed footer with centered information. Paragraphs retain first-line indentation; extra paragraph gaps, headings, images, and chapter endings may reduce the line count. See [reader layout](docs/ui-scheduling.md).
 - **Text direction**: Reading settings fit on one page without scrolling. Vertical columns can run left to right (default) or right to left; the fixed extra inset moves to the corresponding starting side. Underlines stay on each column's right. The choice is saved; horizontal text and image pages are unchanged.
 - **Toolchain**: `tools/ebook/` converts PDF/EPUB/MOBI/TXT to device `.ebook` (with Web preview)
 
 ### 2.3 Local multimodal features
 
 - **Daily checklist**: cloud sync + local cache (also shown on classic standby)
-- **Wallpaper**: SD gallery; can be standby fullscreen or shutdown image
+- **Wallpaper**: SD gallery; standby and power-off can each use a fullscreen wallpaper or an overlay on the current screen
 - **Transfer**: cloud push of books, wallpapers, fonts to SD
 - **Quick controls**: swipe down in non-scrolling areas on any page for Wi-Fi on the left and vertical brightness and warm-light ratio sliders on the right. Swipe up outside the sliders or tap outside the panel to close it. Disabled during OTA upgrades and standby (11.6).
 - **Sensors**: SC7A20H accel; PCF8563 RTC; BQ27220 gauge
@@ -313,6 +313,7 @@ flowchart LR
 |:---|:---|
 | Battery / charge policy | [docs/battery-soc-and-charge.md](docs/battery-soc-and-charge.md) |
 | EPD Bayer dither | [docs/epd-bayer-dither-gray.md](docs/epd-bayer-dither-gray.md) |
+| SPV timing investigation | [docs/epd-spv-investigation.md](docs/epd-spv-investigation.md#english) |
 | SD font / resources | [docs/sd-font-resources-upgrade.md](docs/sd-font-resources-upgrade.md) |
 
 Firmware pin truth is `config.h` / `epd_board_metalio_eink4_plus.*`. If schematics are published elsewhere, follow the hardware team docs.
@@ -337,7 +338,11 @@ Firmware is based on xiaozhi-esp32, customized for `metalio-e-ink4-plus`. CMake 
 | **Power** | `boards/common/power_policy/` | Power tiers, standby, shutdown |
 | **Common** | `boards/common/` | Wi-Fi, SD, gauge, USB MSC, BT codec |
 
-The display uses a 30-phase image waveform table while retaining the S31 / E0470A14-AF scan timing and TPS65185 power driver. Display quality must be validated on the target device.
+The display uses a 30-phase image waveform table, preserving existing phase counts and the TPS65185 power driver. The S31 parallel path reuses its line queues to prefill the next phase during the current scan, targeting an 85 Hz phase cadence. Use `EpdTiming` for the measured rate and validate display quality on the target device.
+
+`EpdTiming` reports the software-measured SPV phase rate after updates with at least two completed phases. This is distinct from the full-image refresh rate.
+
+Common display scheduling coordinates rendering with physical updates while input and cancellation remain active. Shared book-cover cells load images in a bounded background worker. See the [display documentation](main/display/README.md#绘制调度与资源准备--rendering-and-resource-preparation) for the UI submission and lifetime rules.
 
 ### 9.2 State machine
 
@@ -457,7 +462,7 @@ See `main/display/screen/assistant_screen/README.md`.
 - Formats: `.ebook` / `.epub` / `.txt`; `.txt.idx` index; side-car cover `.a2i1`
 - Images shrink proportionally without enlarging small originals. Pagination and rendering share image slot dimensions, with images centered horizontally and vertically within each slot.
 - Grayscale images use fixed level-5 darkening (gamma 2.0), covering reading illustrations, covers, wallpaper thumbnails and previews, standby and shutdown wallpapers, photos, and assistant images. Midtones are darkened only during drawing, preserving pure black and white, source images, and caches. Text antialiasing and UI backgrounds remain unchanged; content configured for black-and-white display retains that policy. All refresh profiles and full-screen wallpapers share the same darkening curve and 16-level grayscale quantization rule.
-- EPUBs whose reading-order documents each contain one image and no body text, and `.ebook` files marked as page images, use full-page image reading. Images fit proportionally within the drawable area after subtracting all four reading margins and the footer. Chapter headings are not inserted. Text fonts, spacing, underlines, text antialiasing, writing mode, and reading backgrounds do not affect these pages; all settings remain available, including font selection, import, and management. Text preferences are saved with a notice that they do not apply to comics; they take effect when opening a text book. Margins, screen orientation, footer, and page-turn settings remain available. Complex CSS, image rotation, and synthetic spreads are not fully supported. Books exceeding the image-page inspection budget use normal text-and-image layout.
+- EPUBs whose reading-order documents each contain one image and no body text, and `.ebook` files marked as page images, use full-page image reading. Images fit proportionally within the drawable area after subtracting all four reading margins and the footer. Chapter headings are not inserted. Text fonts, line spacing, paragraph gaps, underlines, text antialiasing, writing mode, and reading backgrounds do not affect these pages; all settings remain available, including font selection, import, and management. Text preferences are saved with a notice that they do not apply to comics; they take effect when opening a text book. Margins, screen orientation, footer, and page-turn settings remain available. Complex CSS, image rotation, and synthetic spreads are not fully supported. Books exceeding the image-page inspection budget use normal text-and-image layout.
 - Comic footers use page numbers, and the progress panel offers previous/next page navigation. The current image loads first, followed by alternating forward/backward prefetch. The target is 3–10 images on each side, reduced or paused when memory is limited. The L8 cache holds at most 21 images, uses no more than half the available PSRAM, and leaves at least 2 MiB for decoding and other work. Cache hits display directly; misses show a centered loading message. Prefetch does not refresh the screen. Opening settings pauses prefetch. Orientation or drawable-area changes clear old-size entries; standby SD detachment and book closure release the cache.
 - TXT supports UTF-8 and GB18030 (including GBK/GB2312) with streaming decoding; no full-book conversion is required. Contents detection accepts chapter headings without leading indentation, up to 60 characters, filtering common dates, measurements, list markers, and obvious prose references. Dense contents excerpts that lack body text and repeat later in the book are excluded; contents appear in batches during scanning and are finalized after indexing. Glyph display depends on the selected font's character coverage.
 - Fonts: `.../fonts/*.ef`
@@ -470,10 +475,16 @@ See `main/display/screen/assistant_screen/README.md`.
 
 ### 11.4 Wallpaper and standby
 
+Open an image in Wallpaper, tap **Set as standby** or **Set as power-off**, then choose **Fullscreen wallpaper** or **Overlay current screen**. Fullscreen wallpaper replaces the screen; overlay mode keeps the screen shown before standby or power-off, in any application. Reopen the selected image's display-mode dialog to switch modes or choose **Clear selection**. Tap outside or press Back to close the dialog without changing settings. Standby and power-off each save one image and its display mode. Both modes fit images within the full panel while preserving aspect ratio, without enlarging small images, and center the result. Fullscreen wallpaper uses portrait orientation; overlay mode keeps the original screen orientation. PNG retains its own transparency. JPEG, A2L8 and ordinary A2I1 images cover their rectangle, including white pixels; A2I1 palette alpha is used when present. Transparent pixels retain the current screen; partial alpha blends against it.
+
+Failed thumbnails and previews show **Decode failed (code)**. Tapping **Set as standby** or **Set as power-off** shows the same message at the top without saving the selection. Codes: 1 = damaged or incomplete data, 2 = unsupported format, encoding or dimensions, 3 = insufficient memory, 4 = file read failure, 5 = decoding cancelled, 6 = invalid arguments, 7 = other decoder failure. Cancellation caused by leaving the page does not show an error.
+
+If an overlay cannot be read, the current screen is retained. If the base-frame allocation fails, the fullscreen wallpaper path is used. Powering off from standby builds the off overlay from the clean screen captured before standby, without stacking the standby image or loading notice. Wake restores the original application. Gallery previews use a white background. The existing rotate/mirror save operation writes A2L8 without transparency; select the original image when transparency is needed.
+
 - Gallery: `/sdcard/metalio/e-ink/wallpaper`, paged 3x3 browsing / enable. Listing and batch deletion have no fixed item limit; capacity depends on SD storage and available memory. Thumbnails are cached for the current and adjacent pages only.
 - Filenames: reading, wallpapers, reader fonts and transfers share a 246-byte UTF-8 limit, including the extension. Scanning and file operations use the same limit. Wallpaper Save As reserves space for its timestamp and extension without splitting UTF-8 characters.
 - **Standby routing** (`standby_screen`):
-  - Enabled standby wallpaper -> fullscreen A2I1
+  - Enabled standby wallpaper -> selected fullscreen or overlay mode
   - Else -> classic (date / lunar / weather / todos)
 - Shutdown image: NVS wallpaper first, else built-in `bg_shutdown.a2i1`
 - Startup first refreshes to white with a complete GC16 waveform, then reveals the home screen with a wipe. Refresh failures retain the recovery path.

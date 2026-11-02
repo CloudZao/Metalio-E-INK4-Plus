@@ -84,15 +84,8 @@
 #define EPD_BORDER EPD_PIN_BORDER
 #define CKV EPD_PIN_CKV
 
-typedef struct {
-    i2c_port_t port;
-    bool pwrup;
-    bool vcom_ctrl;
-    bool wakeup;
-} epd_config_register_t;
-
 static int vcom = EPD_VCOM_MV;
-static epd_config_register_t config_reg;
+static i2c_port_t s_ioexp_port = EPDIY_I2C_PORT;
 static bool interrupt_done = false;
 static SemaphoreHandle_t s_ioexp_irq_sem = NULL;
 static TaskHandle_t s_gpio2_irq_task = NULL;
@@ -191,42 +184,64 @@ void epd_board_metalio_eink4_plus_camera_release(void) {
 }
 static bool s_tps_ok = false;
 static bool s_lcd_bus_held = false;       // 入睡已拆 LCD 并置低总线脚
-// Port1 锁存：P12/P14 默认高（上电），关机脉冲默认低
-static uint8_t s_p1_out = (uint8_t)(CFG_PIN_TP_RST | CFG_PIN_BT_PA_PWR);
-static uint8_t s_motor_on = 0;             // Port0 马达位锁存，0 或 CFG_PIN_MOTOR
-static uint8_t s_pa_on = 0;                // Port0 PA_EN 锁存，0 或 CFG_PIN_PA_EN
-static bool s_bt_reset_pa_off = false;     // P14 复位期间屏蔽所有 PA 开启请求
-static uint8_t s_cam_scr_on = CFG_PIN_CAM_SCR; // Port0 P05 摄像/屏电，默认高
+typedef struct {
+    uint8_t desired; // 各功能请求合并后的输出锁存值
+    uint8_t confirmed; // 最近一次成功写入的输出锁存值
+    bool valid; // 失败或重新配置后，硬件输出状态不再视为已确认
+} ioexp_output_t;
 
-static uint8_t p0_output_value(void) {
-    uint8_t value = 0x00;
-    if (config_reg.pwrup) {
-        value |= CFG_PIN_PWRUP;
+static ioexp_output_t s_outputs[2] = {
+    [CFG_PORT_CTRL] = {.desired = CFG_PIN_CAM_SCR},
+    [CFG_PORT_INT] = {.desired = CFG_PIN_TP_RST | CFG_PIN_BT_PA_PWR},
+};
+static bool s_bt_reset_active; // 复位期间强制 PA 与 P14 低，不阻塞其他输出更新
+static bool s_bt_reset_motor_on; // 复位放电期间强制马达持续置高，屏蔽普通震动 PWM
+static const uint32_t kBtResetLowMs = 1000; // 蓝牙复位的最短断电等待时长 ms
+static StaticSemaphore_t s_output_mu_storage;
+static SemaphoreHandle_t s_output_mu;
+static portMUX_TYPE s_output_mu_init = portMUX_INITIALIZER_UNLOCKED;
+
+static void output_lock(void) {
+    portENTER_CRITICAL(&s_output_mu_init);
+    if (s_output_mu == NULL) {
+        s_output_mu = xSemaphoreCreateMutexStatic(&s_output_mu_storage);
     }
-    if (config_reg.vcom_ctrl) {
-        value |= CFG_PIN_VCOM_CTRL;
-    }
-    if (config_reg.wakeup) {
-        value |= CFG_PIN_WAKEUP;
-    }
-    value |= s_motor_on;
-    if (!s_bt_reset_pa_off) value |= s_pa_on;
-    value |= s_cam_scr_on;
-    return value;
+    portEXIT_CRITICAL(&s_output_mu_init);
+    // 锁次序固定为 shared_reset（需要时）→ output → I2C；不跨硬件等待持有 output。
+    xSemaphoreTake(s_output_mu, portMAX_DELAY);
 }
 
-static void p0_write(void) {
-    esp_err_t err = pca9555_set_value(config_reg.port, p0_output_value(), CFG_PORT_CTRL);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "p0_write: %s", esp_err_to_name(err));
-    }
+static void output_unlock(void) {
+    xSemaphoreGive(s_output_mu);
 }
 
-static void p1_write(void) {
-    esp_err_t err = pca9555_set_value(config_reg.port, s_p1_out, CFG_PORT_INT);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "p1_write: %s", esp_err_to_name(err));
+static esp_err_t output_write_locked(int port) {
+    ioexp_output_t* output = &s_outputs[port];
+    uint8_t value = output->desired;
+    if (s_bt_reset_active) {
+        value &= (uint8_t)~(port == CFG_PORT_CTRL ? CFG_PIN_PA_EN : CFG_PIN_BT_PA_PWR);
+        if (port == CFG_PORT_CTRL) {
+            value &= (uint8_t)~CFG_PIN_MOTOR;
+            if (s_bt_reset_motor_on) value |= CFG_PIN_MOTOR;
+        }
     }
+    if (output->valid && output->confirmed == value) return ESP_OK;
+    const esp_err_t err = pca9555_set_value(s_ioexp_port, value, port);
+    output->valid = err == ESP_OK;
+    if (err == ESP_OK) output->confirmed = value;
+    return err;
+}
+
+static esp_err_t output_update(int port, uint8_t mask, uint8_t value) {
+    output_lock();
+    s_outputs[port].desired = (s_outputs[port].desired & (uint8_t)~mask) | (value & mask);
+    esp_err_t err = s_ioexp_ok ? output_write_locked(port) : ESP_ERR_INVALID_STATE;
+    if (err == ESP_OK && s_bt_reset_active && port == CFG_PORT_CTRL &&
+        (mask & value & CFG_PIN_PA_EN)) {
+        err = ESP_ERR_INVALID_STATE;
+    }
+    output_unlock();
+    return err;
 }
 
 bool epd_board_metalio_eink4_plus_tps_ok(void) {
@@ -238,45 +253,69 @@ bool epd_board_metalio_eink4_plus_ioexp_ok(void) {
 }
 
 void epd_board_metalio_eink4_plus_motor_set(bool on) {
-    if (!s_ioexp_ok) {
-        return;
-    }
-    s_motor_on = on ? CFG_PIN_MOTOR : 0;
-    p0_write();
+    output_update(CFG_PORT_CTRL, CFG_PIN_MOTOR, on ? CFG_PIN_MOTOR : 0);
 }
 
-void epd_board_metalio_eink4_plus_pa_set(bool on) {
-    if (!s_ioexp_ok) {
-        return;
-    }
-    s_pa_on = on ? CFG_PIN_PA_EN : 0;
-    p0_write();
+esp_err_t epd_board_metalio_eink4_plus_pa_set(bool on) {
+    return output_update(CFG_PORT_CTRL, CFG_PIN_PA_EN, on ? CFG_PIN_PA_EN : 0);
 }
 
 esp_err_t epd_board_metalio_eink4_plus_bt_power_reset(void) {
-    if (!s_ioexp_ok) return ESP_ERR_INVALID_STATE;
-    s_bt_reset_pa_off = true;
-    s_pa_on = 0;
-    esp_err_t pa_err = pca9555_set_value(config_reg.port, p0_output_value(), CFG_PORT_CTRL);
+    output_lock();
+    if (!s_ioexp_ok || s_bt_reset_active) {
+        output_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_bt_reset_active = true;
+    s_bt_reset_motor_on = false;
+    s_outputs[CFG_PORT_CTRL].desired &= (uint8_t)~(CFG_PIN_PA_EN | CFG_PIN_MOTOR);
+    const esp_err_t pa_err = output_write_locked(CFG_PORT_CTRL);
     if (pa_err != ESP_OK) {
-        s_bt_reset_pa_off = false;
+        s_bt_reset_active = false;
+        output_unlock();
         return pa_err;
     }
-    s_p1_out &= (uint8_t)~CFG_PIN_BT_PA_PWR;
-    esp_err_t low_err = pca9555_set_value(config_reg.port, s_p1_out, CFG_PORT_INT);
+    const esp_err_t low_err = output_write_locked(CFG_PORT_INT);
+    esp_err_t motor_on_err = ESP_OK;
+    esp_err_t motor_off_err = ESP_OK;
     if (low_err == ESP_OK) {
-        ESP_LOGI(TAG, "BT reset: P14 low for 3000 ms");
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        s_bt_reset_motor_on = true;
+        motor_on_err = output_write_locked(CFG_PORT_CTRL);
+    }
+    output_unlock();
+    if (low_err == ESP_OK) {
+        ESP_LOGI(TAG, "BT reset: P14 low, motor pulse %u ms, power wait %lu ms",
+                 (unsigned)POWER_DISCHARGE_MOTOR_PULSE_MS, (unsigned long)kBtResetLowMs);
+        if (motor_on_err == ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(POWER_DISCHARGE_MOTOR_PULSE_MS));
+        }
+        output_lock();
+        s_bt_reset_motor_on = false;
+        s_outputs[CFG_PORT_CTRL].desired &= (uint8_t)~CFG_PIN_MOTOR;
+        motor_off_err = output_write_locked(CFG_PORT_CTRL);
+        output_unlock();
+        const uint32_t pulse_ms = motor_on_err == ESP_OK ? POWER_DISCHARGE_MOTOR_PULSE_MS : 0;
+        if (kBtResetLowMs > pulse_ms) {
+            vTaskDelay(pdMS_TO_TICKS(kBtResetLowMs - pulse_ms));
+        }
     }
     // 即使拉低失败也尝试恢复电源，并保持共享端口其他位。
-    s_p1_out |= CFG_PIN_BT_PA_PWR;
-    esp_err_t high_err = pca9555_set_value(config_reg.port, s_p1_out, CFG_PORT_INT);
-    // 不恢复复位期间到达的 PA 开启请求，完成后仍保持低。
-    s_pa_on = 0;
-    s_bt_reset_pa_off = false;
+    output_lock();
+    s_bt_reset_motor_on = false;
+    s_outputs[CFG_PORT_CTRL].desired &= (uint8_t)~(CFG_PIN_PA_EN | CFG_PIN_MOTOR);
+    const esp_err_t off_err = output_write_locked(CFG_PORT_CTRL);
+    s_bt_reset_active = false;
+    const esp_err_t high_err = output_write_locked(CFG_PORT_INT);
+    const bool rail_on = (s_outputs[CFG_PORT_INT].desired & CFG_PIN_BT_PA_PWR) != 0;
+    output_unlock();
     if (high_err != ESP_OK) return high_err;
+    if (off_err != ESP_OK) return off_err;
+    if (!rail_on) return ESP_ERR_INVALID_STATE;
+    if (low_err != ESP_OK) return low_err;
+    if (motor_on_err != ESP_OK) return motor_on_err;
+    if (motor_off_err != ESP_OK) return motor_off_err;
     ESP_LOGI(TAG, "BT reset: P14 high");
-    return low_err;
+    return ESP_OK;
 }
 
 void epd_board_metalio_eink4_plus_ana_sw_set(bool high) {
@@ -289,26 +328,34 @@ void epd_board_metalio_eink4_plus_ana_sw_set(bool high) {
     gpio_set_level(ANA_SW_GPIO, high ? 1 : 0);
 }
 
-void epd_board_metalio_eink4_plus_sleep_cut_rails(void) {
-    if (!s_ioexp_ok) {
-        return;
+esp_err_t epd_board_metalio_eink4_plus_sleep_cut_rails(void) {
+    output_lock();
+    s_outputs[CFG_PORT_CTRL].desired &= (uint8_t)~CFG_PIN_CAM_SCR;
+    esp_err_t err = s_ioexp_ok ? output_write_locked(CFG_PORT_CTRL) : ESP_ERR_INVALID_STATE;
+    if (err == ESP_OK) {
+        s_outputs[CFG_PORT_INT].desired &= (uint8_t)~CFG_PIN_BT_PA_PWR;
+        err = output_write_locked(CFG_PORT_INT);
     }
-    s_cam_scr_on = 0;
-    p0_write();
-    s_p1_out &= (uint8_t)~CFG_PIN_BT_PA_PWR;
-    p1_write();
-    ESP_LOGI(TAG, "sleep cut P5 then P14");
+    output_unlock();
+    if (err == ESP_OK) ESP_LOGI(TAG, "sleep cut P5 then P14");
+    return err;
 }
 
-void epd_board_metalio_eink4_plus_sleep_restore_rails(void) {
-    if (!s_ioexp_ok) {
-        return;
+esp_err_t epd_board_metalio_eink4_plus_sleep_restore_rails(void) {
+    output_lock();
+    if (s_bt_reset_active) {
+        output_unlock();
+        return ESP_ERR_INVALID_STATE;
     }
-    s_p1_out |= CFG_PIN_BT_PA_PWR;
-    p1_write();
-    s_cam_scr_on = CFG_PIN_CAM_SCR;
-    p0_write();
-    ESP_LOGI(TAG, "sleep restore P14 then P5");
+    s_outputs[CFG_PORT_INT].desired |= CFG_PIN_BT_PA_PWR;
+    esp_err_t err = s_ioexp_ok ? output_write_locked(CFG_PORT_INT) : ESP_ERR_INVALID_STATE;
+    if (err == ESP_OK) {
+        s_outputs[CFG_PORT_CTRL].desired |= CFG_PIN_CAM_SCR;
+        err = output_write_locked(CFG_PORT_CTRL);
+    }
+    output_unlock();
+    if (err == ESP_OK) ESP_LOGI(TAG, "sleep restore P14 then P5");
+    return err;
 }
 
 bool epd_board_metalio_eink4_plus_ioexp_get_level(int io) {
@@ -318,7 +365,7 @@ bool epd_board_metalio_eink4_plus_ioexp_get_level(int io) {
     }
     const int port = CFG_IO_PORT(io);
     uint8_t v = s_last[port];
-    if (pca9555_read_input_ex(config_reg.port, port, &v) == ESP_OK) {
+    if (pca9555_read_input_ex(s_ioexp_port, port, &v) == ESP_OK) {
         s_last[port] = v;
     }
     return (s_last[port] & CFG_IO_BIT(io)) != 0;
@@ -328,7 +375,7 @@ bool epd_board_metalio_eink4_plus_ioexp_read_port(int port, uint8_t* out) {
     if (!s_ioexp_ok || out == NULL || port < 0 || port > 1) {
         return false;
     }
-    return pca9555_read_input_ex(config_reg.port, port, out) == ESP_OK;
+    return pca9555_read_input_ex(s_ioexp_port, port, out) == ESP_OK;
 }
 
 bool epd_board_metalio_eink4_plus_ioexp_irq_wait(uint32_t timeout_ms) {
@@ -343,24 +390,27 @@ void epd_board_metalio_eink4_plus_gpio2_irq_subscribe(TaskHandle_t task) {
     s_gpio2_irq_task = task;
 }
 
-void epd_board_metalio_eink4_plus_tps_enter_sleep(void) {
+esp_err_t epd_board_metalio_eink4_plus_tps_enter_sleep(void) {
     if (!s_ioexp_ok) {
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
     // tip 的 poweroff 往往已把三脚拉低；SLEEP 过渡期勿再打 I2C，只补等待
-    const bool already =
-        !config_reg.vcom_ctrl && !config_reg.pwrup && !config_reg.wakeup;
+    output_lock();
+    const ioexp_output_t* p0 = &s_outputs[CFG_PORT_CTRL];
+    const bool already = p0->valid &&
+        ((p0->confirmed | p0->desired) & CFG_P0_TPS_OUT_MASK) == 0;
+    output_unlock();
     if (!already) {
         // 手册 8.4：PWRUP/VCOM↓ → WAKEUP↓ → 等 ≥100ms
-        config_reg.vcom_ctrl = false;
-        config_reg.pwrup = false;
-        p0_write();
+        esp_err_t err = output_update(CFG_PORT_CTRL, CFG_PIN_VCOM_CTRL | CFG_PIN_PWRUP, 0);
+        if (err != ESP_OK) return err;
         vTaskDelay(pdMS_TO_TICKS(50));
-        config_reg.wakeup = false;
-        p0_write();
+        err = output_update(CFG_PORT_CTRL, CFG_PIN_WAKEUP, 0);
+        if (err != ESP_OK) return err;
     }
     vTaskDelay(pdMS_TO_TICKS(120));
     ESP_LOGI(TAG, "TPS SLEEP ready (already=%d)", already ? 1 : 0);
+    return ESP_OK;
 }
 
 static const gpio_num_t k_epd_bus_pins[] = {
@@ -475,32 +525,36 @@ void epd_board_metalio_eink4_plus_boot_release_holds(void) {
     ESP_LOGI(TAG, "boot: released EPD/SD/I2C/FL gpio holds");
 }
 
-void epd_board_metalio_eink4_plus_ioexp_mask_for_sleep(void) {
+esp_err_t epd_board_metalio_eink4_plus_ioexp_mask_for_sleep(void) {
     if (!s_ioexp_ok) {
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
     // Port0：TPS 三位与 PWR_GOOD 输出低；Motor/PA/P5 保持当前锁存
-    config_reg.pwrup = false;
-    config_reg.vcom_ctrl = false;
-    config_reg.wakeup = false;
-    const uint8_t p0_out = p0_output_value();
-    pca9555_set_value(config_reg.port, p0_out, CFG_PORT_CTRL);
-    pca9555_set_config(config_reg.port, 0x00, CFG_PORT_CTRL);
+    output_lock();
+    s_outputs[CFG_PORT_CTRL].desired &= (uint8_t)~CFG_P0_TPS_OUT_MASK;
+    esp_err_t err = output_write_locked(CFG_PORT_CTRL);
+    if (err == ESP_OK) err = pca9555_set_config(s_ioexp_port, 0x00, CFG_PORT_CTRL);
 
     // Port1：P12/P14 锁存保留；音量/电源脚驱空闲高（勿驱低，醒后改输入会假出按下→松开）；P13 低
-    const uint8_t rail = (uint8_t)(s_p1_out & CFG_P1_RAIL_MASK);
+    const uint8_t rail = (uint8_t)(s_outputs[CFG_PORT_INT].desired & CFG_P1_RAIL_MASK);
     const uint8_t keys_idle = (uint8_t)(CFG_IO_BIT(EPD_IO_VOL_UP) | CFG_IO_BIT(EPD_IO_VOL_DOWN) |
                                         CFG_IO_BIT(EPD_IO_POWER));
-    s_p1_out = (uint8_t)((rail | keys_idle) & (uint8_t)~CFG_PIN_PWR_PULSE);
-    pca9555_set_value(config_reg.port, s_p1_out, CFG_PORT_INT);
-    pca9555_set_config(config_reg.port, 0x00, CFG_PORT_INT);
+    if (err == ESP_OK) {
+        s_outputs[CFG_PORT_INT].desired = (uint8_t)((rail | keys_idle) & (uint8_t)~CFG_PIN_PWR_PULSE);
+        err = output_write_locked(CFG_PORT_INT);
+        if (err == ESP_OK) err = pca9555_set_config(s_ioexp_port, 0x00, CFG_PORT_INT);
+    }
+    output_unlock();
+    if (err != ESP_OK) return err;
 
     uint8_t p0 = 0;
     uint8_t p1 = 0;
-    pca9555_read_input_ex(config_reg.port, CFG_PORT_CTRL, &p0);
-    pca9555_read_input_ex(config_reg.port, CFG_PORT_INT, &p1);
+    err = pca9555_read_input_ex(s_ioexp_port, CFG_PORT_CTRL, &p0);
+    if (err == ESP_OK) err = pca9555_read_input_ex(s_ioexp_port, CFG_PORT_INT, &p1);
+    if (err != ESP_OK) return err;
     ESP_LOGI(TAG, "sleep mask all-out TPS=low keys=idle-high INT_GPIO=%d P0=0x%02X P1=0x%02X",
              gpio_get_level(CFG_INTR), p0, p1);
+    return ESP_OK;
 }
 
 bool epd_board_metalio_eink4_plus_ioexp_enable_power_wake_pin(void) {
@@ -508,39 +562,41 @@ bool epd_board_metalio_eink4_plus_ioexp_enable_power_wake_pin(void) {
         return false;
     }
     // P17 锁存已是高；改输入时同电平，尽量无假边沿
-    if (pca9555_set_config(config_reg.port, CFG_IO_BIT(EPD_IO_POWER), CFG_PORT_INT) != ESP_OK) {
+    if (pca9555_set_config(s_ioexp_port, CFG_IO_BIT(EPD_IO_POWER), CFG_PORT_INT) != ESP_OK) {
         ESP_LOGW(TAG, "enable P17 input fail");
         return false;
     }
     return true;
 }
 
-void epd_board_metalio_eink4_plus_ioexp_restore_keys(void) {
+esp_err_t epd_board_metalio_eink4_plus_ioexp_restore_keys(void) {
     if (!s_ioexp_ok) {
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
-    pca9555_set_value(config_reg.port, p0_output_value(), CFG_PORT_CTRL);
-    pca9555_set_config(config_reg.port, CFG_P0_INPUT_MASK, CFG_PORT_CTRL);
+    output_lock();
+    esp_err_t err = output_write_locked(CFG_PORT_CTRL);
+    if (err == ESP_OK) err = pca9555_set_config(s_ioexp_port, CFG_P0_INPUT_MASK, CFG_PORT_CTRL);
 
     // 保留 P12/P14 锁存；清关机脉冲；按键脚改回输入（P16 仍为 RTC_INT 输入）
-    s_p1_out = (uint8_t)((s_p1_out & CFG_P1_RAIL_MASK) & (uint8_t)~CFG_PIN_PWR_PULSE);
-    pca9555_set_value(config_reg.port, s_p1_out, CFG_PORT_INT);
-    pca9555_set_config(config_reg.port, CFG_P1_INPUT_MASK, CFG_PORT_INT);
+    if (err == ESP_OK) {
+        s_outputs[CFG_PORT_INT].desired &= CFG_P1_RAIL_MASK;
+        err = output_write_locked(CFG_PORT_INT);
+        if (err == ESP_OK) err = pca9555_set_config(s_ioexp_port, CFG_P1_INPUT_MASK, CFG_PORT_INT);
+    }
+    output_unlock();
+    if (err != ESP_OK) return err;
 
     uint8_t p0 = 0;
     uint8_t p1 = 0;
-    pca9555_read_input_ex(config_reg.port, CFG_PORT_CTRL, &p0);
-    pca9555_read_input_ex(config_reg.port, CFG_PORT_INT, &p1);
+    err = pca9555_read_input_ex(s_ioexp_port, CFG_PORT_CTRL, &p0);
+    if (err == ESP_OK) err = pca9555_read_input_ex(s_ioexp_port, CFG_PORT_INT, &p1);
+    if (err != ESP_OK) return err;
     ESP_LOGI(TAG, "keys restore P0=0x%02X P1=0x%02X INT_GPIO=%d", p0, p1, gpio_get_level(CFG_INTR));
+    return ESP_OK;
 }
 
 static void p1_pwr_pulse_set(bool high) {
-    if (high) {
-        s_p1_out |= CFG_PIN_PWR_PULSE;
-    } else {
-        s_p1_out &= (uint8_t)~CFG_PIN_PWR_PULSE;
-    }
-    p1_write();
+    output_update(CFG_PORT_INT, CFG_PIN_PWR_PULSE, high ? CFG_PIN_PWR_PULSE : 0);
 }
 
 void epd_board_metalio_eink4_plus_pwr_key_pulse_train(void) {
@@ -566,14 +622,14 @@ void epd_board_metalio_eink4_plus_tp_reset(void) {
     }
     SemaphoreHandle_t mu = shared_reset_mutex();
     xSemaphoreTake(mu, portMAX_DELAY);
-    s_p1_out &= (uint8_t)~CFG_PIN_TP_RST;
-    pca9555_set_value(config_reg.port, s_p1_out, CFG_PORT_INT);
+    const esp_err_t low_err = output_update(CFG_PORT_INT, CFG_PIN_TP_RST, 0);
     vTaskDelay(pdMS_TO_TICKS(10)); // Trst ≥ 5ms
-    s_p1_out |= CFG_PIN_TP_RST;
-    pca9555_set_value(config_reg.port, s_p1_out, CFG_PORT_INT);
+    const esp_err_t high_err = output_update(CFG_PORT_INT, CFG_PIN_TP_RST, CFG_PIN_TP_RST);
     vTaskDelay(pdMS_TO_TICKS(300)); // Trsi ≥ 300ms
     xSemaphoreGive(mu);
-    ESP_LOGI(TAG, "TP RST pulse on TCA P1%d (io=%d)", EPD_IO_TP_RST & 7, EPD_IO_TP_RST);
+    if (low_err == ESP_OK && high_err == ESP_OK) {
+        ESP_LOGI(TAG, "TP RST pulse on TCA P1%d (io=%d)", EPD_IO_TP_RST & 7, EPD_IO_TP_RST);
+    }
 }
 
 static esp_err_t i2c_probe_addr(i2c_port_t port, uint8_t addr_7bit) {
@@ -610,20 +666,25 @@ static bool probe_and_init_ioexp(i2c_port_t port) {
             ESP_LOGW(TAG, "set_config port0 fail at 0x%02X", addr);
             continue;
         }
-        s_cam_scr_on = CFG_PIN_CAM_SCR;
-        s_motor_on = 0;
-        s_pa_on = 0;
-        if (pca9555_set_value(port, p0_output_value(), CFG_PORT_CTRL) != ESP_OK) {
+        output_lock();
+        s_outputs[CFG_PORT_CTRL].desired = CFG_PIN_CAM_SCR;
+        s_outputs[CFG_PORT_CTRL].valid = false;
+        if (output_write_locked(CFG_PORT_CTRL) != ESP_OK) {
+            output_unlock();
             continue;
         }
         /* Port1：P12/P14 输出拉高、关机脉冲默认低；P16=RTC_INT 输入 */
-        s_p1_out = (uint8_t)(CFG_PIN_TP_RST | CFG_PIN_BT_PA_PWR);
-        if (pca9555_set_value(port, s_p1_out, CFG_PORT_INT) != ESP_OK) {
+        s_outputs[CFG_PORT_INT].desired = CFG_PIN_TP_RST | CFG_PIN_BT_PA_PWR;
+        s_outputs[CFG_PORT_INT].valid = false;
+        if (output_write_locked(CFG_PORT_INT) != ESP_OK) {
+            output_unlock();
             continue;
         }
         if (pca9555_set_config(port, CFG_P1_INPUT_MASK, CFG_PORT_INT) != ESP_OK) {
+            output_unlock();
             continue;
         }
+        output_unlock();
         ESP_LOGI(TAG,
                  "TPS↔TCA: VCOM=P%d PWRUP=P%d WAKE=P%d PG=P%d | P5/P12/P14 out P16=RTC_IN | P0=0x%02X",
                  EPD_TPS_IO_VCOM_CTRL, EPD_TPS_IO_PWRUP, EPD_TPS_IO_WAKEUP, EPD_TPS_IO_PWR_GOOD,
@@ -643,18 +704,13 @@ static void epd_board_init(uint32_t epd_row_width) {
         return;
     }
 
-    config_reg.port = EPDIY_I2C_PORT;
-    config_reg.pwrup = false;
-    config_reg.vcom_ctrl = false;
-    config_reg.wakeup = false;
-
-    s_ioexp_ok = probe_and_init_ioexp(config_reg.port);
+    s_ioexp_ok = probe_and_init_ioexp(s_ioexp_port);
     // 深睡曾关 P14(VOUT)：TCA 锁存仍低，上面已拉高；等轨稳定再启 TPS
     if (s_ioexp_ok) {
         vTaskDelay(pdMS_TO_TICKS(80));
     }
     epd_board_metalio_eink4_plus_ana_sw_set(true); // GPIO36 默认高（非虚拟 U 盘）
-    i2c_scan_log(config_reg.port); // 启动即扫；此时 TPS 多半仍 SLEEP，可能只有 TCA
+    i2c_scan_log(s_ioexp_port); // 启动即扫；此时 TPS 多半仍 SLEEP，可能只有 TCA
     if (!s_ioexp_ok) {
         ESP_LOGE(TAG, "TCA9555 not found; continue (panel power unavailable)");
     }
@@ -678,8 +734,8 @@ static void epd_board_init(uint32_t epd_row_width) {
     }
     // 读口清 TCA INT，避免上电残留一直拉低
     if (s_ioexp_ok) {
-        pca9555_read_input(config_reg.port, CFG_PORT_CTRL);
-        pca9555_read_input(config_reg.port, CFG_PORT_INT);
+        pca9555_read_input(s_ioexp_port, CFG_PORT_CTRL);
+        pca9555_read_input(s_ioexp_port, CFG_PORT_INT);
     }
 
     epd_ctrl_gpios_out_low();
@@ -700,12 +756,17 @@ static void epd_board_deinit(void) {
     epd_lcd_deinit();
 
     if (s_ioexp_ok) {
-        s_motor_on = 0;
-        pca9555_set_config(config_reg.port, 0xFF, CFG_PORT_CTRL);
-        pca9555_set_config(config_reg.port, 0xFF, CFG_PORT_INT);
+        output_lock();
+        s_outputs[CFG_PORT_CTRL].desired &= (uint8_t)~CFG_PIN_MOTOR;
+        pca9555_set_config(s_ioexp_port, 0xFF, CFG_PORT_CTRL);
+        pca9555_set_config(s_ioexp_port, 0xFF, CFG_PORT_INT);
+        s_outputs[CFG_PORT_CTRL].valid = false;
+        s_outputs[CFG_PORT_INT].valid = false;
+        s_ioexp_ok = false;
+        output_unlock();
 
         int tries = 0;
-        while ((pca9555_read_input(config_reg.port, CFG_PORT_CTRL) & CFG_PIN_PWRGOOD) != 0) {
+        while ((pca9555_read_input(s_ioexp_port, CFG_PORT_CTRL) & CFG_PIN_PWRGOOD) != 0) {
             if (tries >= 50) {
                 ESP_LOGE(TAG, "TPS65185 shutdown timeout");
                 break;
@@ -715,15 +776,16 @@ static void epd_board_deinit(void) {
         }
 
         vTaskDelay(50);
-        pca9555_read_input(config_reg.port, CFG_PORT_CTRL);
-        pca9555_read_input(config_reg.port, CFG_PORT_INT);
+        pca9555_read_input(s_ioexp_port, CFG_PORT_CTRL);
+        pca9555_read_input(s_ioexp_port, CFG_PORT_INT);
     }
     const esp_err_t i2c_err = metalio_i2c1_deinit();
     if (i2c_err != ESP_OK) ESP_LOGW(TAG, "new I2C1 deinit: %s", esp_err_to_name(i2c_err));
     gpio_isr_handler_remove(CFG_INTR);
 }
 
-static void epd_board_set_ctrl(epd_ctrl_state_t* state, const epd_ctrl_state_t* const mask) {
+static esp_err_t set_ctrl_with_tps(epd_ctrl_state_t* state, const epd_ctrl_state_t* mask,
+                                    uint8_t tps_mask, uint8_t tps_value) {
     if (mask->ep_output_enable) {
         gpio_set_level(EPD_OE, state->ep_output_enable ? 1 : 0);
     }
@@ -732,14 +794,16 @@ static void epd_board_set_ctrl(epd_ctrl_state_t* state, const epd_ctrl_state_t* 
     }
 
     if (!s_ioexp_ok) {
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
-    if (mask->ep_output_enable || mask->ep_mode || mask->ep_stv) {
-        esp_err_t err = pca9555_set_value(config_reg.port, p0_output_value(), CFG_PORT_CTRL);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "pca9555_set_value: %s", esp_err_to_name(err));
-        }
+    if (tps_mask || mask->ep_output_enable || mask->ep_mode || mask->ep_stv) {
+        return output_update(CFG_PORT_CTRL, tps_mask, tps_value);
     }
+    return ESP_OK;
+}
+
+static void epd_board_set_ctrl(epd_ctrl_state_t* state, const epd_ctrl_state_t* const mask) {
+    set_ctrl_with_tps(state, mask, 0, 0);
 }
 
 /**
@@ -767,15 +831,12 @@ static void epd_board_poweron_once(epd_ctrl_state_t* state) {
     state->ep_mode = false;
 
     // 1) PWRUP 低 + WAKEUP 高 → STANDBY，I2C 可用
-    config_reg.wakeup = true;
-    config_reg.pwrup = false;
-    config_reg.vcom_ctrl = false;
-    epd_board_set_ctrl(state, &mask);
+    if (set_ctrl_with_tps(state, &mask, CFG_P0_TPS_OUT_MASK, CFG_PIN_WAKEUP) != ESP_OK) return;
     // 深睡后 TPS 从 SLEEP 醒：多等一会再碰寄存器
     vTaskDelay(pdMS_TO_TICKS(50));
 
     esp_err_t probe = ESP_FAIL;
-    probe = tps_probe(config_reg.port);
+    probe = tps_probe(s_ioexp_port);
     if (probe != ESP_OK) {
         ESP_LOGE(TAG, "TPS probe failed: %s", esp_err_to_name(probe));
         return;
@@ -783,16 +844,16 @@ static void epd_board_poweron_once(epd_ctrl_state_t* state) {
 
     // 2) 先读版本号
     uint8_t revid = 0;
-    esp_err_t revid_err = tps_read_register_ex(config_reg.port, TPS_REG_REVID, &revid);
+    esp_err_t revid_err = tps_read_register_ex(s_ioexp_port, TPS_REG_REVID, &revid);
     ESP_LOGI(TAG, "STANDBY REVID(%s)=0x%02X probe=%s", esp_err_to_name(revid_err), revid,
              esp_err_to_name(probe));
 
     // 3) 配置升压时序；写失败交给完整上电重试。
-    esp_err_t up0 = tps_write_register(config_reg.port, TPS_REG_UPSEQ0, 0xE4);
-    esp_err_t up1 = tps_write_register(config_reg.port, TPS_REG_UPSEQ1, 0x55);
+    esp_err_t up0 = tps_write_register(s_ioexp_port, TPS_REG_UPSEQ0, 0xE4);
+    esp_err_t up1 = tps_write_register(s_ioexp_port, TPS_REG_UPSEQ1, 0x55);
     ESP_LOGI(TAG, "UPSEQ0 write %s read=0x%02X; UPSEQ1 write %s read=0x%02X", esp_err_to_name(up0),
-             tps_read_register(config_reg.port, TPS_REG_UPSEQ0), esp_err_to_name(up1),
-             tps_read_register(config_reg.port, TPS_REG_UPSEQ1));
+             tps_read_register(s_ioexp_port, TPS_REG_UPSEQ0), esp_err_to_name(up1),
+             tps_read_register(s_ioexp_port, TPS_REG_UPSEQ1));
 
     if (revid_err != ESP_OK || up0 != ESP_OK || up1 != ESP_OK) {
         ESP_LOGE(TAG, "TPS standby configuration failed");
@@ -802,44 +863,42 @@ static void epd_board_poweron_once(epd_ctrl_state_t* state) {
     // PWRUP 拉高前：读 INT2(0x08) / PG(0x0F)
     uint8_t int2_pre = 0;
     uint8_t pg_pre = 0;
-    esp_err_t e_int2_pre = tps_read_register_ex(config_reg.port, TPS_REG_INT2, &int2_pre);
-    esp_err_t e_pg_pre = tps_read_register_ex(config_reg.port, TPS_REG_PG, &pg_pre);
+    esp_err_t e_int2_pre = tps_read_register_ex(s_ioexp_port, TPS_REG_INT2, &int2_pre);
+    esp_err_t e_pg_pre = tps_read_register_ex(s_ioexp_port, TPS_REG_PG, &pg_pre);
     ESP_LOGI(TAG, "before PWRUP: INT2(%s)=0x%02X PG(%s)=0x%02X", esp_err_to_name(e_int2_pre),
              int2_pre, esp_err_to_name(e_pg_pre), pg_pre);
 
     // 4) 配置成功后拉高 PWRUP（上升沿）
-    config_reg.pwrup = true;
-    config_reg.vcom_ctrl = true;
-    epd_board_set_ctrl(state, &mask);
+    if (set_ctrl_with_tps(state, &mask, CFG_PIN_PWRUP | CFG_PIN_VCOM_CTRL,
+                          CFG_PIN_PWRUP | CFG_PIN_VCOM_CTRL) != ESP_OK) return;
     ESP_LOGI(TAG, "PWRUP high (after UPSEQ)");
     vTaskDelay(pdMS_TO_TICKS(50)); // 等升压启动片刻再采一次
 
     // PWRUP 拉高后：再读 INT2 / PG
     uint8_t int2_post = 0;
     uint8_t pg_post = 0;
-    esp_err_t e_int2_post = tps_read_register_ex(config_reg.port, TPS_REG_INT2, &int2_post);
-    esp_err_t e_pg_post = tps_read_register_ex(config_reg.port, TPS_REG_PG, &pg_post);
+    esp_err_t e_int2_post = tps_read_register_ex(s_ioexp_port, TPS_REG_INT2, &int2_post);
+    esp_err_t e_pg_post = tps_read_register_ex(s_ioexp_port, TPS_REG_PG, &pg_post);
     ESP_LOGI(TAG, "after PWRUP+50ms: INT2(%s)=0x%02X PG(%s)=0x%02X", esp_err_to_name(e_int2_post),
              int2_post, esp_err_to_name(e_pg_post), pg_post);
 
     bool success = false;
-    config_reg.pwrup = true;
-    config_reg.vcom_ctrl = true;
-    epd_board_set_ctrl(state, &mask);
+    if (set_ctrl_with_tps(state, &mask, CFG_PIN_PWRUP | CFG_PIN_VCOM_CTRL,
+                          CFG_PIN_PWRUP | CFG_PIN_VCOM_CTRL) != ESP_OK) return;
 
     // demo：只等扩展器 GPIO PWR_GOOD，成功前不写 ENABLE
     for (int wait_ms = 0; wait_ms < 200; ++wait_ms) {
-        uint8_t p0 = pca9555_read_input(config_reg.port, CFG_PORT_CTRL);
+        uint8_t p0 = pca9555_read_input(s_ioexp_port, CFG_PORT_CTRL);
         if (p0 & CFG_PIN_PWRGOOD) {
             ESP_LOGI(TAG, "PWR_GOOD ok p0=0x%02X @%dms", p0, wait_ms);
             success = true;
             break;
         }
         if (wait_ms == 0 || (wait_ms % 50) == 49) {
-            uint8_t en = (probe == ESP_OK) ? tps_read_register(config_reg.port, TPS_REG_ENABLE) : 0;
-            uint8_t pg = (probe == ESP_OK) ? tps_read_register(config_reg.port, TPS_REG_PG) : 0;
-            uint8_t int1 = (probe == ESP_OK) ? tps_read_register(config_reg.port, TPS_REG_INT1) : 0;
-            uint8_t int2 = (probe == ESP_OK) ? tps_read_register(config_reg.port, TPS_REG_INT2) : 0;
+            uint8_t en = (probe == ESP_OK) ? tps_read_register(s_ioexp_port, TPS_REG_ENABLE) : 0;
+            uint8_t pg = (probe == ESP_OK) ? tps_read_register(s_ioexp_port, TPS_REG_PG) : 0;
+            uint8_t int1 = (probe == ESP_OK) ? tps_read_register(s_ioexp_port, TPS_REG_INT1) : 0;
+            uint8_t int2 = (probe == ESP_OK) ? tps_read_register(s_ioexp_port, TPS_REG_INT2) : 0;
             ESP_LOGI(TAG, "wait GPIO PG... p0=0x%02X ENABLE=0x%02X PG=0x%02X INT1=0x%02X INT2=0x%02X",
                      p0, en, pg, int1, int2);
         }
@@ -847,11 +906,11 @@ static void epd_board_poweron_once(epd_ctrl_state_t* state) {
     }
 
     if (!success) {
-        uint8_t p0 = pca9555_read_input(config_reg.port, CFG_PORT_CTRL);
-        uint8_t en = (probe == ESP_OK) ? tps_read_register(config_reg.port, TPS_REG_ENABLE) : 0;
-        uint8_t pg = (probe == ESP_OK) ? tps_read_register(config_reg.port, TPS_REG_PG) : 0;
-        uint8_t int1 = (probe == ESP_OK) ? tps_read_register(config_reg.port, TPS_REG_INT1) : 0;
-        uint8_t int2 = (probe == ESP_OK) ? tps_read_register(config_reg.port, TPS_REG_INT2) : 0;
+        uint8_t p0 = pca9555_read_input(s_ioexp_port, CFG_PORT_CTRL);
+        uint8_t en = (probe == ESP_OK) ? tps_read_register(s_ioexp_port, TPS_REG_ENABLE) : 0;
+        uint8_t pg = (probe == ESP_OK) ? tps_read_register(s_ioexp_port, TPS_REG_PG) : 0;
+        uint8_t int1 = (probe == ESP_OK) ? tps_read_register(s_ioexp_port, TPS_REG_INT1) : 0;
+        uint8_t int2 = (probe == ESP_OK) ? tps_read_register(s_ioexp_port, TPS_REG_INT2) : 0;
         ESP_LOGE(TAG,
                  "TPS PowerOn failed; p0=0x%02X REVID=0x%02X ENABLE=0x%02X INT1=0x%02X INT2=0x%02X "
                  "PG=0x%02X (check VDD4.2V / L6 L7)",
@@ -862,15 +921,15 @@ static void epd_board_poweron_once(epd_ctrl_state_t* state) {
 
     // demo：GPIO PG 成功后再写寄存器
     if (probe == ESP_OK) {
-        esp_err_t err = tps_write_register(config_reg.port, TPS_REG_ENABLE, 0x3F);
+        esp_err_t err = tps_write_register(s_ioexp_port, TPS_REG_ENABLE, 0x3F);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "tps ENABLE write: %s", esp_err_to_name(err));
             s_tps_ok = false;
             return;
         }
         const unsigned value = vcom / 10;
-        err = tps_write_register(config_reg.port, 4, (value & 0x100) >> 8);
-        if (err == ESP_OK) err = tps_write_register(config_reg.port, 3, value & 0xff);
+        err = tps_write_register(s_ioexp_port, 4, (value & 0x100) >> 8);
+        if (err == ESP_OK) err = tps_write_register(s_ioexp_port, 3, value & 0xff);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "TPS VCOM write: %s", esp_err_to_name(err));
             return;
@@ -882,7 +941,7 @@ static void epd_board_poweron_once(epd_ctrl_state_t* state) {
     epd_board_set_ctrl(state, &sth_mask);
 
     int tries = 0;
-    while (probe == ESP_OK && !((tps_read_register(config_reg.port, TPS_REG_PG) & 0xFA) == 0xFA)) {
+    while (probe == ESP_OK && !((tps_read_register(s_ioexp_port, TPS_REG_PG) & 0xFA) == 0xFA)) {
         if (tries >= 200) {
             ESP_LOGE(TAG, "TPS PG register timeout");
             s_tps_ok = false;
@@ -894,7 +953,7 @@ static void epd_board_poweron_once(epd_ctrl_state_t* state) {
 
     state->ep_output_enable = true;
     epd_ctrl_state_t out_mask = {.ep_output_enable = true};
-    epd_board_set_ctrl(state, &out_mask);
+    if (set_ctrl_with_tps(state, &out_mask, 0, 0) != ESP_OK) return;
     s_tps_ok = true;
     ESP_LOGI(TAG, "TPS PowerOn ok vcom=%d mV", vcom);
 }
@@ -927,6 +986,7 @@ static void epd_board_measure_vcom(epd_ctrl_state_t* state) {
 }
 
 static void epd_board_poweroff(epd_ctrl_state_t* state) {
+    s_tps_ok = false;
     epd_ctrl_state_t mask = {
         .ep_stv = true,
         .ep_output_enable = true,
@@ -938,12 +998,9 @@ static void epd_board_poweroff(epd_ctrl_state_t* state) {
     epd_board_set_ctrl(state, &mask);
     // E0470A14-AF 6.1: XOE LOW must precede VPOS/VNEG OFF by >=12us.
     esp_rom_delay_us(12);
-    config_reg.vcom_ctrl = false;
-    config_reg.pwrup = false;
-    epd_board_set_ctrl(state, &mask);
+    if (set_ctrl_with_tps(state, &mask, CFG_PIN_VCOM_CTRL | CFG_PIN_PWRUP, 0) != ESP_OK) return;
     vTaskDelay(1);
-    config_reg.wakeup = false;
-    epd_board_set_ctrl(state, &mask);
+    set_ctrl_with_tps(state, &mask, CFG_PIN_WAKEUP, 0);
 }
 
 static float epd_board_ambient_temperature(void) {

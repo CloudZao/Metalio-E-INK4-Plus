@@ -7,6 +7,7 @@
 #include "assets/lang_haptic.h"
 #include "assets/lang_network.h"
 #include "assets/lang_charging.h"
+#include "assets/lang_wallpaper.h"
 #include "assets/lang_bluetooth.h"
 
 #include "settings.h"
@@ -64,6 +65,7 @@
     X(BOOK_PRESET_XLARGE, "很大", "X-large") \
     X(BOOK_MARGIN_TITLE, "边距设置", "Margins") \
     X(BOOK_SPACING_TITLE, "行距设置", "Line spacing") \
+    X(BOOK_PARA_GAP_TITLE, "段距设置", "Paragraph gap") \
     X(BOOK_BACKGROUND_GRID, "方格", "Grid") \
     X(BOOK_BACKGROUND_DOTS, "点阵", "Dots") \
     X(BOOK_BACKGROUND_TITLE, "阅读背景", "Background") \
@@ -1062,9 +1064,7 @@
     X(WALLPAPER_NO_SD, "未检测到 SD 卡", "No SD card") \
     X(WALLPAPER_OVERWRITE, "覆盖", "Overwrite") \
     X(WALLPAPER_PATH_INVALID, "路径无效", "Invalid path") \
-    X(WALLPAPER_PREVIEW_FAIL, "无法预览", "Cannot preview") \
     X(WALLPAPER_PREVIEW_OOM, "内存不足，预览失败", "Out of memory, preview failed") \
-    X(WALLPAPER_PREVIEW_START_FAIL, "预览启动失败", "Failed to start preview") \
     X(WALLPAPER_ROTATE_LEFT, "左转", "Left") \
     X(WALLPAPER_ROTATE_RIGHT, "右转", "Right") \
     X(WALLPAPER_SAVE, "保存", "Save") \
@@ -1074,7 +1074,12 @@
     X(WALLPAPER_SELECTED_FMT, "已选 %d", "Selected %d") \
     X(WALLPAPER_SET_SHUTDOWN, "设为关机", "Set as power-off") \
     X(WALLPAPER_SET_STANDBY, "设为待机", "Set as standby") \
-    X(WALLPAPER_SHUTDOWN_ON, "关机中", "Power-off on") \
+    X(WALLPAPER_DISPLAY_MODE, "显示方式", "Display mode") \
+    X(WALLPAPER_DECODE_FAIL_CODE, "解码失败（%u）", "Decode failed (%u)") \
+    X(WALLPAPER_MODE_FULLSCREEN, "全屏壁纸", "Fullscreen wallpaper") \
+    X(WALLPAPER_MODE_OVERLAY, "叠加当前界面", "Overlay current screen") \
+    X(WALLPAPER_CLEAR_SELECTION, "取消设置", "Clear selection") \
+    X(WALLPAPER_SHUTDOWN_ON, "已设为关机", "Power-off selected") \
     X(WALLPAPER_STANDBY_ON, "待机中", "Standby on")
 
 

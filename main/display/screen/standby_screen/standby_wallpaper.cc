@@ -4,6 +4,7 @@
 #include "wallpaper_screen/wallpaper_active.h"
 
 #include "image_util.h"
+#include "wallpaper_frame.h"
 #include "reader_types.h"
 #include "sd_access.h"
 
@@ -28,6 +29,8 @@ enum class StandbyWpLoadState : uint8_t { Idle = 0, Loading = 1, Ready = 2, Fail
 static bool s_alive = false;
 static uint32_t s_epoch = 0;
 static reader::RasterImage* s_raster = nullptr;
+static bool s_overlay = false;
+static std::vector<uint8_t> s_alpha;
 static std::atomic<bool> s_load_busy{false};
 static std::atomic<int64_t> s_decode_started_us{0}; // 解码开始时间，完成后清零
 static std::atomic<StandbyWpLoadState> s_load_state{StandbyWpLoadState::Idle};
@@ -37,6 +40,9 @@ struct StandbyWpLoadResult {
     bool ok = false; // 解码是否成功
     char err[64] = {}; // 失败原因
     reader::RasterImage* img = nullptr; // 接收前由结果持有的像素
+    bool overlay = false; // 等比缩小并保留透明度
+    lv_point_t size{}; // 本次底图可绘区
+    std::vector<uint8_t> alpha; // 图片自带的透明度
 };
 
 static std::atomic<StandbyWpLoadResult*> s_pending_result{nullptr}; // 后台发布、显示任务接收的结果
@@ -45,6 +51,7 @@ static void MarkLoadDone(StandbyWpLoadState st) {
     s_load_state.store(st, std::memory_order_release);
 }
 static void FreeDecodedImage() {
+    std::vector<uint8_t>().swap(s_alpha);
     if (s_raster != nullptr) {
         delete s_raster;
         s_raster = nullptr;
@@ -71,6 +78,7 @@ static void ApplyLoadResult(StandbyWpLoadResult* msg) {
 
     FreeDecodedImage();
     s_raster = msg->img;
+    s_alpha = std::move(msg->alpha);
     msg->img = nullptr;
     // 待机与关机共用全屏绘制，不挂入底层页面的 LVGL 层级。
     MarkLoadDone(StandbyWpLoadState::Ready);
@@ -87,7 +95,10 @@ static void LoadTask(void* arg) {
             std::snprintf(msg->err, sizeof(msg->err), "%s", Lang::Strings::STANDBY_WP_NOT_FOUND);
         } else {
             auto* img = new reader::RasterImage();
-            if (!reader::DecodeImageFileToL8(path, 0, 0, *img) || img->empty()) {
+            const bool decoded = msg->overlay ?
+                reader::DecodeImageFileOverlay(path, msg->size.x, msg->size.y, *img, msg->alpha) :
+                reader::DecodeImageFileToL8(path, 0, 0, *img);
+            if (!decoded || img->empty()) {
                 std::snprintf(msg->err, sizeof(msg->err), "%s", Lang::Strings::STANDBY_DECODE_FAIL);
                 delete img;
             } else {
@@ -110,6 +121,7 @@ void StandbyWallpaper_Build(lv_obj_t* root) {
     }
     ++s_epoch;
     s_alive = true;
+    s_overlay = Wallpaper_IsOverlay(true) && WallpaperFrame_HasBase();
     MarkLoadDone(StandbyWpLoadState::Idle);
 
     // 解码期间保留底层页面，完整壁纸由 Park 直接写入帧缓冲。
@@ -131,6 +143,8 @@ void StandbyWallpaper_StartLoad() {
     s_decode_started_us.store(esp_timer_get_time(), std::memory_order_release);
     auto* msg = new StandbyWpLoadResult{};
     msg->epoch = s_epoch;
+    msg->overlay = s_overlay;
+    msg->size = WallpaperFrame_Size();
     // 栈放 SPIRAM：解码峰值与壁纸缩略图任务同级
     if (xTaskCreatePinnedToCoreWithCaps(LoadTask, "stb_wp_load", kLoadStack, msg, 5, nullptr, 0,
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
@@ -163,6 +177,10 @@ const reader::RasterImage* StandbyWallpaper_DecodedImage() {
     return s_alive && s_load_state.load(std::memory_order_acquire) == StandbyWpLoadState::Ready
         ? s_raster : nullptr;
 }
+
+bool StandbyWallpaper_IsOverlay() { return s_alive && s_overlay; }
+const std::vector<uint8_t>& StandbyWallpaper_DecodedAlpha() { return s_alpha; }
+void StandbyWallpaper_ReleasePixels() { FreeDecodedImage(); }
 
 void StandbyWallpaper_Teardown() {
     ++s_epoch;  // 丢弃在途 StandbyWpLoadResult，避免 UAF

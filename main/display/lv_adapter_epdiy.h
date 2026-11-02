@@ -92,6 +92,9 @@ public:
     /** @brief 进待机：只攒 FB 不上墨，随后 Park 全刷清理并推白显示画面。 */
     void BeginStandbyEnterPaint();
 
+    /** @brief 按配置保存叠图底图；在待机页面改变方向和内容之前调用。 */
+    void PrepareWallpaperOverlay();
+
     /** @brief 待机定格：冻结 flush 后先全刷白屏，再推白上屏，成功返回 true。 */
     bool ParkEpdForStandby();
 
@@ -108,9 +111,10 @@ public:
     void ResumeStandbyBackgroundWork();
 
     /**
-     * @brief 关机图：NVS 壁纸 → 中英文应用内置图 → resources 默认图 → 关机文案；刷完冻结 flush
+     * @brief 显示关机叠图或全屏壁纸，完成物理刷新后冻结提交
      * @return 画面刷新成功返回 true，失败时调用方不得断电
      * @note 可在非 LVGL 任务调用（持内部锁）
+     * @note 叠图失败时保留原界面；全屏模式按 NVS、内置图、默认图、关机文案依次回退
      */
     bool ShowPoweredOffScreen();
 

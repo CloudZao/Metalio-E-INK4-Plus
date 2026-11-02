@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string>
 
-// 壁纸启用状态：NVS 仅保存文件名，UI 读取内存缓存。
+// 壁纸启用状态：NVS 保存文件名和显示方式，UI 读取内存缓存。
 // 不要在 LVGL 任务中访问 NVS；缓存由 hydrate / Set* 维护。
 
 /** @brief 当前启用的关机壁纸名；未 hydrate 或文件缺失时返回空。 */
@@ -15,16 +15,25 @@ std::string Wallpaper_GetStandbyFilename();
 /** @brief 是否配置待机壁纸；SD 尚未挂载时保留选择，挂载后由 hydrate 校验。 */
 bool Wallpaper_HasStandbySelection();
 
+/** @brief 查询指定壁纸是否叠加当前界面；true 表示待机，false 表示关机。 */
+bool Wallpaper_IsOverlay(bool for_standby);
+
 /** @brief 是否为关机壁纸文件名 */
 bool Wallpaper_IsActiveFilename(const char* filename);
 /** @brief 是否为待机壁纸文件名 */
 bool Wallpaper_IsStandbyFilename(const char* filename);
 
-/** @brief 设置关机壁纸；仅在非 LVGL 任务中调用。 */
-bool Wallpaper_SetActiveFromFile(const char* path_or_name, std::string& err_out);
+/**
+ * @brief 设置关机壁纸；仅在非 LVGL 任务中调用
+ * @param overlay 为 true 时叠加当前界面，否则显示全屏壁纸
+ */
+bool Wallpaper_SetActiveFromFile(const char* path_or_name, std::string& err_out, bool overlay = false);
 
-/** @brief 设置待机壁纸；仅在非 LVGL 任务中调用。 */
-bool Wallpaper_SetStandbyFromFile(const char* path_or_name, std::string& err_out);
+/**
+ * @brief 设置待机壁纸；仅在非 LVGL 任务中调用
+ * @param overlay 为 true 时叠加当前界面，否则显示全屏壁纸
+ */
+bool Wallpaper_SetStandbyFromFile(const char* path_or_name, std::string& err_out, bool overlay = false);
 
 /** @brief 清除关机壁纸启用状态，并恢复默认关机图。 */
 void Wallpaper_ClearShutdownWallpaper();

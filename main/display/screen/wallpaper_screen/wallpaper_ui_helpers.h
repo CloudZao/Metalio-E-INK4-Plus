@@ -1,8 +1,12 @@
 #pragma once
 
 #include <string>
+#include <cstddef>
+#include <cstdint>
 
 #include <lvgl.h>
+
+namespace reader { enum class ImageDecodeError : uint8_t; }
 
 /** @brief 壁纸页 UI 字体 */
 const lv_font_t* Wallpaper_UiFont();
@@ -12,6 +16,10 @@ lv_coord_t Wallpaper_ContentWidth();
 std::string Wallpaper_LayoutTitleTwoLines(const char* text, const lv_font_t* font, lv_coord_t max_w);
 /** @brief 禁用滚动 */
 void Wallpaper_DisableScroll(lv_obj_t* obj);
+/** @brief 关闭当前壁纸弹窗，返回预览。 */
+void Wallpaper_CloseDialog();
+/** @brief 格式化壁纸解码失败提示，使用当前语言并附带统一错误码。 */
+void Wallpaper_FormatDecodeFailure(char* out, size_t capacity, reader::ImageDecodeError error);
 /** @brief 忽略大小写后缀判断 */
 bool EndsWithIgnoreCase(const char* name, const char* ext);
 /** @brief 是否为可列入列表的图片 */

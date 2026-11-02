@@ -23,6 +23,10 @@ Standby is a software state. The MCU enters light sleep through `esp_light_sleep
 
 The board [config.h](../../metalio-e-ink4-plus/config.h) owns pin, bus, and power-control definitions. The [board display/power implementation](../../metalio-e-ink4-plus/display/epd_board_metalio_eink4_plus.c) owns rail and pin-hold operations. The standby pin-configuration section below records directions, levels, and holds; board sources remain authoritative for pin definitions.
 
+## Bluetooth shared-power reset
+
+Startup initialization and Settings → Reset BT share `power_hw_bt_power_reset()`. It stops the cellular driver and ordinary vibration, disables the PA, notifies the audio driver of power removal, then drives P14 low. While power is off, the motor stays high for 0.5 seconds and is then driven low. P14 returns high after a total low interval of 1 second. The discharge action is independent of the UI haptic switch and intensity; ordinary vibration PWM cannot change the discharge level during reset. The motor and PA remain off afterward. Drivers are notified after successful power restoration; IO write failures return an error.
+
 ## Entering standby: software cleanup
 
 Main sequence:
@@ -33,6 +37,8 @@ Show standby overlay, pause applications, block ordinary new SD access
 → Drain SD operations and handles, unmount and park SD
 → Wait for boot work, network/audio work, and hardware requests
 → Park the standby frame, wait for physical refresh, turn off frontlight
+→ Sleep the panel and bus, then remove P5 and P14 power in board order
+→ Drive the motor output high for 0.5 seconds, then low; restore its previous intensity
 → Run the light-sleep hardware sequence
 ```
 
@@ -70,9 +76,11 @@ POWER and wake requests remain polled during these waits. SD cleanup and standby
 
 A failed refresh keeps the device awake and is retried before light sleep. See [display documentation](../../../display/README.md) for cleaning and waveform details. Physical refresh and Flash log writes are mutually excluded. The frame must be parked before the display supply and bus are parked.
 
+When light sleep is enabled, the standby frame is parked first. Every sleep slice then starts with panel and bus sleep, cellular-driver shutdown, audio power-off notification, and P5/P14 removal in board order. Only a successful rail shutdown is followed by a continuous high motor output for 0.5 seconds, then a low output and restoration of the previous driver intensity. Rail failures keep the motor off and are retried. This action is independent of the UI haptic setting and runs before every sleep slice, including re-entry after each timer wake. Exit requests and the POWER key remain polled during the wait. Leaving standby drives the output low early and restores peripheral power and the display bus; otherwise light sleep follows the 0.5-second wait.
+
 ## Entering light sleep: hardware order
 
-Before every attempt, `power_hw_light_sleep_once()` checks that SD admission is closed and drained, boot work is finished, and no standby-exit request exists, then holds the SD transition guard. The current `kLightSleepHw` enables all four groups: SD, TPS, display bus, and peripheral rails.
+Before every attempt, `power_hw_light_sleep_once()` checks that SD admission is closed and drained, boot work is finished, and no standby-exit request exists, then holds the SD transition guard. The current `kLightSleepHw` enables all four groups: SD, TPS, display bus, and peripheral rails. Before every slice, TPS sleep, bus parking, and rail removal complete before the motor action. The hardware sleep function reuses that state; when no earlier parking occurred, it follows the order below.
 
 1. **Confirm SD parking.** `power_hw_sd_park()` is idempotent and does not unmount an already parked card again.
 2. **Sleep the panel PMIC.** The board sequence puts TPS65185 into SLEEP, then holds the display bus low.
@@ -121,15 +129,15 @@ Direction changes have three stages; keys do not simply remain inputs throughout
 | Expander pin | Signal / normal state | Before and during sleep | Wake restoration |
 |---|---|---|---|
 | P00 / P01 / P02 | TPS VCOM_CTRL / PWRUP / WAKEUP, outputs | VCOM_CTRL/PWRUP go to 0 first, followed by WAKEUP; all remain 0 during sleep. | Output directions return without driving all high. The display driver powers TPS as required for refresh. |
-| P03 | Motor enable, output | Masking preserves the software latch; no additional forced clear occurs here. Normal pulse control ends vibration. | Follows motor control rather than interpreting masking as all outputs off. |
+| P03 | Motor enable, output | Driven high for 0.5 seconds, then low before every sleep slice; masking preserves the software latch. | Remains low until normal vibration control drives it again. |
 | P04 | PA_EN, output | Power/audio policy requests PA-off. Masking preserves that policy latch; P14 subsequently removes shared power. | Follows audio needs and state; PA is not unconditionally enabled with P14. |
-| P05 | Camera/display power, output | Preserved at masking, then set to 0 as the first `sleep_cut_rails()` stage. | Set to 1 after P14 returns. |
+| P05 | Camera/display power, output | Set to 0 before the motor starts for every slice, as the first `sleep_cut_rails()` stage. | Set to 1 after P14 returns. |
 | P06 | Unassigned, normally input | Output 0 after masking. | Restored to input. |
 | P07 | TPS PWR_GOOD, normally input | Changed to output 0 after TPS enters SLEEP. It is not read as an operating-voltage indicator while asleep. | Restored to input for subsequent display-power handling. |
 | P10 / P11 | Volume+ / volume−, normally inputs | Changed to output 1 at idle key level; not retained as wake inputs. | Inputs restored, then sampling baselines rebuilt after settling to avoid false keys. |
 | P12 | Shared touch/cellular/camera RST, output | Preserves its latch, normally 1 after power-up. Standby does not actively pull it low or pulse reset. | Preserves its latch. Paused touch sampling does not mean this pin removed power. |
 | P13 | Power-off pulse, output | Forced 0; no power-off pulses are sent. | Remains 0. Only hardware power-off generates configured pulses. |
-| P14 | Shared cellular/Bluetooth/PA power, output | Preserved during masking, then set to 0 after P05 is off. Dependent drivers must finish first. | `sleep_restore_rails()` sets it to 1 before P05. This means supply restoration only. |
+| P14 | Shared cellular/Bluetooth/PA power, output | Set to 0 after P05 is off and before the motor starts for every slice. Dependent drivers must finish first. | `sleep_restore_rails()` sets it to 1 before P05. This means supply restoration only. |
 | P15 | Unassigned, normally input | Output 0 after masking. | Restored to input. |
 | P16 | RTC_INT, normally input | Output 0 after masking, not retained as an external RTC-interrupt wake input for this sleep. | Restored to input. Slice wake uses the MCU timer wake source. |
 | P17 | POWER, normally input | Initially output 1 during masking, then input again. A press pulls it low and TCA INT pulls GPIO2 low. | Level is latched before direction restoration; a released short press still retains POWER-wake semantics. |

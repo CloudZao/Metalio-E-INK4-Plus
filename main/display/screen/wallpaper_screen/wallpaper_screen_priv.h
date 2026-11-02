@@ -64,6 +64,7 @@ struct FileEntry {
     char title[SD_FILE_NAME_CAPACITY] = {};
     char path[SD_FILE_PATH_CAPACITY] = {};
     size_t size_bytes = 0;
+    reader::ImageDecodeError thumb_error = reader::ImageDecodeError::kNone; // 缩略图最近一次解码结果
 };
 
 struct WallpaperUiState {
@@ -134,6 +135,8 @@ struct WallpaperUiState {
         reader::RasterImage* raster = nullptr;
         reader::RasterImage* base = nullptr;  // 调整态相对原预览的叠加基准
         bool adjust_open = false;
+        bool enable_for_standby = false; // 显示方式弹窗对应待机或关机配置
+        reader::ImageDecodeError decode_error = reader::ImageDecodeError::kNone; // 当前预览的解码错误
         uint8_t rot_cw = 0;   // 相对原图顺时针 90° 次数 0..3
         bool mirror_h = false;  // 原图水平镜像（先镜像再旋转）
         // 设置页的提示文案；为空时不绘制。

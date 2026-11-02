@@ -6,6 +6,7 @@
 #include "board.h"
 #include "fontpack_lvgl.h"
 #include "power_policy.h"
+#include "screen_common.h"
 #include "settings_common.h"
 #include "chat_cloud.h"
 #include "application.h"
@@ -275,8 +276,8 @@ static void FetchTask(void* arg) {
         } else {
             msg->ok = true;
         }
-        if (lv_async_call(AsyncApplyResult, msg) != LV_RESULT_OK) {
-            ESP_LOGW(TAG, "lv_async_call fetch failed");
+        if (!ScreenLvAsync(AsyncApplyResult, msg)) {
+            ESP_LOGW(TAG, "UI result queue rejected fetch result");
             delete msg;
             s_busy.store(false);
         }
@@ -315,8 +316,8 @@ static void PutTask(void* arg) {
         if (!msg->ok) {
             std::snprintf(msg->err, sizeof(msg->err), "%s", err.c_str());
         }
-        if (lv_async_call(AsyncApplyResult, msg) != LV_RESULT_OK) {
-            ESP_LOGW(TAG, "lv_async_call put failed");
+        if (!ScreenLvAsync(AsyncApplyResult, msg)) {
+            ESP_LOGW(TAG, "UI result queue rejected put result");
             delete msg;
             s_busy.store(false);
         }

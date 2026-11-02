@@ -28,6 +28,10 @@ uint8_t* EpdRenderBuffer(); // UI task owns this buffer; driver never reads it d
 uint32_t EpdSubmit(bool full, bool stream = false, bool restore_light = false);
 bool EpdWait(uint32_t sequence, uint32_t timeout_ms = 10000);
 EpdRefreshStats EpdGetStats();
+/** @brief 尝试进入 UI 构建/绘制区；同任务允许嵌套，失败时保留请求稍后重试。 */
+bool EpdTryBeginUiRender();
+/** @brief 结束本任务的一层构建/绘制；全部退出后才可等待物理刷新。 */
+void EpdEndUiRender();
 void EpdSetEffect(EpdEffect effect);
 void EpdSetReaderEffect(EpdEffect effect);
 void EpdRequestPageTurn(int direction);

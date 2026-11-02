@@ -49,15 +49,8 @@ bool Assistant_OnVkKey(const char* key) {
     // vk_home：直接出栈（阅读进百问回阅读）；不翻页、不清栈回首页
     if (std::strcmp(key, "vk_home") == 0) {
         ESP_LOGD(TAG, "vk_home -> navigate back");
-        // 先停收消息/合并绘制/连翻，避免卸页过程中再 Render 踩已毁控件
-        Assistant_State().active.store(false, std::memory_order_release);
-        if (Assistant_State().stream.coalesce_timer != nullptr) {
-            esp_timer_stop(Assistant_State().stream.coalesce_timer);
-        }
-        Assistant_State().stream.coalesce_pending = false;
-        Assistant_State().stream.coalesce_buf.clear();
+        // 导航可能等待或取消；页面资源统一在实际卸载时清理。
         VkPageRepeatStop();
-        ScreenPaintCoalesceReset(&Assistant_State().stream.page_paint);
         ScreenNavigateBack();
         return true;
     }

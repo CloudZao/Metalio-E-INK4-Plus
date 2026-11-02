@@ -9,6 +9,9 @@ int epd_lcd_get_scan_time_us(void);
 #include <stddef.h>
 #include <stdint.h>
 
+/** @brief 获取最近一次 SPV 下降沿的软件时间戳，单位为微秒；仅在扫描停止后读取。 */
+int64_t epd_lcd_get_spv_start_us(void);
+
 /**
  * LCD bus configuration parameters.
  */
@@ -52,8 +55,11 @@ void epd_lcd_line_source_cb(line_cb_func_t, void* payload);
 void epd_lcd_start_frame();
 void epd_lcd_prime_white_border(bool enable);
 int epd_lcd_white_border_pixels(void);
+/** @brief 获取驱动实际配置的扫描行数，须在 LCD 初始化后调用。 */
+int epd_lcd_get_display_lines(void);
 /**
- * @brief 中止当前帧（停 LCD/GDMA），供超时路径使用
+ * @brief 在任务上下文中停止当前帧并等待旧中断处理结束，不调用完成回调
+ * @note 返回后才可更改回调或复用扫描缓冲。
  */
 void epd_lcd_abort_frame();
 /**

@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <functional>
+#include <esp_err.h>
 
 class AudioCodec;
 
@@ -61,8 +62,9 @@ MetalioAudioState MetalioAudio_GetState();
 
 /**
  * @brief 设置板级功放使能状态
+ * @return 成功返回 ESP_OK，失败返回板级驱动错误
  */
-void MetalioAudio_SetPa(bool on);
+esp_err_t MetalioAudio_SetPa(bool on);
 
 /**
  * @brief 输入采样率 Hz

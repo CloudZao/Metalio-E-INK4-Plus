@@ -29,6 +29,7 @@
 #include "output_i2s/render_i2s.h"
 #endif
 #include "output_lcd/render_lcd.h"
+#include "output_lcd/lcd_driver.h"
 
 static inline int min(int x, int y) {
     return x < y ? x : y;
@@ -131,9 +132,12 @@ static int get_waveform_index(const EpdWaveform* waveform, enum EpdDrawMode mode
 
 /////////////////////////////  API Procedures //////////////////////////////////
 
-/// Rounded up display height for even division into multi-line buffers.
-static inline int rounded_display_height() {
+static inline int scan_display_height() {
+    #ifdef RENDER_METHOD_LCD
+    return epd_lcd_get_display_lines();
+    #else
     return (((epd_height() + 7) / 8) * 8);
+    #endif
 }
 
 // FIXME: fix misleading naming:
@@ -248,7 +252,7 @@ enum EpdDrawError IRAM_ATTR epd_draw_base(
 
     render_context.lines_prepared = 0;
     render_context.lines_consumed = 0;
-    render_context.lines_total = rounded_display_height();
+    render_context.lines_total = scan_display_height();
     render_context.current_frame = 0;
     render_context.cycle_frames = frame_count;
     render_context.phase_times = NULL;
@@ -260,6 +264,7 @@ enum EpdDrawError IRAM_ATTR epd_draw_base(
     epd_populate_line_mask(
         render_context.line_mask, drawn_columns, render_context.display_width / 4
     );
+    render_context.line_mask_active = drawn_columns != NULL;
 
 #ifdef RENDER_METHOD_I2S
     i2s_do_update(&render_context);
@@ -369,18 +374,21 @@ void epd_renderer_init(enum EpdInitOptions options) {
     render_context.static_line_buffer = NULL;
 
     render_context.frame_done = xSemaphoreCreateBinary();
+    render_context.prefill_done = xSemaphoreCreateCounting(NUM_RENDER_THREADS, 0);
+    assert(render_context.prefill_done != NULL);
 
     for (int i = 0; i < NUM_RENDER_THREADS; i++) {
         render_context.feed_done_smphr[i] = xSemaphoreCreateBinary();
+        render_context.feed_space[i] = xSemaphoreCreateBinary();
+        assert(render_context.feed_space[i] != NULL);
+        atomic_init(&render_context.feed_waiting[i], false);
     }
 
-    // When using the LCD peripheral, we may need padding lines to
-    // satisfy the bounce buffer size requirements
     render_context.line_threads = (uint8_t*)heap_caps_malloc(
-        rounded_display_height(), MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL
+        scan_display_height(), MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL
     );
     assert(render_context.line_threads != NULL);
-    render_context.line_ready=heap_caps_calloc(rounded_display_height(),1,MALLOC_CAP_INTERNAL);
+    render_context.line_ready=heap_caps_calloc(scan_display_height(),1,MALLOC_CAP_INTERNAL);
     assert(render_context.line_ready!=NULL);
 
     int queue_len = 32;
@@ -393,7 +401,7 @@ void epd_renderer_init(enum EpdInitOptions options) {
     if (display != NULL && display->bus_width == 16) {
         queue_len = max(queue_len, 64);
     }
-    // 流式预填约 127 行、两线程均分；128 行缓冲约 2～3ms，吃短毛刺（仍靠 panel busy 挡 WiFi）
+    // 每线程保留 127 个可用槽，两线程共同承担 192 行预填及扫描抖动。
     queue_len = max(queue_len, 128);
     ESP_LOGD("epd", "line queue len=%d threads=%d (stream prefill)", queue_len, NUM_RENDER_THREADS);
 
@@ -436,7 +444,7 @@ void epd_renderer_init(enum EpdInitOptions options) {
     const size_t elem_aligned = ((queue_elem_size + 15) / 16) * 16;
     const size_t line_q_bytes =
         (size_t)NUM_RENDER_THREADS * (size_t)queue_len * elem_aligned;
-    const size_t line_threads_bytes = (size_t)rounded_display_height();
+    const size_t line_threads_bytes = (size_t)scan_display_height();
     const size_t line_mask_bytes = (size_t)epd_width() / 4;
     ESP_LOGD("epd_dram",
              "render: lut=%u INTERNAL; line_q≈%u B; mask/thr INTERNAL=%u B",
@@ -456,6 +464,7 @@ void epd_renderer_deinit() {
         }
         lq_free(&render_context.line_queues[i]);
         vSemaphoreDelete(render_context.feed_done_smphr[i]);
+        vSemaphoreDelete(render_context.feed_space[i]);
     }
 
 #ifdef RENDER_METHOD_I2S
@@ -473,6 +482,7 @@ void epd_renderer_deinit() {
     heap_caps_free(render_context.line_ready);
     heap_caps_free(render_context.line_mask);
     vSemaphoreDelete(render_context.frame_done);
+    vSemaphoreDelete(render_context.prefill_done);
 }
 
 #ifdef RENDER_METHOD_LCD

@@ -282,7 +282,6 @@ bool QueueReaderPageTurn(int dir) {
 void GoHomeFromBookAsync(void* /*user_data*/) {
     // 勿在此 Reset detail_cover：旧详情屏可能仍引用 dsc，等 DELETE 回调再清
     CancelDetailCoverLoad();
-    ReleaseReaderSessionForLeave();
     ScreenRequestBack();
 }
 
@@ -350,9 +349,10 @@ void WarnReaderWorkersBusy(const char* where) {
              st.shelf.selected);
 }
 
-// 离开正文（进百问等）：落盘 .pos、释放 session/字库；打开中则延后清。
+// 导航确定执行后清理当前正文；等待或取消导航时保留活动页面的会话和字库。
 void ReleaseReaderForSystemHome() {
-    if (Book_State().reader.read_scr != nullptr) {
+    auto* read_scr = Book_State().reader.read_scr;
+    if (read_scr != nullptr && read_scr == lv_screen_active()) {
         ReleaseReaderSessionForLeave();
     }
 }
@@ -453,7 +453,6 @@ lv_obj_t* ResumeDetailScreen() {
 }
 
 void OpenAssistantFromReaderAsync(void* /*user_data*/) {
-    ReleaseReaderSessionForLeave();
     if (AssistantScreen::IsActive()) {
         ESP_LOGI(TAG, "assistant from reader: already active");
         return;
@@ -506,14 +505,12 @@ void EnsureBookPaintFns() {
     }
     if (s_reader_paint.paint == nullptr) {
         s_reader_paint.paint = PaintReaderPage;
-        s_reader_paint.defer_while_epd_busy = true;
     }
     if (s_toc_paint.paint == nullptr) {
         s_toc_paint.paint = PaintTocList;
     }
     if (s_settings_sheet_paint.paint == nullptr) {
         s_settings_sheet_paint.paint = RefreshSettingsSheet;
-        s_settings_sheet_paint.defer_while_epd_busy = true;
     }
 }
 

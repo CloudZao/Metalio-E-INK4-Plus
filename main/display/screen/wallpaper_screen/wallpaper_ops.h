@@ -4,8 +4,6 @@
 
 #include <lvgl.h>
 
-/** @brief 调度设为关机/待机壁纸 */
-void ScheduleEnable(int index, bool for_standby, bool clear);
 /** @brief 设为关机壁纸 */
 void OnEnableShutdownClicked(lv_event_t* e);
 /** @brief 设为待机壁纸 */

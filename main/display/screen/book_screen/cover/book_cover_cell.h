@@ -7,7 +7,7 @@
 
 #include "reader/reader_types.h"
 
-/** @brief 创建封面槽并尝试同步加载旁路 */
+/** @brief 创建封面占位槽并标记后台加载请求 */
 lv_obj_t* CreateCoverSlot(lv_obj_t* parent, const reader::BookInfo& info, lv_coord_t w, lv_coord_t h,
                           reader::RasterImage* cover_out, bool* need_embed_fill);
 /** @brief 创建带标题的封面格子 */

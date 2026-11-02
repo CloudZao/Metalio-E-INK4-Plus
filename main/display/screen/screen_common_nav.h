@@ -1,6 +1,6 @@
 #pragma once
 
-#include "screen_common_priv.h"
+#include "vk_key_handler.h"
 
 /** @brief 清空返回栈 */
 void ScreenCommon_ClearBackStack();
@@ -12,3 +12,5 @@ ScreenFactory ScreenCommon_PopBackFactory();
 void ScreenCommon_GoHomeAsync(void* user_data);
 /** @brief 异步返回上一屏（lv_async 入口） */
 void ScreenCommon_NavigateBackAsync(void* user_data);
+/** @brief 取消尚未执行的建屏导航，保留当前页面。 */
+void ScreenCommon_CancelPendingNavigation();

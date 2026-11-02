@@ -271,7 +271,7 @@ void ApplySaveAsync(void* p) {
     const bool mirror_h = Wallpaper_State().preview.mirror_h;
     Wallpaper_State().preview.adjust_open = false;
     ResetOrientState();
-    CloseOverwriteDialog();
+    Wallpaper_CloseDialog();
 
     if (msg->save_as) {
         CollectWallpapers();
@@ -373,7 +373,7 @@ void ScheduleSaveTransform(bool save_as) {
     if (Wallpaper_State().workers.save_busy.exchange(true)) {
         return;
     }
-    CloseOverwriteDialog();
+    Wallpaper_CloseDialog();
     Wallpaper_State().preview.delete_meta_hint[0] = '\0';
     UpdateEnableButtonUi();
     UpdateAdjustUi();

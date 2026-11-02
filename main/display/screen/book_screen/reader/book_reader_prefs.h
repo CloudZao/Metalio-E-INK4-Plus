@@ -10,7 +10,8 @@ extern "C" {
 // 阅读偏好（NVS namespace "reader"）：
 // - font：SD fonts 目录下 .ef 或 fonts_ttf 目录下 TTF/OTF 文件名
 // - font_size：直接加载 TTF/OTF 的像素字号；.ef 为 0
-// - spacing：行距档位（行距为主；段距随档略高于行距，不随档大幅跳变）
+// - spacing：行距档位，独立于段距
+// - para_gap：段距档位（小 32 / 标准 56 / 大 80 / 很大 104px，默认标准）
 // - margin：页边距档位（左右/上下成套）
 // - foot_msk：正文底栏展示位图（0=整条隐藏；兼容旧 hide_prog）
 // - aa：阅读真 4 灰抗锯齿（L8 sidecar + 灰 LUT）
@@ -23,6 +24,7 @@ extern "C" {
 
 enum {
     kBookReaderSpacingPresetCount = 4,
+    kBookReaderParaGapPresetCount = 4,
     kBookReaderMarginPresetCount = 4,
     kBookReaderUnderlineOff = 0,
     kBookReaderUnderlineSolid = 1,
@@ -71,7 +73,11 @@ void BookReaderPrefsSetSpacingPreset(int preset);
 const char* BookReaderPrefsSpacingLabel(int preset);
 /** @brief 行间留白占字体行框的首选百分比，实际间距按内容区自适应。 */
 int BookReaderPrefsLineSpacingPercent(void);
-/** @brief 段距像素 */
+/** @brief 段距档位 */
+int BookReaderPrefsParaGapPreset(void);
+/** @brief 设置并保存段距档位 */
+void BookReaderPrefsSetParaGapPreset(int preset);
+/** @brief 普通行距之外的额外段距，单位像素，默认标准档 56。 */
 int BookReaderPrefsParaGap(void);
 
 /** @brief 页边距档位 0..N-1 */

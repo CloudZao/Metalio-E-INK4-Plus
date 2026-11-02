@@ -74,6 +74,26 @@ void (*after_submit)() = nullptr; // 下一次提交后的单次回调
 unsigned pending_screen_change=0;
 int64_t pending_at=0;
 std::atomic<bool> busy{false}, test_active{false}, stop_test{false};
+std::atomic<unsigned> render_owner{0}; // 0 为空闲，1 为 UI 构建/绘制，2 为物理更新。
+std::atomic<bool> panel_requested{false}; // 更新任务等待交接时阻止新的 UI 绘制。
+std::atomic<TaskHandle_t> ui_render_task{nullptr}; // UI 构建/绘制区所属任务。
+unsigned ui_render_depth; // 仅所属任务访问，最外层结束后才归还物理更新权限。
+
+class PanelRenderGuard {
+public:
+    PanelRenderGuard() {
+        panel_requested.store(true, std::memory_order_release);
+        unsigned expected = 0;
+        while (!render_owner.compare_exchange_weak(expected, 2, std::memory_order_acq_rel)) {
+            expected = 0;
+            vTaskDelay(1);
+        }
+        panel_requested.store(false, std::memory_order_release);
+    }
+    ~PanelRenderGuard() {
+        render_owner.store(0, std::memory_order_release);
+    }
+};
 std::atomic<uint32_t> cancel_generation{0};
 std::atomic<uint32_t> tests_submitted{0}, tests_completed{0}, test_ms{0}, test_frames{0};
 std::atomic<int> test_mode{0};
@@ -217,6 +237,7 @@ EpdDrawError Draw(EpdiyHighlevelState* hl, int mode, bool full, bool clean, bool
     KeepWhiteBorder(hl->front_fb);
     // Serialize the complete waveform (including recovery clears) with OTA flash
     // writes; holding only the log storage lock does not protect against OTA.
+    PanelRenderGuard render_guard;
     EpdFlashGuard flash_guard;
     // Flash writes pause cache/other-core execution and starve LCD bounce refill.
     // CaptureLog still buffers messages; the logger flushes after the waveform ends.
@@ -528,6 +549,28 @@ void Worker(void*) {
 }
 }
 
+bool EpdTryBeginUiRender() {
+    const auto task = xTaskGetCurrentTaskHandle();
+    if (ui_render_task.load(std::memory_order_acquire) == task) {
+        ++ui_render_depth;
+        return true;
+    }
+    if (Display::IsPanelBusy() || panel_requested.load(std::memory_order_acquire)) return false;
+    unsigned expected = 0;
+    if (!render_owner.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) return false;
+    ui_render_depth = 1;
+    ui_render_task.store(task, std::memory_order_release);
+    return true;
+}
+
+void EpdEndUiRender() {
+    assert(ui_render_task.load(std::memory_order_acquire) == xTaskGetCurrentTaskHandle());
+    assert(ui_render_depth > 0);
+    if (--ui_render_depth != 0) return;
+    ui_render_task.store(nullptr, std::memory_order_release);
+    render_owner.store(0, std::memory_order_release);
+}
+
 bool EpdRefreshInit() {
     if (worker) return true;
     {
@@ -563,7 +606,8 @@ bool EpdRefreshInit() {
     mailbox=xSemaphoreCreateMutex();
     if (!render_fb || !pending_fb || !mailbox) return false;
     memset(render_fb,255,fb_bytes); memset(pending_fb,255,fb_bytes);
-    return xTaskCreatePinnedToCore(Worker,"epd_refresh",6144,nullptr,2,&worker,1)==pdPASS;
+    // 相间推进优先于 UI，仍由更高优先级的供数任务抢占。
+    return xTaskCreatePinnedToCore(Worker,"epd_refresh",6144,nullptr,configMAX_PRIORITIES-2,&worker,1)==pdPASS;
 }
 uint8_t* EpdRenderBuffer() { return render_fb; }
 uint32_t EpdSubmit(bool full, bool stream, bool restore_light) {
@@ -594,6 +638,10 @@ bool EpdWait(uint32_t sequence, uint32_t timeout_ms) {
     if (!sequence) return false;
     const int64_t until=esp_timer_get_time()+timeout_ms*1000LL;
     while (static_cast<int32_t>(completed.load(std::memory_order_acquire)-sequence)<0) {
+        if (ui_render_task.load(std::memory_order_acquire) == xTaskGetCurrentTaskHandle()) {
+            ESP_LOGE(TAG, "cannot wait for panel inside UI rendering");
+            return false;
+        }
         if (esp_timer_get_time()>until) return false;
         vTaskDelay(pdMS_TO_TICKS(10));
     }

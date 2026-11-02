@@ -68,7 +68,7 @@ struct Page {
 
 // 阅读排版默认值（与 BookReaderPrefs 标准档一致；经 BookSession::SetLineSpacing 注入）
 constexpr int kReaderLineSpacingPercentDefault = 10; // 标准行疏密，按字体行框比例计算
-constexpr lv_coord_t kReaderParaGapDefault = 0; // 普通段落不增加额外段距，保持正文页行数稳定
+constexpr lv_coord_t kReaderParaGapDefault = 56; // 普通段落在行距之外增加的默认段距，单位像素
 constexpr lv_coord_t kReaderChapterTitleAfterGap = 10; // 章名与后文额外间距
 constexpr int kReaderUnderlineGap = 2; // 横排字形下沿与下划线之间的净空像素数
 constexpr int kReaderUnderlineThickness = 2; // 横排下划线的像素线宽
@@ -113,6 +113,17 @@ inline lv_coord_t ReaderParagraphGap(lv_coord_t para_gap, bool previous_title) {
     return static_cast<lv_coord_t>(std::max<lv_coord_t>(0, para_gap) +
         (previous_title ? kReaderChapterTitleAfterGap : 0));
 }
+
+enum class ImageDecodeError : uint8_t {
+    kNone = 0, // 解码成功
+    kInvalidData = 1, // 数据损坏或不完整
+    kUnsupported = 2, // 格式、编码或尺寸不支持
+    kNoMemory = 3, // 内存分配失败或超出解码预算
+    kFileIo = 4, // 文件打开或读取失败
+    kCancelled = 5, // 调用方取消
+    kInvalidArgument = 6, // 解码参数无效
+    kFailed = 7, // 解码器未细分的失败
+};
 
 // 解码后的封面/插图（L8，适合 I1 墨水屏）
 struct RasterImage {

@@ -2,7 +2,6 @@
 #include "book_screen/cover/book_cover_cell.h"
 #include "book_screen/book_screen_priv.h"
 #include "book_screen/shelf/book_bookshelf.h"
-#include "book_screen/cover/book_cover_loader.h"
 #include "book_screen/cover/book_cover_style.h"
 #include "book_screen/cover/book_cover_workers.h"
 #include "book_screen/book_font_runtime.h"
@@ -34,33 +33,18 @@ lv_obj_t* CreateCoverSlot(lv_obj_t* parent, const reader::BookInfo& info, lv_coo
     lv_obj_clear_flag(host, LV_OBJ_FLAG_CLICKABLE);
     Book_DisableScroll(host);
 
-    const int inner_w = CoverFrameInner(w);
-    const int inner_h = CoverFrameInner(h);
-    if (cover_out != nullptr &&
-        BookCoverLoader_TryLoadBookDetailSidecar(info, inner_w, inner_h, *cover_out) &&
-        !cover_out->empty()) {
-        cover_out->BindDsc();
-        lv_obj_t* img = lv_image_create(host);
-        lv_image_set_src(img, &cover_out->dsc);
-        EpdSetContentRole(img,EpdContentRole::Cover);
-        lv_obj_center(img);
-        lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
-    } else {
-        if (cover_out != nullptr) {
-            cover_out->Reset();
-        }
-        lv_obj_t* ph_lbl = lv_label_create(host);
-        lv_label_set_text(ph_lbl, reader::FormatLabel(info.format));
-        lv_obj_set_style_text_font(ph_lbl, Book_ListFont(), 0);
-        lv_obj_set_style_text_color(ph_lbl, lv_color_black(), 0);
-        lv_obj_center(ph_lbl);
-        lv_obj_clear_flag(ph_lbl, LV_OBJ_FLAG_CLICKABLE);
-        if (need_embed_fill != nullptr &&
-            (info.format == reader::BookFormat::kEpub ||
-             info.format == reader::BookFormat::kEbook)) {
-            *need_embed_fill = true;
-        }
-    }
+    if (cover_out != nullptr) cover_out->Reset();
+    lv_obj_t* img = lv_image_create(host);
+    EpdSetContentRole(img,EpdContentRole::Cover);
+    lv_obj_add_flag(img, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* ph_lbl = lv_label_create(host);
+    lv_label_set_text(ph_lbl, reader::FormatLabel(info.format));
+    lv_obj_set_style_text_font(ph_lbl, Book_ListFont(), 0);
+    lv_obj_set_style_text_color(ph_lbl, lv_color_black(), 0);
+    lv_obj_center(ph_lbl);
+    lv_obj_clear_flag(ph_lbl, LV_OBJ_FLAG_CLICKABLE);
+    if (need_embed_fill != nullptr) *need_embed_fill=cover_out!=nullptr && !info.path.empty();
     return host;
 }
 

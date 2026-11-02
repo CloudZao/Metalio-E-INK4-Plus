@@ -23,8 +23,8 @@ WallpaperUiState& Wallpaper_State() {
     return s;
 }
 
-void AsyncCloseOverwriteDialog(void* /*user_data*/) {
-    CloseOverwriteDialog();
+void AsyncCloseWallpaperDialog(void* /*user_data*/) {
+    Wallpaper_CloseDialog();
 }
 
 void AsyncExitAdjustMode(void* /*user_data*/) {
@@ -88,10 +88,10 @@ bool Wallpaper_OnVkKey(const char* key) {
         return false;
     }
     if (Wallpaper_State().mode == UiMode::kPreview) {
-        // 覆盖确认框优先关掉
+        // 弹窗优先关闭，保留当前预览
         if (Wallpaper_State().ui.dialog_mask != nullptr &&
             (std::strcmp(key, "vk_prev") == 0 || std::strcmp(key, "vk_home") == 0)) {
-            ScreenLvAsync(AsyncCloseOverwriteDialog);
+            ScreenLvAsync(AsyncCloseWallpaperDialog);
             return true;
         }
         // 调整态：返回/Home 先退出调整（丢弃未保存变换），不直接关预览
@@ -203,6 +203,7 @@ lv_obj_t* WallpaperScreen::Create() {
     ScreenSetIsHome(false);
 
     lv_obj_t* scr = lv_obj_create(nullptr);
+    Wallpaper_DisableScroll(scr);
     lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_text_font(scr, Wallpaper_UiFont(), 0);
@@ -261,6 +262,7 @@ void WallpaperScreen::SetDecodePaused(bool paused) {
     state.decode_paused.store(paused);
     if (!state.screen_alive.load()) return;
     if (paused) {
+        Wallpaper_CloseDialog();
         state.decode_generation.fetch_add(1);
         CancelThumbFill();
     } else if (state.mode == UiMode::kPreview) {

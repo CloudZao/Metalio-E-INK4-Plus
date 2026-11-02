@@ -278,8 +278,8 @@ MetalioAudioState MetalioAudio_GetState() {
     return s_requested.load() ? MetalioAudioState::Initializing : MetalioAudioState::NotReady;
 }
 
-void MetalioAudio_SetPa(bool on) {
-    epd_board_metalio_eink4_plus_pa_set(on);
+esp_err_t MetalioAudio_SetPa(bool on) {
+    return epd_board_metalio_eink4_plus_pa_set(on);
 }
 
 int MetalioAudio_InputRate() {

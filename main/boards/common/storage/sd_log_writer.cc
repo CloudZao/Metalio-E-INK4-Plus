@@ -2,6 +2,12 @@
 #include "sd_paths.h"
 #include "settings.h"
 #include "usb_virtual_disk.h"
+#include "epd_flash_guard.h"
+#include "sdkconfig.h"
+
+#if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
+#include "metalio_i2c1.h"
+#endif
 
 #include <atomic>
 #include <cerrno>
@@ -29,6 +35,7 @@ size_t s_head = 0, s_tail = 0, s_used = 0;
 portMUX_TYPE s_ring_mux = portMUX_INITIALIZER_UNLOCKED;
 std::mutex s_file_mu;
 bool s_crash_checked = false;
+bool s_crash_erase_pending = false; // 当前 SD 副本已持久化，等待日志任务安全擦除 Flash
 size_t s_write_pos = 0;
 bool s_ready = false; // all file operations/mount transitions share s_file_mu
 std::atomic<bool> s_enabled{true};
@@ -125,29 +132,43 @@ bool FlushLocked() {
     return ok;
 }
 
-// Called with the same lock as SD unmount/snapshot. Never erase an invalid or
-// incompletely saved flash image. Publish via rename only after sync and close.
-void ExportCrashLocked() {
-#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
-    if (!s_ready || s_crash_checked) return;
-    esp_err_t checked = esp_core_dump_image_check();
+// 调用方先持共享 Flash 门闩；只在 SDK 操作期间排空 I2C，不跨 SD I/O 持锁。
+template <typename Operation>
+esp_err_t WithCoredumpFlashOperation(Operation operation) {
+    #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
+    if (!metalio_i2c1_lock_for_flash(-1)) return ESP_FAIL;
+    struct I2cGuard {
+        ~I2cGuard() { metalio_i2c1_unlock(); }
+    } i2c_guard;
+    #endif
+    return operation();
+}
+
+// 持 Flash 和文件锁发布同步关闭后的完整副本；擦除交给日志任务。
+bool ExportCrashLocked() {
+    #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    if (!s_ready || s_crash_checked) return false;
+    if (s_crash_erase_pending) return true;
+    esp_err_t checked = WithCoredumpFlashOperation([]() { return esp_core_dump_image_check(); });
     if (checked != ESP_OK) {
         s_crash_checked = checked == ESP_ERR_NOT_FOUND || checked == ESP_ERR_INVALID_SIZE || checked == ESP_ERR_INVALID_CRC;
-        return;
+        return false;
     }
     size_t address = 0, size = 0;
     const auto* part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
                                                ESP_PARTITION_SUBTYPE_DATA_COREDUMP, nullptr);
-    if (!part || esp_core_dump_image_get(&address, &size) != ESP_OK ||
+    if (!part || WithCoredumpFlashOperation([&]() { return esp_core_dump_image_get(&address, &size); }) != ESP_OK ||
         address < part->address || !size || size > part->size ||
-        address - part->address > part->size - size || !SdEnsureDir(SD_PATH_LOGS)) return;
+        address - part->address > part->size - size || !SdEnsureDir(SD_PATH_LOGS)) return false;
     FILE* fp = fopen(SD_PATH_COREDUMP ".tmp", "wb");
-    if (!fp) return;
+    if (!fp) return false;
     bool ok = true;
     uint8_t chunk[1024];
     for (size_t off = 0; off < size; off += sizeof(chunk)) {
         size_t n = size - off < sizeof(chunk) ? size - off : sizeof(chunk);
-        if (esp_partition_read(part, address - part->address + off, chunk, n) != ESP_OK ||
+        if (WithCoredumpFlashOperation([&]() {
+                return esp_partition_read(part, address - part->address + off, chunk, n);
+            }) != ESP_OK ||
             fwrite(chunk, 1, n, fp) != n) { ok = false; break; }
     }
     if (fflush(fp) != 0) ok = false;
@@ -168,24 +189,61 @@ void ExportCrashLocked() {
         ok = false;
         if (backed_up) rename(SD_PATH_COREDUMP ".previous", SD_PATH_COREDUMP);
     }
-    if (!ok) { remove(SD_PATH_COREDUMP ".tmp"); return; }
-    esp_err_t erased = esp_core_dump_image_erase();
-    s_crash_checked = erased == ESP_OK;
-    ESP_LOGI("SdLog", "crash saved bytes=%u flash_erase=%d", unsigned(size), int(erased));
-#endif
+    if (!ok) { remove(SD_PATH_COREDUMP ".tmp"); return false; }
+    s_crash_erase_pending = true;
+    ESP_LOGI("SdLog", "crash saved bytes=%u; flash erase pending", unsigned(size));
+    return true;
+    #else
+    return false;
+    #endif
+}
+
+bool ExportCrash() {
+    #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    {
+        std::lock_guard<std::mutex> lock(s_file_mu);
+        if (!s_ready || s_crash_checked) return false;
+        if (s_crash_erase_pending) return true;
+    }
+    EpdFlashGuard flash_guard;
+    std::lock_guard<std::mutex> lock(s_file_mu);
+    return ExportCrashLocked();
+    #else
+    return ExportCrashLocked();
+    #endif
+}
+
+void EraseExportedCrash() {
+    #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    esp_err_t erased;
+    {
+        EpdFlashGuard flash_guard;
+        // 共享 Flash 门闩串行化 file/I2C 交叉；擦除期间阻止清空副本或切换 SD。
+        std::lock_guard<std::mutex> lock(s_file_mu);
+        if (!s_ready || !s_crash_erase_pending) return;
+        erased = WithCoredumpFlashOperation([]() { return esp_core_dump_image_erase(); });
+        if (erased == ESP_OK) {
+            s_crash_erase_pending = false;
+            s_crash_checked = true;
+        }
+    }
+    ESP_LOGI("SdLog", "crash flash erase=%d", int(erased));
+    #endif
 }
 
 void Writer(void*) {
     for (;;) {
+        // NVS takes the Flash gate; acquire it before entering the file lock domain.
+        if (s_persist.exchange(false)) {
+            Settings settings("display", true);
+            settings.SetBool("sd_log", s_enabled.load());
+        }
+        const bool erase_crash = ExportCrash();
         {
             std::lock_guard<std::mutex> lock(s_file_mu);
-            if (s_persist.exchange(false)) {
-                Settings settings("display", true);
-                settings.SetBool("sd_log", s_enabled.load());
-            }
-            ExportCrashLocked();
             if (s_enabled.load()) FlushLocked();
         }
+        if (erase_crash) EraseExportedCrash();
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
@@ -218,6 +276,7 @@ void SdLogWriter_SetEnabled(bool enabled) {
 }
 void SdLogWriter_OnSdMounted() {
     std::lock_guard<std::mutex> lock(s_file_mu);
+    s_crash_erase_pending = false;
     // Keep logging suspended for the entire gadget lifetime, including APP mounts
     // caused by host eject. Resume only after the USB worker fully stops.
     auto& usb = UsbVirtualDisk::GetInstance();
@@ -233,6 +292,7 @@ void SdLogWriter_OnSdUnmounting() {
     std::lock_guard<std::mutex> lock(s_file_mu);
     // Waits for an in-progress flush/snapshot to close its FILE before VFS switches.
     s_ready = false;
+    s_crash_erase_pending = false;
 }
 
 bool SdLogWriter_Clear() {
@@ -240,6 +300,7 @@ bool SdLogWriter_Clear() {
     std::lock_guard<std::mutex> lock(s_file_mu);
     auto& usb = UsbVirtualDisk::GetInstance();
     if (!s_ready || usb.IsGadgetActive() || usb.IsBusy()) return false;
+    s_crash_erase_pending = false;
     s_clearing.store(true);
     portENTER_CRITICAL(&s_ring_mux);
     s_head = s_tail = s_used = 0;
@@ -293,13 +354,13 @@ SdLogSnapshotResult SdLogWriter_Snapshot(SdLogSnapshot& out) {
 }
 
 SdLogSnapshotResult SdLogWriter_CrashSnapshot(SdLogSnapshot& out) {
+    ExportCrash();
     std::lock_guard<std::mutex> lock(s_file_mu);
     if (!s_ready) return SdLogSnapshotResult::Unavailable;
     if (out.data) return SdLogSnapshotResult::IoError;
-    ExportCrashLocked();
-#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
-    if (!s_crash_checked) return SdLogSnapshotResult::IoError;
-#endif
+    #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    if (!s_crash_checked && !s_crash_erase_pending) return SdLogSnapshotResult::IoError;
+    #endif
     struct stat st{};
     if (stat(SD_PATH_COREDUMP, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0)
         return SdLogSnapshotResult::NoFile;

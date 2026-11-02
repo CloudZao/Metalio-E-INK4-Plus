@@ -311,6 +311,8 @@ struct PngStream {
     int pal_n = 0; // 调色板有效项数
     uint16_t transparent[3] = {}; // tRNS 透明色键，按灰度或 RGB 通道保存
     bool has_transparent = false; // 是否存在灰度或 RGB 透明色键
+    std::vector<uint8_t>* alpha = nullptr; // 叠加模式的透明度输出
+    ImageDecodeError* error = nullptr; // 调用方接收的失败原因
     uint32_t row_index = 0;
     size_t row_fill = 0;
 };
@@ -412,7 +414,9 @@ void SamplePngRowToL8(const PngStream& s, const uint8_t* row_data, int src_y, Ra
                 raw(1) == s.transparent[1] && raw(2) == s.transparent[2]) alpha = 0;
             if (s.color_type == 6) alpha = sample(3);
         }
-        out.pixels[size_t(dy) * out.width + dx] = (gray * alpha + 255 * (255 - alpha) + 127) / 255;
+        const size_t index = size_t(dy) * out.width + dx;
+        out.pixels[index] = s.alpha ? gray : (gray * alpha + 255 * (255 - alpha) + 127) / 255;
+        if (s.alpha && !s.alpha->empty()) (*s.alpha)[index] = alpha;
     }
 }
 
@@ -438,7 +442,9 @@ bool PngFeed(PngStream& s, const uint8_t* data, size_t len, bool finish, RasterI
         s.z.zalloc = PngZalloc;
         s.z.zfree = PngZfree;
         s.z.opaque = s.work;
-        if (inflateInit(&s.z) != Z_OK) {
+        const int status = inflateInit(&s.z);
+        if (status != Z_OK) {
+            if (s.error) *s.error = status == Z_MEM_ERROR ? ImageDecodeError::kNoMemory : ImageDecodeError::kFailed;
             return false;
         }
         s.z_init = true;
@@ -464,6 +470,7 @@ bool PngFeed(PngStream& s, const uint8_t* data, size_t len, bool finish, RasterI
         s.row_fill += got;
 
         if (zret != Z_OK && zret != Z_STREAM_END && zret != Z_BUF_ERROR) {
+            if (s.error) *s.error = zret == Z_MEM_ERROR ? ImageDecodeError::kNoMemory : ImageDecodeError::kInvalidData;
             ESP_LOGW(TAG, "decode=stream png inflate err=%d", zret);
             return false;
         }
@@ -544,24 +551,38 @@ bool FilePngSkip(void* context, size_t n) {
 // 按行解压并缩放，仅保留当前行和上一行，避免分配完整 RGBA 图像。
 bool DecodePngRows(PngReadFn read, PngSkipFn skip, void* ctx, int max_w, int max_h, RasterImage& out,
                    const std::atomic<bool>* abort, ImageDecodeCancelled cancelled = nullptr,
-                   void* cancel_context = nullptr) {
+                   void* cancel_context = nullptr, std::vector<uint8_t>* alpha = nullptr,
+                   ImageDecodeError* error = nullptr) {
     out.Reset();
+    if (error) *error = ImageDecodeError::kInvalidData;
     const bool original_size = max_w == 0 && max_h == 0;
     std::vector<uint8_t>().swap(out.pixels);
     PngStream s{};
+    s.alpha = alpha;
+    s.error = error;
+    if (alpha) alpha->clear();
     s.abort = abort;
     s.cancelled = cancelled;
     s.cancel_context = cancel_context;
     SemaphoreHandle_t mutex = PngMutex();
-    if (mutex == nullptr) return false;
+    if (mutex == nullptr) {
+        if (error) *error = ImageDecodeError::kNoMemory;
+        return false;
+    }
     while (xSemaphoreTake(mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
-        if (PngCancelled(s)) return false;
+        if (PngCancelled(s)) {
+            if (error) *error = ImageDecodeError::kCancelled;
+            return false;
+        }
     }
     PngLock lock{mutex};
     std::unique_ptr<PngWorkspace, decltype(&heap_caps_free)> work(
         static_cast<PngWorkspace*>(heap_caps_aligned_calloc(16, 1, kPngWorkspaceBytes,
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)), heap_caps_free);
-    if (!work || PngCancelled(s)) return false;
+    if (!work || PngCancelled(s)) {
+        if (error) *error = PngCancelled(s) ? ImageDecodeError::kCancelled : ImageDecodeError::kNoMemory;
+        return false;
+    }
     s.work = work.get();
     std::unique_ptr<uint8_t, decltype(&heap_caps_free)> row_buffer(nullptr, heap_caps_free);
 
@@ -615,11 +636,13 @@ bool DecodePngRows(PngReadFn read, PngSkipFn skip, void* ctx, int max_w, int max
             s.color_type = io[9];
             const uint8_t interlace = io[12];
             if (interlace != 0 || io[10] != 0 || io[11] != 0) {
+                if (error) *error = ImageDecodeError::kUnsupported;
                 ESP_LOGW(TAG, "decode=stream png interlaced unsupported");
                 ok = false;
                 break;
             }
             if ((s.bit_depth != 8 && s.bit_depth != 16) || (s.color_type == 3 && s.bit_depth != 8)) {
+                if (error) *error = ImageDecodeError::kUnsupported;
                 ESP_LOGW(TAG, "decode=stream png bit_depth=%u unsupported", s.bit_depth);
                 ok = false;
                 break;
@@ -641,6 +664,7 @@ bool DecodePngRows(PngReadFn read, PngSkipFn skip, void* ctx, int max_w, int max
                     s.bpp = 4;
                     break;
                 default:
+                    if (error) *error = ImageDecodeError::kUnsupported;
                     ESP_LOGW(TAG, "decode=stream png color_type=%u", s.color_type);
                     ok = false;
                     break;
@@ -651,6 +675,7 @@ bool DecodePngRows(PngReadFn read, PngSkipFn skip, void* ctx, int max_w, int max
             s.bpp *= s.bit_depth / 8;
             const size_t row_bytes = static_cast<size_t>(s.width) * static_cast<size_t>(s.bpp);
             if (s.width == 0 || s.width > UINT16_MAX || s.height == 0 || s.height > INT_MAX) {
+                if (error) *error = ImageDecodeError::kUnsupported;
                 ESP_LOGW(TAG, "decode=stream png size reject %ux%u row=%u",
                          static_cast<unsigned>(s.width), static_cast<unsigned>(s.height),
                          static_cast<unsigned>(row_bytes));
@@ -660,7 +685,11 @@ bool DecodePngRows(PngReadFn read, PngSkipFn skip, void* ctx, int max_w, int max
             s.row_bytes = static_cast<int>(row_bytes);
             row_buffer.reset(static_cast<uint8_t*>(heap_caps_malloc(row_bytes * 2 + 1,
                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
-            if (!row_buffer) { ok = false; break; }
+            if (!row_buffer) {
+                if (error) *error = ImageDecodeError::kNoMemory;
+                ok = false;
+                break;
+            }
             s.prev = row_buffer.get();
             s.cur = row_buffer.get() + row_bytes;
             std::memset(s.prev, 0, row_bytes);
@@ -672,16 +701,19 @@ bool DecodePngRows(PngReadFn read, PngSkipFn skip, void* ctx, int max_w, int max
                     original_size ? static_cast<int>(s.height) : max_h, &dst_w,
                     &dst_h);
             const size_t output_bytes = size_t(dst_w) * dst_h;
-            if (dst_w <= 0 || dst_h <= 0 || dst_w > UINT16_MAX || dst_h > UINT16_MAX ||
-                (!original_size && output_bytes > kMaxPngOutput) ||
+            const bool size_rejected = dst_w <= 0 || dst_h <= 0 || dst_w > UINT16_MAX || dst_h > UINT16_MAX ||
+                (!original_size && output_bytes > kMaxPngOutput);
+            if (size_rejected ||
                 heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) < output_bytes ||
                 !AllocRasterL8(out, dst_w, dst_h) ||
                 (output_bytes > 4096 && !esp_ptr_external_ram(out.pixels.data()))) {
+                if (error) *error = size_rejected ? ImageDecodeError::kUnsupported : ImageDecodeError::kNoMemory;
                 ESP_LOGW(TAG, "decode=stream png output reject %dx%d bytes=%u", dst_w, dst_h, unsigned(output_bytes));
                 ok = false;
                 break;
             }
             got_ihdr = true;
+            if (alpha && (s.color_type == 4 || s.color_type == 6)) alpha->assign(output_bytes, 255);
             ESP_LOGI(TAG, "decode=stream png %ux%u type=%u depth=%u work=%u -> %dx%d", unsigned(s.width),
                      unsigned(s.height), s.color_type, s.bit_depth, unsigned(kPngWorkspaceBytes), dst_w, dst_h);
         } else if (std::strcmp(type, "PLTE") == 0) {
@@ -702,6 +734,7 @@ bool DecodePngRows(PngReadFn read, PngSkipFn skip, void* ctx, int max_w, int max
             }
         } else if (std::strcmp(type, "tRNS") == 0) {
             if (s.z_init) { ok = false; break; }
+            if (alpha && got_ihdr) alpha->assign(out.pixels.size(), 255);
             if (s.color_type == 0 || s.color_type == 2) {
                 const unsigned channels = s.color_type == 0 ? 1 : 3;
                 if (len != channels * 2 || !read(ctx, io, len) || !skip_bytes(4)) {
@@ -771,6 +804,8 @@ bool DecodePngRows(PngReadFn read, PngSkipFn skip, void* ctx, int max_w, int max
     PngStreamFree(s);
 
     if (!ok || !done || !got_ihdr || !s.z_end || PngCancelled(s) || out.empty() || rows != h) {
+        if (error && PngCancelled(s)) *error = ImageDecodeError::kCancelled;
+        if (alpha) alpha->clear();
         if (ok && got_ihdr && rows < h) {
             ESP_LOGW(TAG, "decode=stream png incomplete rows %u/%u", static_cast<unsigned>(rows),
                      static_cast<unsigned>(h));
@@ -780,6 +815,7 @@ bool DecodePngRows(PngReadFn read, PngSkipFn skip, void* ctx, int max_w, int max
         return false;
     }
     out.BindDsc();
+    if (error) *error = ImageDecodeError::kNone;
     return true;
 }
 
@@ -791,28 +827,42 @@ bool DecodePngStream(ZipReader& zip, int max_w, int max_h, RasterImage& out,
 }  // namespace
 
 bool DecodePngMemoryToL8(const uint8_t* data, size_t len, int max_w, int max_h, RasterImage& out,
-                         ImageDecodeCancelled cancelled, void* context) {
+                         ImageDecodeCancelled cancelled, void* context, ImageDecodeError* error) {
     if (data == nullptr || len < 8 || ((max_w != 0 || max_h != 0) && (max_w <= 0 || max_h <= 0))) {
         out.Reset();
+        if (error) *error = ImageDecodeError::kInvalidArgument;
         return false;
     }
     PngMem mem{data, len, 0};
-    return DecodePngRows(MemPngRead, MemPngSkip, &mem, max_w, max_h, out, nullptr, cancelled, context);
+    return DecodePngRows(MemPngRead, MemPngSkip, &mem, max_w, max_h, out, nullptr, cancelled, context, nullptr, error);
 }
 
 bool DecodePngFileToL8(const char* path, int max_w, int max_h, RasterImage& out,
-                       ImageDecodeCancelled cancelled, void* context) {
+                       ImageDecodeCancelled cancelled, void* context, std::vector<uint8_t>* alpha,
+                       ImageDecodeError* error) try {
     out.Reset();
+    if (alpha) alpha->clear();
     if (path == nullptr || ((max_w != 0 || max_h != 0) && (max_w <= 0 || max_h <= 0)) ||
-        (cancelled && cancelled(context))) return false;
-    FILE* file = std::fopen(path, "rb");
-    if (file == nullptr) return false;
-    PngFile input{file, cancelled, context};
+        (cancelled && cancelled(context))) {
+        if (error) *error = cancelled && cancelled(context) ? ImageDecodeError::kCancelled : ImageDecodeError::kInvalidArgument;
+        return false;
+    }
+    std::unique_ptr<FILE, decltype(&std::fclose)> file(std::fopen(path, "rb"), std::fclose);
+    if (!file) {
+        if (error) *error = ImageDecodeError::kFileIo;
+        return false;
+    }
+    PngFile input{file.get(), cancelled, context};
     const bool ok = DecodePngRows(FilePngRead, FilePngSkip, &input, max_w, max_h, out,
-                                  nullptr, cancelled, context);
-    std::fclose(file);
+                                  nullptr, cancelled, context, alpha, error);
+    if (!ok && error && std::ferror(file.get())) *error = ImageDecodeError::kFileIo;
     if (!ok && (cancelled == nullptr || !cancelled(context))) ESP_LOGW(TAG, "png decode failed: %s", path);
     return ok;
+} catch (const std::bad_alloc&) {
+    out.Reset();
+    if (alpha) alpha->clear();
+    if (error) *error = ImageDecodeError::kNoMemory;
+    return false;
 }
 
 bool DecodeZipEntryImageToL8(ZipReader& zip, const char* entry_name, int max_w, int max_h,

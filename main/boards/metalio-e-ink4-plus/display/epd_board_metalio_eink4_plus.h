@@ -29,10 +29,12 @@ bool epd_board_metalio_eink4_plus_ioexp_ok(void);
  */
 void epd_board_metalio_eink4_plus_tp_reset(void);
 
-/** Lease shared P12 against touch resets; verify P5/P12 are already high.
- * Does not write TCA outputs or take ownership of the shared power rail.
- * A successful acquire must be paired with release on the same task. */
+/**
+ * @brief 租用共享复位脚并确认供电和复位已释放，不改写扩展器输出
+ * @note 成功后须在同一任务调用 release，期间阻止触摸复位。
+ */
 esp_err_t epd_board_metalio_eink4_plus_camera_acquire(uint32_t timeout_ms);
+/** @brief 释放当前任务持有的共享复位脚租约。 */
 void epd_board_metalio_eink4_plus_camera_release(void);
 
 /**
@@ -44,9 +46,10 @@ void epd_board_metalio_eink4_plus_motor_set(bool on);
 /**
  * @brief 功放使能（TCA P0.4=PA_EN），高有效；与 TPS 控制脚同口锁存
  * @param on true 开，false 关
+ * @return 成功返回 ESP_OK；复位期间开启或写入失败返回对应错误
  */
-void epd_board_metalio_eink4_plus_pa_set(bool on);
-/** @brief P14 共享电源拉低 3 秒后拉高；调用方须阻止待机。 */
+esp_err_t epd_board_metalio_eink4_plus_pa_set(bool on);
+/** @brief P14 共享电源拉低后执行马达放电，再恢复供电；调用方须阻止待机。 */
 esp_err_t epd_board_metalio_eink4_plus_bt_power_reset(void);
 
 /**
@@ -57,13 +60,15 @@ void epd_board_metalio_eink4_plus_ana_sw_set(bool high);
 
 /**
  * @brief 入睡关轨：P5 摄像屏电 → P14 VOUT（最后关）
+ * @return 成功返回 ESP_OK；失败时可能已部分关轨，调用方须恢复
  */
-void epd_board_metalio_eink4_plus_sleep_cut_rails(void);
+esp_err_t epd_board_metalio_eink4_plus_sleep_cut_rails(void);
 
 /**
  * @brief 浅睡醒后恢复 P14 → P5
+ * @return 成功返回 ESP_OK，失败返回对应错误
  */
-void epd_board_metalio_eink4_plus_sleep_restore_rails(void);
+esp_err_t epd_board_metalio_eink4_plus_sleep_restore_rails(void);
 
 /**
  * @brief 读 TCA 扩展脚输入电平（0..15；高口=io>>3，位=io&7）
@@ -93,8 +98,9 @@ void epd_board_metalio_eink4_plus_gpio2_irq_subscribe(TaskHandle_t task);
 /**
  * @brief 按手册将 TPS65185 置入 SLEEP：PWRUP/VCOM↓ → WAKEUP↓ → 等待 ≥100ms
  * @note 深睡前调用；SLEEP 后 I2C 无效、寄存器复位
+ * @return 成功返回 ESP_OK，失败时不继续推进后续休眠步骤
  */
-void epd_board_metalio_eink4_plus_tps_enter_sleep(void);
+esp_err_t epd_board_metalio_eink4_plus_tps_enter_sleep(void);
 
 /**
  * @brief 入睡前：释放 LCD 外设，屏幕并行通信脚全部输出低
@@ -119,8 +125,9 @@ void epd_board_metalio_eink4_plus_bus_restore(void);
 
 /**
  * @brief 入睡前：Port0/Port1 全部改输出；TPS 控制脚置低；音量/电源脚驱空闲高；P17 随后改输入唤醒
+ * @return 成功返回 ESP_OK，失败返回对应错误；失败后须恢复，不能继续配置唤醒
  */
-void epd_board_metalio_eink4_plus_ioexp_mask_for_sleep(void);
+esp_err_t epd_board_metalio_eink4_plus_ioexp_mask_for_sleep(void);
 
 /**
  * @brief 武装唤醒前：仅把电源键 P17 改回输入
@@ -130,8 +137,9 @@ bool epd_board_metalio_eink4_plus_ioexp_enable_power_wake_pin(void);
 
 /**
  * @brief 浅睡醒后：恢复 Port0/Port1 默认输入输出（音量键等）
+ * @return 配置及读口成功返回 ESP_OK，失败返回对应错误
  */
-void epd_board_metalio_eink4_plus_ioexp_restore_keys(void);
+esp_err_t epd_board_metalio_eink4_plus_ioexp_restore_keys(void);
 
 /**
  * @brief 向开关机芯片发关机脉冲：IO_P13 高/低各 PWR_PULSE_INTERVAL_MS，共 PWR_PULSE_COUNT 次

@@ -31,6 +31,7 @@ static char s_names[static_cast<size_t>(WallpaperActiveSlot::Count)][kNameMax + 
 static std::atomic<bool> s_cache_ready{false};
 static std::atomic<bool> s_hydrate_busy{false};
 static std::atomic<bool> s_standby_selected{false};
+static std::atomic<bool> s_overlay[static_cast<size_t>(WallpaperActiveSlot::Count)]{}; // 与文件槽一一对应
 
 struct WallpaperActiveHydrateWork {
     Wallpaper_HydrateDoneFn done = nullptr;
@@ -42,6 +43,10 @@ static const char* NvsKeyFor(WallpaperActiveSlot slot) {
 }
 static const char* SlotTag(WallpaperActiveSlot slot) {
     return slot == WallpaperActiveSlot::Standby ? "standby" : "shutdown";
+}
+
+static const char* OverlayKey(WallpaperActiveSlot slot) {
+    return slot == WallpaperActiveSlot::Standby ? "stb_overlay" : "off_overlay";
 }
 
 static bool FileExistsRegular(const char* path) {
@@ -79,6 +84,7 @@ static void SetSlotCache(WallpaperActiveSlot slot, const char* name) {
     const size_t i = static_cast<size_t>(slot);
     if (name == nullptr || name[0] == '\0') {
         s_names[i][0] = '\0';
+        s_overlay[i].store(false);
     } else {
         std::snprintf(s_names[i], sizeof(s_names[i]), "%s", name);
     }
@@ -96,17 +102,18 @@ static void PersistSlotToNvs(WallpaperActiveSlot slot, const char* name) {
     const char* key = NvsKeyFor(slot);
     if (name == nullptr || name[0] == '\0') {
         settings.EraseKey(key);
+        settings.EraseKey(OverlayKey(slot));
     } else {
         settings.SetString(key, name);
+        settings.SetBool(OverlayKey(slot), s_overlay[static_cast<size_t>(slot)].load());
     }
 }
 
 // 读取 NVS 值并做合法性校验；非法值返回空并要求清理。
-static std::string ReadSlotNameFromNvs(WallpaperActiveSlot slot, bool* should_erase) {
+static std::string ReadSlotNameFromNvs(Settings& settings, WallpaperActiveSlot slot, bool* should_erase) {
     if (should_erase != nullptr) {
         *should_erase = false;
     }
-    Settings settings(kNvsNs, false);
     const std::string name = settings.GetString(NvsKeyFor(slot), "");
     if (name.empty()) {
         return {};
@@ -125,8 +132,10 @@ static void LoadAllFromNvsIntoCache() {
     bool defer_ready = false;
     for (uint8_t s = 0; s < static_cast<uint8_t>(WallpaperActiveSlot::Count); ++s) {
         const WallpaperActiveSlot slot = static_cast<WallpaperActiveSlot>(s);
+        Settings settings(kNvsNs, false);
+        s_overlay[s].store(settings.GetBool(OverlayKey(slot), false));
         bool erase = false;
-        const std::string name = ReadSlotNameFromNvs(slot, &erase);
+        const std::string name = ReadSlotNameFromNvs(settings, slot, &erase);
         if (erase) {
             PersistSlotToNvs(slot, nullptr);
             SetSlotCache(slot, "");
@@ -215,7 +224,8 @@ static std::string GetSlotFilename(WallpaperActiveSlot slot) {
     return name;
 }
 
-static bool SetSlotFromFile(WallpaperActiveSlot slot, const char* path_or_name, std::string& err_out) {
+static bool SetSlotFromFile(WallpaperActiveSlot slot, const char* path_or_name, std::string& err_out,
+                            bool overlay) {
     err_out.clear();
     const std::string name = BasenameOf(path_or_name);
     if (name.empty()) {
@@ -239,6 +249,7 @@ static bool SetSlotFromFile(WallpaperActiveSlot slot, const char* path_or_name, 
         LoadAllFromNvsIntoCache();
     }
     SetSlotCache(slot, name.c_str());
+    s_overlay[static_cast<size_t>(slot)].store(overlay);
     MarkCacheReady();
     PersistSlotToNvs(slot, name.c_str());
     ESP_LOGI(kLogTag, "%s wallpaper -> %s (NVS only)", SlotTag(slot), name.c_str());
@@ -295,10 +306,9 @@ static bool TryResolveSlotPath(WallpaperActiveSlot slot, char* out_path, size_t 
         IsSafeWallpaperBasename(cached)) {
         name = cached;
     } else {
-        bool erase = false;
-        name = ReadSlotNameFromNvs(slot, &erase);
+        Settings settings(kNvsNs, false);
+        name = ReadSlotNameFromNvs(settings, slot, nullptr);
         // 解析路径：不在这里 erase（瞬时失败不应丢配置）；仅 hydrate 清脏
-        (void)erase;
     }
     if (name.empty() || !IsSafeWallpaperBasename(name.c_str())) {
         return false;
@@ -330,6 +340,11 @@ bool Wallpaper_HasStandbySelection() {
     return s_standby_selected.load(std::memory_order_acquire);
 }
 
+bool Wallpaper_IsOverlay(bool for_standby) {
+    return s_overlay[static_cast<size_t>(for_standby ? WallpaperActiveSlot::Standby :
+                                       WallpaperActiveSlot::Shutdown)].load();
+}
+
 bool Wallpaper_IsActiveFilename(const char* filename) {
     if (filename == nullptr || filename[0] == '\0') {
         return false;
@@ -346,12 +361,12 @@ bool Wallpaper_IsStandbyFilename(const char* filename) {
     return !active.empty() && active == filename;
 }
 
-bool Wallpaper_SetActiveFromFile(const char* path_or_name, std::string& err_out) {
-    return SetSlotFromFile(WallpaperActiveSlot::Shutdown, path_or_name, err_out);
+bool Wallpaper_SetActiveFromFile(const char* path_or_name, std::string& err_out, bool overlay) {
+    return SetSlotFromFile(WallpaperActiveSlot::Shutdown, path_or_name, err_out, overlay);
 }
 
-bool Wallpaper_SetStandbyFromFile(const char* path_or_name, std::string& err_out) {
-    return SetSlotFromFile(WallpaperActiveSlot::Standby, path_or_name, err_out);
+bool Wallpaper_SetStandbyFromFile(const char* path_or_name, std::string& err_out, bool overlay) {
+    return SetSlotFromFile(WallpaperActiveSlot::Standby, path_or_name, err_out, overlay);
 }
 
 void Wallpaper_ClearShutdownWallpaper() {

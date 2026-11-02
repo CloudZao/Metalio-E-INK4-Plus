@@ -28,7 +28,7 @@ void power_hw_cellular_resume(void);
  * @return ESP_OK 成功
  */
 esp_err_t power_hw_pa_set(bool on);
-/** @brief 蓝牙共享 P14 电源低 3 秒后高；调用方须保持唤醒。 */
+/** @brief 蓝牙共享电源复位，断电期间通过马达放电后恢复供电；调用方须保持唤醒。 */
 esp_err_t power_hw_bt_power_reset(void);
 
 /**
@@ -79,6 +79,11 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us);
 esp_err_t power_hw_sd_park(void);
 /** @brief 恢复已休眠的 SD 和串口；日志在退出待机后恢复。 */
 esp_err_t power_hw_sd_restore(void);
+
+/** @brief 待机画面完成后休眠屏幕和总线，先关 P5 再关 P14；可重试。 */
+esp_err_t power_hw_standby_rails_park(void);
+/** @brief 恢复待机关闭的外设电源、通知驱动并恢复屏总线；未停放时不操作。 */
+esp_err_t power_hw_standby_rails_restore(void);
 
 /**
  * @brief 取最近一次浅睡返回瞬间的按键锁存

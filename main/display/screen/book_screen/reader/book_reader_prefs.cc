@@ -20,6 +20,7 @@ static constexpr const char* kNvsNs = "reader";
 static constexpr const char* kNvsFontKey = "font";
 static constexpr const char* kNvsFontSizeKey = "font_size";
 static constexpr const char* kNvsSpacingKey = "spacing";
+static constexpr const char* kNvsParaGapKey = "para_gap";
 static constexpr const char* kNvsMarginKey = "margin";
 static constexpr const char* kNvsHideProgKey = "hide_prog";
 static constexpr const char* kNvsFooterMaskKey = "foot_msk";
@@ -32,15 +33,11 @@ static constexpr const char* kNvsTextDirectionKey = "text_dir";
 static constexpr const char* kDefaultFile = "misans_40_2.ef"; // SD 现网默认 40px/2bpp
 static constexpr size_t kMaxFileLen = SD_FILE_NAME_MAX_BYTES;
 static constexpr int kDefaultSpacingPreset = 1;  // 标准
+static constexpr int kDefaultParaGapPreset = 1; // 标准，56px
 static constexpr int kDefaultMarginPreset = 1;   // 标准（约原 kListPad=12）
 static constexpr int kDefaultFooterMask = kBookReaderFooterDefault;
 static constexpr int kDefaultShelfView = kBookReaderShelfViewCover;
 static constexpr int kDefaultShelfPct = 0;  // 进度角标默认关
-
-struct BookSpacingPreset {
-    int line_spacing_percent; // 行间首选留白占字体行框的百分比
-    int para_gap; // 段前额外留白，单位像素
-};
 
 struct BookMarginPreset {
     int left;
@@ -49,13 +46,8 @@ struct BookMarginPreset {
     int bottom;
 };
 
-// 疏密档位按行框比例计算，段落仅首行缩进，不额外增加段距。
-static constexpr BookSpacingPreset kSpacingTable[kBookReaderSpacingPresetCount] = {
-    {0, 0},
-    {10, 0},
-    {25, 0},
-    {40, 0},
-};
+static constexpr int kSpacingTable[kBookReaderSpacingPresetCount] = {0, 10, 25, 40}; // 行间留白占字体行框的百分比
+static constexpr int kParaGapTable[kBookReaderParaGapPresetCount] = {32, 56, 80, 104}; // 段前额外留白，单位像素
 
 // 成套页边距：与分页 viewport 共用，避免只改 UI pad 导致裁切/留白不一致
 static constexpr BookMarginPreset kMarginTable[kBookReaderMarginPresetCount] = {
@@ -68,6 +60,7 @@ static constexpr BookMarginPreset kMarginTable[kBookReaderMarginPresetCount] = {
 static char s_font_file[kMaxFileLen + 1] = {};
 static int s_font_size = 0; // .ef 为 0；TTF/OTF 为实际像素字号
 static int s_spacing_preset = kDefaultSpacingPreset;
+static int s_para_gap_preset = kDefaultParaGapPreset;
 static int s_margin_preset = kDefaultMarginPreset;
 static int s_footer_mask = kDefaultFooterMask;
 static int s_aa = 0;
@@ -100,6 +93,13 @@ static int ClampSpacing(int preset) {
 static int ClampMargin(int preset) {
     if (preset < 0 || preset >= kBookReaderMarginPresetCount) {
         return kDefaultMarginPreset;
+    }
+    return preset;
+}
+
+static int ClampParaGap(int preset) {
+    if (preset < 0 || preset >= kBookReaderParaGapPresetCount) {
+        return kDefaultParaGapPreset;
     }
     return preset;
 }
@@ -140,6 +140,7 @@ static void LoadFromNvs() {
     s_font_size = IsTtfName(s_font_file) ?
         std::clamp<int>(settings.GetInt(kNvsFontSizeKey, 40), 20, 80) : 0;
     s_spacing_preset = ClampSpacing(settings.GetInt(kNvsSpacingKey, kDefaultSpacingPreset));
+    s_para_gap_preset = ClampParaGap(settings.GetInt(kNvsParaGapKey, kDefaultParaGapPreset));
     s_margin_preset = ClampMargin(settings.GetInt(kNvsMarginKey, kDefaultMarginPreset));
     // foot_msk 优先；无则按旧 hide_prog 迁移
     const int raw_mask = settings.GetInt(kNvsFooterMaskKey, -1);
@@ -186,6 +187,7 @@ enum class BookPrefsPersistKind : uint8_t {
     kWritingMode = 11,
     kAutoTurnSeconds = 12,
     kTextDirection = 13,
+    kParaGap = 14,
 };
 
 struct BookPrefsPersistArg {
@@ -212,6 +214,9 @@ static void PersistTask(void* arg) {
             case BookPrefsPersistKind::kSpacing:
                 settings.SetInt(kNvsSpacingKey, p->ival);
                 ESP_LOGI(TAG, "nvs save spacing=%d", p->ival);
+                break;
+            case BookPrefsPersistKind::kParaGap:
+                settings.SetInt(kNvsParaGapKey, p->ival);
                 break;
             case BookPrefsPersistKind::kMargin:
                 settings.SetInt(kNvsMarginKey, p->ival);
@@ -361,11 +366,30 @@ const char* BookReaderPrefsSpacingLabel(int preset) {
 }
 
 int BookReaderPrefsLineSpacingPercent(void) {
-    return kSpacingTable[ClampSpacing(BookReaderPrefsSpacingPreset())].line_spacing_percent;
+    return kSpacingTable[BookReaderPrefsSpacingPreset()];
+}
+
+int BookReaderPrefsParaGapPreset(void) {
+    BookReaderPrefsEnsureLoaded();
+    return ClampParaGap(s_para_gap_preset);
+}
+
+void BookReaderPrefsSetParaGapPreset(int preset) {
+    if (preset < 0 || preset >= kBookReaderParaGapPresetCount) {
+        ESP_LOGW(TAG, "reject bad paragraph gap preset=%d", preset);
+        return;
+    }
+    BookReaderPrefsEnsureLoaded();
+    if (s_para_gap_preset == preset) return;
+    s_para_gap_preset = preset;
+    auto* arg = new BookPrefsPersistArg{};
+    arg->kind = BookPrefsPersistKind::kParaGap;
+    arg->ival = s_para_gap_preset;
+    StartPersist(arg);
 }
 
 int BookReaderPrefsParaGap(void) {
-    return kSpacingTable[ClampSpacing(BookReaderPrefsSpacingPreset())].para_gap;
+    return kParaGapTable[BookReaderPrefsParaGapPreset()];
 }
 
 int BookReaderPrefsMarginPreset(void) {

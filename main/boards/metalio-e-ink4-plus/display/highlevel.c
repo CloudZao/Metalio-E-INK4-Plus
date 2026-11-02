@@ -125,8 +125,8 @@ enum EpdDrawError epd_hl_update_screen_full(
         full,
         MODE_PACKING_1PPB_DIFFERENCE | mode,
         temperature,
-        state->dirty_lines,
-        state->dirty_columns,
+        NULL,
+        NULL,
         state->waveform
     );
 

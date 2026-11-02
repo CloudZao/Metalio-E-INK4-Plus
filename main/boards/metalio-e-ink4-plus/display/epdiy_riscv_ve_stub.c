@@ -80,9 +80,9 @@ epd_apply_line_mask_VE(uint8_t* line, const uint8_t* mask, int mask_len) {
 }
 
 /**
- * @brief 1ppB / 1K VE 格式 LUT 查表（与 lut.c lookup_pixels_in_VE_LUT 一致）
+ * @brief 通过 1 KB 查找表转换对齐的差分行
  * @note S31 与 S3 字节内 4px 高低位对调：板级/LCD 沿 X 先吃高位 2bit，非 CPU 端序差异。
- *       VE LUT 每项占 4 字节，值在 LE 低字节；按字节取比整字 load 更省带宽。
+ *       S31 使用四段预移位查找表；其他目标保留每项四字节的 VE 格式。
  */
 __attribute__((optimize("O3"))) void IRAM_ATTR
 calc_epd_input_1ppB_1k_S3_VE_aligned(
@@ -96,15 +96,15 @@ calc_epd_input_1ppB_1k_S3_VE_aligned(
     const uint32_t n = epd_width >> 2; // 输出字节数 = 像素/4
     uint32_t j = 0;
 
-#if defined(CONFIG_IDF_TARGET_ESP32S31)
-#define LUT4(in)                                                                                   \
-    ((uint8_t)(lut[((in) & 0xFFu) << 2] << 6 | lut[(((in) >> 8) & 0xFFu) << 2] << 4                \
-               | lut[(((in) >> 16) & 0xFFu) << 2] << 2 | lut[((in) >> 24) << 2]))
-#else
-#define LUT4(in)                                                                                   \
+    #if defined(CONFIG_IDF_TARGET_ESP32S31)
+    #define LUT4(in)                                                                                \
+    ((uint8_t)(lut[0x300 + ((in) & 0xFFu)] | lut[0x200 + (((in) >> 8) & 0xFFu)]                     \
+               | lut[0x100 + (((in) >> 16) & 0xFFu)] | lut[(in) >> 24]))
+    #else
+    #define LUT4(in)                                                                                \
     ((uint8_t)(lut[((in) >> 24) << 2] << 6 | lut[(((in) >> 16) & 0xFFu) << 2] << 4                 \
                | lut[(((in) >> 8) & 0xFFu) << 2] << 2 | lut[((in) & 0xFFu) << 2]))
-#endif
+    #endif
 
     for (; j + 4 <= n; j += 4) {
         const uint32_t in0 = ld[j];
@@ -119,7 +119,7 @@ calc_epd_input_1ppB_1k_S3_VE_aligned(
     for (; j < n; j++) {
         epd_input[j] = LUT4(ld[j]);
     }
-#undef LUT4
+    #undef LUT4
 }
 
 #if defined(CONFIG_IDF_TARGET_ESP32S31)
@@ -146,14 +146,17 @@ bool epd_pixel_order_selftest(void) {
         }
     }
     }
-    uint32_t lut[256] __attribute__((aligned(16))) = {0};
+    uint8_t lut[1024] __attribute__((aligned(16))) = {0};
     uint8_t to[8] __attribute__((aligned(16)));
     uint8_t from[8] __attribute__((aligned(16)));
     uint8_t difference[16] __attribute__((aligned(16)));
     uint8_t dirty[8] __attribute__((aligned(16)));
     uint8_t output[4] __attribute__((aligned(16)));
     uint8_t mask[4] __attribute__((aligned(16)));
-    lut[0x0f]=1; lut[0xf0]=2;
+    for (int bank=0;bank<4;++bank) {
+        lut[bank*256+0x0f]=1<<(2*bank);
+        lut[bank*256+0xf0]=2<<(2*bank);
+    }
     for (int direction=0;direction<2;++direction) {
         for (int subset=0;subset<16;++subset) {
             memset(from,direction?0:255,sizeof(from));
@@ -164,7 +167,7 @@ bool epd_pixel_order_selftest(void) {
                 to[p/2]=(p&1)?(to[p/2]&15)|(color<<4):(to[p/2]&240)|color;
             }
             epd_interlace_4bpp_line_VE(to,from,difference,dirty,16);
-            calc_epd_input_1ppB_1k_S3_VE_aligned((uint32_t*)difference,output,(uint8_t*)lut,16);
+            calc_epd_input_1ppB_1k_S3_VE_aligned((uint32_t*)difference,output,lut,16);
             epd_populate_line_mask(mask,dirty,4);
             epd_apply_line_mask_VE(output,mask,4);
             for (int p=0;p<16;++p) {
@@ -185,13 +188,13 @@ bool epd_pixel_order_selftest(void) {
         if (mode->type!=MODE_GC16 && mode->type!=MODE_GL16) continue;
         const EpdWaveformPhases* phases=mode->range_data[0];
         for (int f=0;f<phases->phases;++f) {
-            pair.build_func((uint8_t*)lut,phases,f);
+            pair.build_func(lut,phases,f);
             for (int old=0;old<16;++old) {
                 memset(from,old|(old<<4),sizeof(from));
                 memset(dirty,0,sizeof(dirty));
                 for (int p=0;p<8;++p) to[p]=(2*p)|((2*p+1)<<4);
                 epd_interlace_4bpp_line_VE(to,from,difference,dirty,16);
-                pair.lookup_func((uint32_t*)difference,output,(uint8_t*)lut,16);
+                pair.lookup_func((uint32_t*)difference,output,lut,16);
                 for (int target=0;target<16;++target) {
                     const uint8_t cell=phases->luts[(f*16+target)*4+old/4];
                     const int expected=(cell>>(6-2*(old&3)))&3;

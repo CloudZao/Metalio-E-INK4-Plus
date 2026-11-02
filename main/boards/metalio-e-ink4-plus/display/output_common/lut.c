@@ -150,27 +150,23 @@ __attribute__((optimize("O3"))) void IRAM_ATTR calc_epd_input_8ppB(
 }
 
 /**
- * Look up 4 pixels of a differential image in a LUT constructed for use with vector extensions.
- *
- * 每字节 4 像素×2bit。LE 下 ld[j]=p0|(p1<<8)|(p2<<16)|(p3<<24)。
- * 高地址像素进高位（p3→bits7:6 … p0→bits1:0），与其 LCD/排线一致。
- * 面板沿 X 先吃高位 2bit，须 p0→bits7:6 … p3→bits1:0；错序会在 4px 组内错位成竖屏重影。
+ * @brief 将四个差分像素转换为一个输出字节
+ * @note S31 的首像素对应 bits7:6，S3 保留原有反向字节内顺序。
  */
 __attribute__((optimize("O3"))) static inline uint8_t lookup_pixels_in_VE_LUT(
     const uint32_t in, const uint8_t* conversion_lut
 ) {
-    // VE LUT 每项 4B，值在 LE 低字节
-#if defined(CONFIG_IDF_TARGET_ESP32S31)
-    return (uint8_t)(conversion_lut[(in & 0xFFu) << 2] << 6
-                     | conversion_lut[((in >> 8) & 0xFFu) << 2] << 4
-                     | conversion_lut[((in >> 16) & 0xFFu) << 2] << 2
-                     | conversion_lut[(in >> 24) << 2]);
-#else
+    #if defined(CONFIG_IDF_TARGET_ESP32S31)
+    return (uint8_t)(conversion_lut[0x300 + (in & 0xFFu)]
+                     | conversion_lut[0x200 + ((in >> 8) & 0xFFu)]
+                     | conversion_lut[0x100 + ((in >> 16) & 0xFFu)]
+                     | conversion_lut[in >> 24]);
+    #else
     return (uint8_t)(conversion_lut[(in >> 24) << 2] << 6
                      | conversion_lut[((in >> 16) & 0xFFu) << 2] << 4
                      | conversion_lut[((in >> 8) & 0xFFu) << 2] << 2
                      | conversion_lut[(in & 0xFFu) << 2]);
-#endif
+    #endif
 }
 
 /**
@@ -191,8 +187,8 @@ void calc_epd_input_1ppB_1k_S3_VE_aligned(
 #endif
 
 /**
- * Lookup accelerated by the S3 Vector Extensions.
- * Uses a 1K padded LUT (each entry takes up 32 bits)
+ * @brief 通过 1 KB 查找表转换差分行
+ * @note S31 使用四段预移位查找表，S3 使用每项四字节的 VE 格式。
  */
 void IRAM_ATTR calc_epd_input_1ppB_1k_S3_VE(
     const uint32_t* ld, uint8_t* epd_input, const uint8_t* conversion_lut, uint32_t epd_width
@@ -357,10 +353,13 @@ build_1ppB_lut_64k(uint8_t* lut, const EpdWaveformPhases* phases, int frame) {
 }
 
 /**
- * A 32bit aligned lookup table for lookup using the ESP32-S3 vector extensions.
+ * @brief 构建差分查找表，按目标平台匹配转换格式
  */
 __attribute__((optimize("O3"))) static void IRAM_ATTR
 build_1ppB_lut_S3_VE_1k(uint8_t* lut, const EpdWaveformPhases* phases, int frame) {
+    #if defined(CONFIG_IDF_TARGET_ESP32S31)
+    build_2ppB_lut_1k(lut, phases, frame);
+    #else
     uint32_t* lut32 = (uint32_t*)lut;
     const uint8_t* p_lut = phases->luts + (16 * 4 * frame);
     for (uint8_t to = 0; to < 16; to++) {
@@ -373,6 +372,7 @@ build_1ppB_lut_S3_VE_1k(uint8_t* lut, const EpdWaveformPhases* phases, int frame
             lut32[index + 3] = (packed >> 0) & 3;
         }
     }
+    #endif
 }
 
 /**

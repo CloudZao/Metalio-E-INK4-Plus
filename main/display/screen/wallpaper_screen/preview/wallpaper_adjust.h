@@ -20,8 +20,6 @@ void BindPreviewRasterToImg();
 void RefreshPreviewFromBase();
 /** @brief 刷新调整模式按钮态 */
 void UpdateAdjustUi();
-/** @brief 关闭覆盖保存对话框 */
-void CloseOverwriteDialog();
 /** @brief 退出调整模式 */
 void ExitAdjustMode(bool restore_preview);
 /** @brief 进入调整模式 */

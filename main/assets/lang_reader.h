@@ -31,6 +31,7 @@ extern const char* BOOK_PRESET_LARGE;
 extern const char* BOOK_PRESET_XLARGE;
 extern const char* BOOK_MARGIN_TITLE;
 extern const char* BOOK_SPACING_TITLE;
+extern const char* BOOK_PARA_GAP_TITLE;
 extern const char* BOOK_BACKGROUND_GRID;
 extern const char* BOOK_BACKGROUND_DOTS;
 extern const char* BOOK_BACKGROUND_TITLE;

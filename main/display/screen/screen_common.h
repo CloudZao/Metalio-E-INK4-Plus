@@ -30,7 +30,7 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr);
 void ScreenShowToast(const char* text);
 /** @brief 替换加载新屏 */
 void ScreenLoadReplace(lv_obj_t* new_scr);
-/** @brief 导航到工厂函数创建的新屏 */
+/** @brief 导航到工厂函数创建的新屏；落墨期间合并并延后建屏 */
 void ScreenNavigateTo(lv_obj_t* (*create)());
 /** @brief 返回上一屏 */
 void ScreenNavigateBack();
@@ -38,7 +38,7 @@ void ScreenNavigateBack();
 void ScreenSetIsHome(bool is_home);
 /** @brief 当前是否为首页 */
 bool ScreenIsHome();
-/** @brief 立即回到首页 */
+/** @brief 请求回到首页；落墨结束后建屏 */
 void ScreenGoHome();
 /** @brief 异步请求回首页 */
 void ScreenRequestHome();
@@ -58,10 +58,9 @@ struct ScreenPaintCoalesce {
     std::atomic<bool> queued{false};
     void (*paint)() = nullptr;
     std::atomic<void*> defer_timer{nullptr}; // 允许 UI 与重试回调竞争创建，仅保留一个计时器
-    bool defer_while_epd_busy = false;
 };
 
-/** @brief 合并多次重绘请求 */
+/** @brief 合并多次重绘请求，物理更新期间保留最新请求并延后重建 */
 void ScreenPaintCoalesceRequest(ScreenPaintCoalesce* c);
 /** @brief 停手后再刷 */
 void ScreenPaintCoalesceRequestDebounced(ScreenPaintCoalesce* c, uint64_t delay_us);

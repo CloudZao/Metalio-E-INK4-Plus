@@ -3,7 +3,6 @@
 #include "book_screen/shelf/book_detail.h"
 #include "book_screen/book_screen_priv.h"
 #include "book_screen/cover/book_cover_loader.h"
-#include "book_screen/cover/book_cover_workers.h"
 #include "book_screen/book_font_runtime.h"
 #include "book_screen/shelf/book_home.h"
 #include "book_screen/book_text_util.h"
@@ -159,8 +158,7 @@ lv_obj_t* CreateDetailScreen(int book_index) {
         FillDetailCoverPlaceholder(cover_host, info.format);
     }
     if (!sidecar_adequate &&
-        (info.format == reader::BookFormat::kEpub || info.format == reader::BookFormat::kEbook) &&
-        !IsCoverEmbedMiss(info.path)) {
+        (info.format == reader::BookFormat::kEpub || info.format == reader::BookFormat::kEbook)) {
         StartDetailCoverWorker(book_index);
     }
 

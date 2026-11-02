@@ -16,6 +16,7 @@
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
 #include "ota_confirm_dialog/ota_confirm_dialog.h"
 #include "screen_common.h"
+#include "screen_common_nav.h"
 #include "screen_frontlight.h"
 #include "standby_screen/standby_screen.h"
 
@@ -324,6 +325,7 @@ void VkKey_Dispatch(const char* key_name) {
         ESP_LOGD(TAG, "%s blocked (standby overlay active)", key_name);
         return;
     }
+    if (std::strcmp(key_name, "vk_home") == 0) ScreenCommon_CancelPendingNavigation();
 
     if (ScreenFrontlightIsVisible() &&
         (std::strcmp(key_name, "vk_prev") == 0 || std::strcmp(key_name, "vk_home") == 0)) {
@@ -370,6 +372,7 @@ bool VkKey_OnLongPress(const char* key_name) {
         ESP_LOGD(TAG, "%s long-press blocked (standby overlay active)", key_name);
         return false;
     }
+    if (std::strcmp(key_name, "vk_home") == 0) ScreenCommon_CancelPendingNavigation();
     const char* screen = StackTop();
     ESP_LOGD(TAG, "%s long-press on screen=%s", key_name, screen);
     if (auto* e = FindRegistry(screen)) {

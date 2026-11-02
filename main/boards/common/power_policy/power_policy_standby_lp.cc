@@ -4,6 +4,7 @@
 #include "standby_screen/standby_screen.h"
 #include "screen_common.h"
 #include "metalio_keys.h"
+#include "metalio_vibe.h"
 #include "config.h"
 #include "application.h"
 #include "sd_access.h"
@@ -261,6 +262,20 @@ bool IsKeyWakeCause(esp_sleep_wakeup_cause_t cause)
 
 bool RunLightSleepSlice()
 {
+    while (power_hw_standby_rails_park() != ESP_OK) {
+        ESP_LOGW(TAG, "standby rail cut failed; retry before motor");
+        if (DelayMsWithStandbyKeyPoll(500)) return true;
+    }
+    const uint8_t intensity = MetalioVibe_GetIntensity();
+    // 每个切片均在 P14 断电后持续置高，避免软 PWM 提前拉低马达输出。
+    MetalioVibe_Set(false);
+    MetalioVibe_SetIntensity(3);
+    MetalioVibe_Set(true);
+    const bool key_done = DelayMsWithStandbyKeyPoll(POWER_DISCHARGE_MOTOR_PULSE_MS);
+    MetalioVibe_Set(false);
+    MetalioVibe_SetIntensity(intensity);
+    if (key_done) return true;
+
     xSemaphoreTake(pwr::mu, portMAX_DELAY);
     const int64_t remain_us = StandbyUiRemainUsLocked();
     xSemaphoreGive(pwr::mu);
@@ -435,6 +450,9 @@ void StandbyLpTask(void* /*arg*/)
         const bool shutting_down = pwr::shutdown_requested;
         pwr::lp_session_active = false;
         xSemaphoreGive(pwr::mu);
+        if (!shutting_down && power_hw_standby_rails_restore() != ESP_OK) {
+            ESP_LOGE(TAG, "standby exit: rail restore failed");
+        }
         if (wake_exit && !shutting_down) {
             // Also covers wake during draining, before light_sleep_once was called.
             power_hw_sd_restore();

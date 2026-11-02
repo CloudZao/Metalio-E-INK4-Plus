@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lvgl.h"
+#include <vector>
 
 namespace reader { struct RasterImage; }
 
@@ -27,6 +28,13 @@ bool StandbyWallpaper_IsLoadingSlow();
 
 /** @brief LVGL 任务在 Park 时读取；像素由本模块持有，直到 Teardown。 */
 const reader::RasterImage* StandbyWallpaper_DecodedImage();
+
+/** @brief 当前待机壁纸是否使用进入待机前的界面作为底图。 */
+bool StandbyWallpaper_IsOverlay();
+/** @brief 获取待机叠图自身的透明度；无透明度时为空。 */
+const std::vector<uint8_t>& StandbyWallpaper_DecodedAlpha();
+/** @brief 目标帧准备完成后释放解码像素；不改变加载完成状态。 */
+void StandbyWallpaper_ReleasePixels();
 
 /** @brief 拆掉图片引用并释放像素；可重复调用。 */
 void StandbyWallpaper_Teardown();

@@ -141,6 +141,7 @@ idf_component_register(
         "device_state_event.cc"
         "display/display.cc"
         "display/display_orient.cc"
+        "display/wallpaper_frame.cc"
         "display/epd_reader_aa.cc"
         "display/epd_content_policy.cc"
         "display/lv_adapter_epdiy.cc"
@@ -306,6 +307,32 @@ foreach(_sd_fn f_open f_close f_opendir f_closedir f_stat f_mkdir f_unlink f_ren
     _open_r _close_r _stat_r _unlink_r _rename_r _link_r mkdir rmdir access utime truncate opendir closedir esp_vfs_fat_info)
     target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=${_sd_fn}")
 endforeach()
+
+if(CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS OR CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL)
+    target_sources(${COMPONENT_LIB} PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/display/epd_nvs_guard.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/display/lvgl_async_dispatch.cc")
+    target_link_options(${COMPONENT_LIB} INTERFACE
+        "-Wl,--wrap=lv_async_call" "-Wl,--wrap=lv_async_call_cancel")
+    # Admit NVS before its SDK lock: Flash -> I2C -> NVS, including read-only access.
+    foreach(_nvs_fn nvs_open nvs_open_from_partition nvs_close nvs_commit
+        nvs_set_i8 nvs_set_u8 nvs_set_i16 nvs_set_u16 nvs_set_i32 nvs_set_u32 nvs_set_i64 nvs_set_u64
+        nvs_set_float nvs_set_double nvs_set_str nvs_set_blob
+        nvs_get_i8 nvs_get_u8 nvs_get_i16 nvs_get_u16 nvs_get_i32 nvs_get_u32 nvs_get_i64 nvs_get_u64
+        nvs_get_float nvs_get_double nvs_get_str nvs_get_blob nvs_find_key
+        nvs_erase_key nvs_erase_all nvs_purge_all nvs_get_stats nvs_get_used_entry_count
+        nvs_entry_find nvs_entry_find_in_handle nvs_entry_next nvs_entry_info nvs_release_iterator
+        nvs_flash_init nvs_flash_init_partition nvs_flash_init_partition_ptr
+        nvs_flash_deinit nvs_flash_deinit_partition nvs_flash_erase nvs_flash_erase_partition
+        nvs_flash_erase_partition_ptr nvs_flash_secure_init nvs_flash_secure_init_partition
+        nvs_flash_generate_keys nvs_flash_read_security_cfg
+        nvs_flash_generate_keys_v2 nvs_flash_read_security_cfg_v2)
+        target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=${_nvs_fn}")
+    endforeach()
+    if(CONFIG_NVS_BDL_STACK)
+        target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=nvs_flash_init_partition_bdl")
+    endif()
+endif()
 
 # UI objects never require DMA; keep even tiny labels/events out of DMA SRAM.
 target_link_options(${COMPONENT_LIB} INTERFACE

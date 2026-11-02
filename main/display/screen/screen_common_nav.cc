@@ -3,14 +3,9 @@
 #include "screen_common_nav.h"
 #include "screen_common_priv.h"
 
-#include "home_screen/home_screen.h"
-#include "book_screen/book_nav.h"
-#include "display_orient.h"
 #include "lv_adapter_epdiy.h"
 #include "epd_refresh.h"
 #include "vk_key_handler.h"
-
-#include <cstring>
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -73,57 +68,8 @@ void ScreenLoadReplace(lv_obj_t* new_scr) {
     }
 }
 
-void ScreenNavigateTo(lv_obj_t* (*create)()) {
-    if (create == nullptr) {
-        return;
-    }
-    const char* cur = VkKey_ActiveScreen();
-    if (cur != nullptr && std::strcmp(cur, kHomeScreen) != 0 &&
-        std::strcmp(cur, "none") != 0) {
-        if (ScreenFactory factory = VkKey_GetScreenFactory(cur)) {
-            ScreenCommon_PushBackFactory(factory);
-            ESP_LOGI(TAG, "navigate to: push back factory for %s (depth=%d)", cur, ScreenCommon_back_depth);
-        }
-    }
-    ScreenCommon_on_home = false;
-    ScreenLoadReplace(create());
-}
-
-void ScreenNavigateBack() {
-    if (ScreenFrontlightIsVisible()) {
-        ScreenFrontlightHide();
-        return;
-    }
-    if (!ScreenAdapterReady()) {
-        ESP_LOGW(TAG, "ScreenNavigateBack: adapter not ready");
-        return;
-    }
-    const char* active = VkKey_ActiveScreen();
-    if (active == nullptr || std::strcmp(active, kHomeScreen) == 0 ||
-        std::strcmp(active, "none") == 0) {
-        ESP_LOGI(TAG, "ScreenNavigateBack: skip stale back from screen=%s", active ? active : "null");
-        return;
-    }
-    // 调用方已持有 UI 锁，延后导航到下一次 LVGL 定时器处理。
-    if (lv_async_call(ScreenCommon_NavigateBackAsync, nullptr) != LV_RESULT_OK) {
-        ESP_LOGW(TAG, "ScreenNavigateBack: lv_async_call failed");
-    }
-}
-
-void ScreenGoHome() {
-    // 回首页入口可能来自默认按键策略：必须在创建竖屏首页前退出阅读。
-    ReleaseReaderForSystemHome();
-    if (DisplayUiSetOrient(kDisplayUiPortrait)) {
-        if (auto* disp = LvAdapterEpdiy::Instance()) {
-            disp->RequestFullOnNextCommit();
-        }
-    }
-    ScreenCommon_ClearBackStack();
-    ScreenCommon_on_home = true;
-    ScreenLoadReplace(HomeScreen::Create());
-}
-
 void ScreenRequestHome() {
+    EpdCancelPageTurn();
     // 导航优先进入 UI 队列，避免普通结果和重绘消息延迟主页操作。
     if (!ScreenLvAsyncUrgent(ScreenCommon_GoHomeAsync)) {
         ScreenLvAsync(ScreenCommon_GoHomeAsync);
@@ -198,12 +144,14 @@ void ScreenPaintCoalesceAsync(void* user_data) {
     if (want == c->done.load(std::memory_order_acquire)) {
         return;
     }
-    // Chapter parsing, pagination and widget allocation compete with LCD DMA
-    // refill. Keep the request pending until the previous waveform finishes.
-    if (c->defer_while_epd_busy && EpdGetStats().busy) {
+    // 重建统一等待物理更新结束；尚未起波的待提交帧不阻止合并最新目标。
+    if (!EpdTryBeginUiRender()) {
         ScreenPaintCoalesceArmDefer(c, 20000);
         return;
     }
+    struct UiGuard {
+        ~UiGuard() { EpdEndUiRender(); }
+    } guard;
     // 每次只画一帧；落后则立刻再排队（不再防抖），让 LVGL/墨水有机会 flush
     c->paint();
     c->done.store(want, std::memory_order_release);
