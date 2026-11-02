@@ -8,6 +8,11 @@ components/*
 !components/esp_lvgl_port/**
 !components/epdiy/
 !components/epdiy/**
+# Cellular transport dependencies / 蜂窝网络传输依赖
+!components/78__uart-uhci/
+!components/78__uart-uhci/**
+!components/espressif__iot_eth/
+!components/espressif__iot_eth/**
 managed_components/
 build/
 .vscode/
@@ -18,7 +23,6 @@ dependencies.lock
 releases/
 local-changes-summary.md
 
-main/assets/lang_config.h
 main/mmap_generate_emoji.h
 .DS_Store
 .cache
