@@ -22,7 +22,6 @@ namespace {
 
 constexpr const char* TAG = "SettingsSignal";
 constexpr uint32_t kSignalPollMs = 2000; // 采样周期；4G 查询需占用 AT 通道
-constexpr lv_coord_t kSignalPanelH = UiSy(48);
 constexpr lv_coord_t kSignalTitleW = UiSx(120);
 constexpr size_t kSignalTextMax = 48;
 
@@ -182,7 +181,7 @@ lv_obj_t* CreateSignalPanel(lv_obj_t* page) {
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, lv_pct(100));
     lv_obj_set_height(row, LV_SIZE_CONTENT);
-    lv_obj_set_style_min_height(row, kSignalPanelH, 0);
+    lv_obj_set_style_pad_ver(row, UiSy(4), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(row, 2, 0);

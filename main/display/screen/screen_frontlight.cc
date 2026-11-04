@@ -5,16 +5,15 @@
 #include "screen_frontlight.h"
 #include "screen_common.h"
 #include "screen_text.h"
+#include "screen_wifi.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
 #include "standby_screen/standby_screen.h"
-#include "cloud_screen/ap/ap_transfer.h"
 #include "dual_network_board.h"
 #include "fontpack_lvgl.h"
 #include "frontlight.h"
 #include "quick_control_icons.h"
 #include "haptic_feedback.h"
 #include "lv_adapter_epdiy.h"
-#include "power_policy.h"
 #include "settings.h"
 #include "settings_screen/settings_frontlight_tab.h"
 #include "ui_scale.h"
@@ -68,8 +67,6 @@ struct PanelUi {
     int light_state = -1; // 已绘制的前光开关状态
 };
 PanelUi s_ui;
-std::atomic<bool> s_wifi_busy{false};
-std::atomic<bool> s_wifi_failed{false};
 std::atomic<bool> s_save_running{false};
 std::atomic<uint32_t> s_saved_value{0}; // 低三个字节依次保存亮度、暖光比例和通道组合
 bool s_light_dirty = false; // LVGL 上下文持有，保存任务创建失败后跨面板保留
@@ -168,14 +165,15 @@ void RefreshWifi(lv_timer_t*) {
     const bool available = WifiNetworkSelected();
     auto* wifi = available ? &WifiStation::GetInstance() : nullptr;
     const bool enabled = wifi != nullptr && wifi->IsUserEnabled();
+    const auto switch_state = ScreenWifiGetSwitchState();
     wifi_mode_t mode = WIFI_MODE_NULL;
     const bool ap = esp_wifi_get_mode(&mode) == ESP_OK && (mode & WIFI_MODE_AP) != 0;
     wifi_ap_record_t ap_info = {};
     const bool connected = enabled && esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK;
     WifiState state = WifiState::Off;
     if (available) {
-        if (s_wifi_busy.load()) state = WifiState::Switching;
-        else if (s_wifi_failed.load()) state = WifiState::Failed;
+        if (switch_state == ScreenWifiSwitchState::kSwitching) state = WifiState::Switching;
+        else if (switch_state == ScreenWifiSwitchState::kFailed) state = WifiState::Failed;
         else if (!enabled) state = WifiState::Off;
         else if (ap) state = WifiState::AccessPoint;
         else if (connected) state = WifiState::Connected;
@@ -197,35 +195,12 @@ void RefreshWifi(lv_timer_t*) {
         lv_obj_set_style_text_color(label, foreground, 0);
     lv_obj_set_style_image_recolor(s_ui.wifi_paw, foreground, 0);
     lv_obj_set_style_image_recolor_opa(s_ui.wifi_paw, LV_OPA_COVER, 0);
-    if (!available || s_wifi_busy.load()) lv_obj_add_state(s_ui.wifi, LV_STATE_DISABLED);
+    if (!available || switch_state == ScreenWifiSwitchState::kSwitching) lv_obj_add_state(s_ui.wifi, LV_STATE_DISABLED);
     else lv_obj_remove_state(s_ui.wifi, LV_STATE_DISABLED);
 }
 
-void ToggleWifiTask(void* arg) {
-    const bool enabled = arg != nullptr;
-    {
-        PowerNeedHold hold(PowerNeed::OtaDownload);
-        const esp_err_t result = WifiStation::GetInstance().SetUserEnabled(enabled);
-        if (result == ESP_OK && !enabled) ApTransferStop(false);
-        s_wifi_failed.store(result != ESP_OK);
-        PowerPolicy::GetInstance().NotifyUserActivity();
-        PowerPolicy::GetInstance().RequestReevaluate();
-    }
-    s_wifi_busy.store(false);
-    vTaskDelete(nullptr);
-}
-
 void ToggleWifi(lv_event_t*) {
-    if (!WifiNetworkSelected()) return;
-    if (s_wifi_busy.exchange(true)) return;
-    s_wifi_failed.store(false);
-    const bool enabled = !WifiStation::GetInstance().IsUserEnabled();
-    if (xTaskCreate(ToggleWifiTask, "quick_wifi", 4096,
-                    enabled ? reinterpret_cast<void*>(1) : nullptr, 5, nullptr) != pdPASS) {
-        s_wifi_failed.store(true);
-        s_wifi_busy.store(false);
-        ESP_LOGW(TAG, "Wi-Fi switch task failed");
-    }
+    ScreenWifiToggle();
     RefreshWifi(nullptr);
 }
 

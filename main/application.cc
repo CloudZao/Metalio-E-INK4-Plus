@@ -1350,7 +1350,8 @@ bool Application::RejectUnactivatedListening() {
         auto& app = Application::GetInstance();
         if (AssistantScreen::IsActive() && !StandbyScreen::IsActive() &&
             (app.chat_activation_pending_.load() || app.HasPendingActivationCode())) {
-            ScreenShowToast(Lang::Strings::DEVICE_ACTIVATE_FIRST);
+            ScreenShowToast(chat_cloud::IsXiaozhi() ? Lang::Strings::XIAOZHI_ACTIVATE_FIRST :
+                            Lang::Strings::DEVICE_ACTIVATE_FIRST);
         }
     };
     if (!ScreenLvAsyncUrgent(notify)) ScreenLvAsync(notify);

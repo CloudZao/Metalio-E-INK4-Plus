@@ -357,8 +357,8 @@ void BookScreen::OnEnterStandby() {
     CancelPageImageLoad();
     // 打开任务独占 session，先让其完成，避免同时修改尚未建好的文档状态。
     if (st.reader.session && !st.reader.opening.load()) st.reader.session->SetBackgroundPaused(true);
-    st.reader.layout_again = st.reader.layout_again || st.reader.layout_debounce_timer != nullptr;
-    st.reader.layout_reload_font = st.reader.layout_reload_font || st.reader.layout_debounce_reload_font;
+    st.reader.layout_again = st.reader.layout_again || st.reader.layout_debounce_timer != nullptr || BookFontReloadBusy();
+    st.reader.layout_reload_font = st.reader.layout_reload_font || st.reader.layout_debounce_reload_font || BookFontReloadBusy();
     CancelLayoutDebounce();
     StopLayoutHintTimer();
     ScreenPaintCoalesceReset(&s_reader_paint);
@@ -372,6 +372,8 @@ void BookScreen::PollStandbyWork() {
     if (!st.reader.standby_paused || ReaderWorkersBusy() || ttf_convert::Busy()) return;
     if (st.reader.deferred_cleanup) FinishDeferredCleanup();
     if (StandbyScreen::IsActive()) {
+        // 壁纸加载提示仍需绘制底层页面；内容就绪后才允许关闭其字体资源。
+        if (!StandbyScreen::IsPaintReady()) return;
         if (!st.reader.standby_detached) {
             if (st.reader.session) st.reader.session->DetachSdHandles();
             ReleaseBookFont(false);
@@ -397,9 +399,9 @@ void BookScreen::PollStandbyWork() {
     ResumeReadingTimeAfterStandby();
     UpdateReadFooter();
     if (DisplayUiSetOrient(ReaderDisplayOrient())) {
-        ApplyReaderChromeSize();
         if (auto* disp = LVAdapterDisplay::Instance()) disp->RequestFullOnNextCommit();
     }
+    ApplyReaderChromeSize();
     SyncReaderAutoOrient();
     RequestRenderReaderPage();
     if (return_to_ttf && st.reader.read_chrome == BookUiState::ReadChrome::kSettings) {

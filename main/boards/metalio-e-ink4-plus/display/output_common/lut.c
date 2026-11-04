@@ -447,7 +447,7 @@ void IRAM_ATTR epd_apply_line_mask(uint8_t* buf, const uint8_t* mask, int len) {
     }
 }
 
-// 脏行与汇总脏列的交集可能包含未变化像素；DU 仅保留黑→黑补黑。
+// 脏行与汇总脏列的交集可能包含未变化像素；灰色和白色同色转换保持不驱动。
 static void IRAM_ATTR changed_only_phase(
     uint8_t data[16][4], const EpdWaveformPhases* phases, int frame, bool keep_black
 ) {
@@ -456,6 +456,22 @@ static void IRAM_ATTR changed_only_phase(
         const unsigned shift = 6 - 2 * (gray & 3);
         data[gray][gray / 4] &= (uint8_t)~(3u << shift);
     }
+}
+
+static void IRAM_ATTR gl16_changed_phase(
+    uint8_t data[16][4], const EpdWaveformPhases* phases, int frame
+) {
+    changed_only_phase(data, phases, frame, false);
+    // 纯黑目标保留原表推黑段，去除推白，避免旧字反白及未遮挡区域被洗浅。
+    for (unsigned packed = 0; packed < 4; ++packed) data[0][packed] &= 0x55;
+
+    // 在原表白→黑的最后四次推黑中补黑，保留末尾保持相，不增加扫描相数。
+    if ((phases->luts[frame * 16 * 4 + 3] & 3) != 1) return;
+    unsigned remaining = 0;
+    for (int phase = frame; phase < phases->phases; ++phase) {
+        if ((phases->luts[phase * 16 * 4 + 3] & 3) == 1 && ++remaining > 4) return;
+    }
+    data[0][0] |= 0x40;
 }
 
 static void IRAM_ATTR build_changed_1ppB_lut_S3_VE_1k(
@@ -478,7 +494,7 @@ static void IRAM_ATTR build_changed_1ppB_lut_64k(
     build_1ppB_lut_64k(lut, &phase, 0);
 }
 
-static void IRAM_ATTR build_du_1ppB_lut_S3_VE_1k(
+static void IRAM_ATTR build_keep_black_1ppB_lut_S3_VE_1k(
     uint8_t* lut, const EpdWaveformPhases* phases, int frame
 ) {
     uint8_t data[16][4];
@@ -488,11 +504,60 @@ static void IRAM_ATTR build_du_1ppB_lut_S3_VE_1k(
     build_1ppB_lut_S3_VE_1k(lut, &phase, 0);
 }
 
-static void IRAM_ATTR build_du_1ppB_lut_64k(
+static void IRAM_ATTR build_keep_black_1ppB_lut_64k(
     uint8_t* lut, const EpdWaveformPhases* phases, int frame
 ) {
     uint8_t data[16][4];
     changed_only_phase(data, phases, frame, true);
+    EpdWaveformPhases phase = *phases;
+    phase.luts = (const uint8_t*)data;
+    build_1ppB_lut_64k(lut, &phase, 0);
+}
+
+static void IRAM_ATTR build_gl16_1ppB_lut_S3_VE_1k(
+    uint8_t* lut, const EpdWaveformPhases* phases, int frame
+) {
+    uint8_t data[16][4];
+    gl16_changed_phase(data, phases, frame);
+    EpdWaveformPhases phase = *phases;
+    phase.luts = (const uint8_t*)data;
+    build_1ppB_lut_S3_VE_1k(lut, &phase, 0);
+}
+
+static void IRAM_ATTR build_gl16_1ppB_lut_64k(
+    uint8_t* lut, const EpdWaveformPhases* phases, int frame
+) {
+    uint8_t data[16][4];
+    gl16_changed_phase(data, phases, frame);
+    EpdWaveformPhases phase = *phases;
+    phase.luts = (const uint8_t*)data;
+    build_1ppB_lut_64k(lut, &phase, 0);
+}
+
+static void IRAM_ATTR equalize_black_phase(
+    uint8_t data[16][4], const EpdWaveformPhases* phases, int frame
+) {
+    changed_only_phase(data, phases, frame, false);
+    // 纯黑目标统一复用当前波形白→黑的推黑段，与旧像素及原遮挡范围无关。
+    const unsigned action = phases->luts[frame * 16 * 4 + 3] & 3;
+    memset(data[0], action == 1 ? 0x55 : 0, sizeof(data[0]));
+}
+
+static void IRAM_ATTR build_equalize_black_1ppB_lut_S3_VE_1k(
+    uint8_t* lut, const EpdWaveformPhases* phases, int frame
+) {
+    uint8_t data[16][4];
+    equalize_black_phase(data, phases, frame);
+    EpdWaveformPhases phase = *phases;
+    phase.luts = (const uint8_t*)data;
+    build_1ppB_lut_S3_VE_1k(lut, &phase, 0);
+}
+
+static void IRAM_ATTR build_equalize_black_1ppB_lut_64k(
+    uint8_t* lut, const EpdWaveformPhases* phases, int frame
+) {
+    uint8_t data[16][4];
+    equalize_black_phase(data, phases, frame);
     EpdWaveformPhases phase = *phases;
     phase.luts = (const uint8_t*)data;
     build_1ppB_lut_64k(lut, &phase, 0);
@@ -504,19 +569,23 @@ LutFunctionPair find_lut_functions(enum EpdDrawMode mode, uint32_t lut_size) {
     pair.lookup_func = NULL;
 
     if (mode & MODE_PACKING_1PPB_DIFFERENCE) {
+        const int waveform_mode = mode & MODE_UNKNOWN_WAVEFORM;
+        const bool keep_black = waveform_mode == MODE_DU;
         if (EPD_CURRENT_RENDER_METHOD == RENDER_METHOD_LCD && !(mode & MODE_FORCE_NO_PIE)
             && lut_size >= 1024) {
             pair.build_func = mode & MODE_SKIP_UNCHANGED
-                ? ((mode & MODE_UNKNOWN_WAVEFORM) == MODE_DU
-                    ? &build_du_1ppB_lut_S3_VE_1k : &build_changed_1ppB_lut_S3_VE_1k)
+                ? (waveform_mode == MODE_GL16 ? &build_gl16_1ppB_lut_S3_VE_1k :
+                    (keep_black ? &build_keep_black_1ppB_lut_S3_VE_1k : &build_changed_1ppB_lut_S3_VE_1k))
                 : &build_1ppB_lut_S3_VE_1k;
+            if (mode & MODE_EQUALIZE_BLACK) pair.build_func = &build_equalize_black_1ppB_lut_S3_VE_1k;
             pair.lookup_func = &calc_epd_input_1ppB_1k_S3_VE;
             return pair;
         } else if (lut_size >= 1 << 16) {
             pair.build_func = mode & MODE_SKIP_UNCHANGED
-                ? ((mode & MODE_UNKNOWN_WAVEFORM) == MODE_DU
-                    ? &build_du_1ppB_lut_64k : &build_changed_1ppB_lut_64k)
+                ? (waveform_mode == MODE_GL16 ? &build_gl16_1ppB_lut_64k :
+                    (keep_black ? &build_keep_black_1ppB_lut_64k : &build_changed_1ppB_lut_64k))
                 : &build_1ppB_lut_64k;
+            if (mode & MODE_EQUALIZE_BLACK) pair.build_func = &build_equalize_black_1ppB_lut_64k;
             pair.lookup_func = &calc_epd_input_1ppB_64k;
             return pair;
         }

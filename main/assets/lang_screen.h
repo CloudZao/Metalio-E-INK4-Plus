@@ -38,6 +38,7 @@ extern const char* CLOUD_USB_WAY;
 extern const char* CLOUD_WIFI_FAIL;
 extern const char* CLOUD_CELLULAR_NEED_WIFI;
 extern const char* DEVICE_ACTIVATE_FIRST;
+extern const char* XIAOZHI_ACTIVATE_FIRST;
 extern const char* STORAGE_IO_ERROR;
 extern const char* AUDIO_SERVICE_NOT_READY;
 extern const char* AUDIO_CALLBACK_UNAVAILABLE;

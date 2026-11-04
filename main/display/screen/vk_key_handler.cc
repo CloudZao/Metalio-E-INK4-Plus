@@ -203,7 +203,7 @@ static void DispatchDefault(const char* key_name, const char* screen) {
             ESP_LOGD(TAG, "vk_home no-op (already home)");
             return;
         }
-        ScreenRequestHome();
+        ScreenNavigateBack();
         return;
     }
 

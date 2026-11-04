@@ -70,7 +70,9 @@ void SetReadSettingsSheetVisible(bool visible) {
         ApplyReaderChromeSize();
         lv_obj_clear_flag(st.settings.settings_sheet, LV_OBJ_FLAG_HIDDEN);
     } else {
+        const bool was_visible = lv_obj_is_visible(st.settings.settings_sheet);
         lv_obj_add_flag(st.settings.settings_sheet, LV_OBJ_FLAG_HIDDEN);
+        if (was_visible && !ReaderPageImagesHint()) EpdRequestBlackEqualization();
     }
 }
 

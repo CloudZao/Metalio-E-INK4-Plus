@@ -8,6 +8,8 @@
 void OnEnableShutdownClicked(lv_event_t* e);
 /** @brief 设为待机壁纸 */
 void OnEnableStandbyClicked(lv_event_t* e);
+/** @brief 设置或取消当前图片的阅读背景。 */
+void OnEnableReadingClicked(lv_event_t* e);
 /** @brief 删除 SD 上壁纸文件 */
 bool DeleteWallpaperFileOnSd(const char* path, const char* name, std::string& err_out);
 /** @brief 调度删除壁纸 */

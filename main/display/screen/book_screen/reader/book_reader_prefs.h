@@ -140,8 +140,9 @@ void BookReaderPrefsSetShowShelfProgress(int enabled);
 }
 #endif
 
-// Reading background: 0 white, 1 grid, 2 dots.
+/** @brief 获取阅读背景：0 白底，1 方格，2 点阵，3 自定义壁纸。 */
 int BookReaderPrefsBackground();
+/** @brief 设置阅读背景模式并持久化。 */
 void BookReaderPrefsSetBackground(int mode);
 
 // 翻页方式沿用已保存的数值，默认保持原有行为。

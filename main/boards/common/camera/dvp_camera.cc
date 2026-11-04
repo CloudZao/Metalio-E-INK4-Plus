@@ -9,12 +9,15 @@
 
 #include <algorithm>
 #include <mutex>
+#include <memory>
 #include <new>
+#include <utility>
 #include <driver/gpio.h>
 #include <esp_cam_ctlr_dvp.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <driver/jpeg_encode.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
@@ -170,6 +173,7 @@ public:
         return received_ == kFrameBytes ? ESP_OK : ESP_ERR_INVALID_SIZE;
     }
     const uint8_t* Frame() const { return frame_; }
+    uint8_t* TakeFrame() { return std::exchange(frame_, nullptr); }
 private:
     esp_err_t InitController() {
         esp_cam_ctlr_dvp_pin_config_t pins{};
@@ -274,6 +278,61 @@ esp_err_t Capture(GrayImage& image, const Request& request) {
              unsigned(raw_sum / image.pixels.size()));
     ESP_LOGI(kTag, "gray preview ready: %ux%u, %u bytes", image.width, image.height,
              unsigned(image.pixels.size()));
+    return ESP_OK;
+}
+
+esp_err_t CaptureJpeg(uint8_t** out_data, size_t* out_len, const Request& request) {
+    if (out_data) *out_data = nullptr;
+    if (out_len) *out_len = 0;
+    if (!out_data || !out_len) return ESP_ERR_INVALID_ARG;
+    std::unique_lock<std::mutex> lock(s_operation, std::try_to_lock);
+    if (!lock.owns_lock()) return ESP_ERR_INVALID_STATE;
+    std::unique_ptr<uint8_t, decltype(&heap_caps_free)> frame(nullptr, heap_caps_free);
+    // DVP 与 JPEG 的 PSRAM DMA 均与刷屏互斥，HTTP 上传在此作用域外执行。
+    EpdFlashGuard flash_guard;
+    {
+        Session session(request);
+        DetectInfo info;
+        esp_err_t err = session.Prepare(info);
+        if (err == ESP_OK) err = session.Grab();
+        if (err != ESP_OK) return err;
+        frame.reset(session.TakeFrame());
+    }
+    // GC2145 的高字节在前，硬件 JPEG 的 RGB565 输入使用小端像素。
+    for (size_t i = 0; i < kFrameBytes; i += 2) std::swap(frame.get()[i], frame.get()[i + 1]);
+    jpeg_encode_memory_alloc_cfg_t memory{};
+    memory.buffer_direction = JPEG_ENC_ALLOC_OUTPUT_BUFFER;
+    size_t capacity = 0;
+    std::unique_ptr<uint8_t, decltype(&heap_caps_free)> jpeg(
+        static_cast<uint8_t*>(jpeg_alloc_encoder_mem(kFrameBytes, &memory, &capacity)), heap_caps_free);
+    if (!jpeg) return ESP_ERR_NO_MEM;
+    jpeg_encode_cfg_t config{};
+    config.width = kWidth;
+    config.height = kHeight;
+    config.src_type = JPEG_ENCODE_IN_FORMAT_RGB565;
+    config.sub_sample = JPEG_DOWN_SAMPLING_YUV420;
+    config.image_quality = 80;
+    jpeg_encode_engine_cfg_t engine_config{};
+    engine_config.timeout_ms = 1000;
+    jpeg_encoder_handle_t encoder = nullptr;
+    esp_err_t err = jpeg_new_encoder_engine(&engine_config, &encoder);
+    if (err != ESP_OK) return err;
+    uint32_t length = 0;
+    err = jpeg_encoder_process(encoder, &config, frame.get(), kFrameBytes, jpeg.get(), capacity, &length);
+    jpeg_del_encoder_engine(encoder);
+    if (err != ESP_OK || length == 0 || length > capacity) {
+        ESP_LOGE(kTag, "JPEG encode failed: %s", esp_err_to_name(err));
+        return err != ESP_OK ? err : ESP_ERR_INVALID_SIZE;
+    }
+    auto* compact = static_cast<uint8_t*>(heap_caps_realloc(jpeg.get(), size_t(length),
+                                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (compact) {
+        jpeg.release();
+        jpeg.reset(compact);
+    }
+    *out_len = size_t(length);
+    *out_data = jpeg.release();
+    ESP_LOGI(kTag, "JPEG ready: %ux%u, %u bytes", kWidth, kHeight, unsigned(length));
     return ESP_OK;
 }
 }

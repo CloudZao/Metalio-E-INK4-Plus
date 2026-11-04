@@ -1,5 +1,6 @@
 #include "standby_screen/standby_wallpaper.h"
 #include "sd_paths.h"
+#include "config.h"
 
 #include "wallpaper_screen/wallpaper_active.h"
 
@@ -97,7 +98,7 @@ static void LoadTask(void* arg) {
             auto* img = new reader::RasterImage();
             const bool decoded = msg->overlay ?
                 reader::DecodeImageFileOverlay(path, msg->size.x, msg->size.y, *img, msg->alpha) :
-                reader::DecodeImageFileToL8(path, 0, 0, *img);
+                reader::DecodeImageFileToL8(path, msg->size.x, msg->size.y, *img);
             if (!decoded || img->empty()) {
                 std::snprintf(msg->err, sizeof(msg->err), "%s", Lang::Strings::STANDBY_DECODE_FAIL);
                 delete img;
@@ -144,7 +145,7 @@ void StandbyWallpaper_StartLoad() {
     auto* msg = new StandbyWpLoadResult{};
     msg->epoch = s_epoch;
     msg->overlay = s_overlay;
-    msg->size = WallpaperFrame_Size();
+    msg->size = s_overlay ? WallpaperFrame_Size() : lv_point_t{DISPLAY_WIDTH, DISPLAY_HEIGHT};
     // 栈放 SPIRAM：解码峰值与壁纸缩略图任务同级
     if (xTaskCreatePinnedToCoreWithCaps(LoadTask, "stb_wp_load", kLoadStack, msg, 5, nullptr, 0,
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {

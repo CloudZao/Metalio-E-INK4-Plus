@@ -26,6 +26,8 @@ std::unique_ptr<BookSession> BookSession::CreateNavigationCursor(NavigationKind 
     cursor->txt_as_gb18030_ = txt_as_gb18030_;
     cursor->live_preview_active_ = live_preview_active_;
     cursor->txt_preview_relayout_pending_ = txt_preview_relayout_pending_;
+    cursor->chapter_preview_pending_ = chapter_preview_pending_;
+    cursor->chapter_preview_anchor_ = chapter_preview_anchor_;
     if (live_preview_active_) {
         cursor->live_preview_page_ = live_preview_page_;
         cursor->live_preview_byte_off_ = live_preview_byte_off_;
@@ -60,9 +62,25 @@ std::unique_ptr<BookSession> BookSession::CreateNavigationCursor(NavigationKind 
     return {};
 }
 
-bool BookSession::PrepareNavigation(NavigationKind kind, int value) {
+bool BookSession::PrepareNavigation(NavigationKind kind, int value, const std::atomic<bool>* cancelled) {
+    navigation_cancelled_ = cancelled;
+    const auto interrupted = [&]() {
+        return !navigation_source_ || navigation_source_->background_paused_.load() ||
+            (cancelled && cancelled->load());
+    };
     const auto prepare = [&]() -> bool {
-        if (!navigation_source_ || navigation_source_->background_paused_.load()) { error_ = BookReadError::kCancelled; return false; }
+        if (interrupted()) { error_ = BookReadError::kCancelled; return false; }
+        if (chapter_preview_pending_) {
+            if (kind != NavigationKind::kRefresh) return false;
+            BookPageStore preview;
+            std::lock_guard<std::mutex> lock(navigation_source_->chapter_io_mu_);
+            if (!preview.Open(info_.path) ||
+                !navigation_source_->PaginateChapter(chapter_index_, preview, &chapter_preview_anchor_, cancelled) ||
+                !preview.Finish()) return false;
+            live_preview_page_ = preview[0];
+            if (!preview.Good()) { error_ = preview.Error(); return false; }
+            chapter_preview_pending_ = false;
+        }
         if (txt_preview_relayout_pending_) {
             if (!FillTxtLivePreview(live_preview_byte_off_, live_preview_at_para_start_)) return false;
             txt_preview_relayout_pending_ = false;
@@ -86,7 +104,7 @@ bool BookSession::PrepareNavigation(NavigationKind kind, int value) {
             case NavigationKind::kDelta: {
                 // UI 已将连点合并为有界增量，只读取最终目标页。
                 const int direction = value > 0 ? 1 : -1;
-                while (value != 0 && !navigation_source_->background_paused_.load()) {
+                while (value != 0 && !interrupted()) {
                     const bool moved = direction > 0 ? NextPage() : PrevPage();
                     if (!moved) {
                         if (Error() != BookReadError::kNone) ok = false;
@@ -101,7 +119,7 @@ bool BookSession::PrepareNavigation(NavigationKind kind, int value) {
             case NavigationKind::kProgress: ok = GoToReadingProgress(value); break;
             case NavigationKind::kBookmark: ok = GoToBookmarkPosition(navigation_bookmark_); break;
         }
-        if (navigation_source_->background_paused_.load()) { error_ = BookReadError::kCancelled; return false; }
+        if (interrupted()) { error_ = BookReadError::kCancelled; return false; }
         if (!ok) return false;
         if (!CurrentPageData()) {
             if (error_ == BookReadError::kNone) error_ = txt_mode_ ? BookReadError::kCacheIo : pages_.Error();
@@ -118,6 +136,7 @@ bool BookSession::PrepareNavigation(NavigationKind kind, int value) {
     }
     // 仅保留已物化页面；延迟回收游标不能持续占用 SD 的有限文件句柄。
     const bool closed = CloseSdHandles();
+    navigation_cancelled_ = nullptr;
     return prepared && closed;
 }
 
@@ -132,6 +151,7 @@ bool BookSession::CommitNavigation(BookSession& cursor) {
     chapter_index_ = cursor.chapter_index_;
     page_index_ = cursor.page_index_;
     live_preview_active_ = cursor.live_preview_active_;
+    chapter_preview_pending_ = cursor.chapter_preview_pending_;
     txt_preview_relayout_pending_ = false;
     live_preview_byte_off_ = cursor.live_preview_byte_off_;
     live_preview_at_para_start_ = cursor.live_preview_at_para_start_;

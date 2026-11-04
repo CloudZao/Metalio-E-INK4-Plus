@@ -24,7 +24,7 @@ void ApplyReaderLayoutLive(bool reload_font) {
     auto& st = Book_State();
     if (st.reader.standby_paused) {
         st.reader.layout_again = true;
-        st.reader.layout_reload_font = st.reader.layout_reload_font || reload_font;
+        st.reader.layout_reload_font = st.reader.layout_reload_font || reload_font || BookFontReloadBusy();
         return;
     }
     if (st.reader.prefs_reopen_pending || st.reader.opening.load() || !st.reader.session || !st.reader.session->IsOpen()) {
@@ -37,7 +37,7 @@ void ApplyReaderLayoutLive(bool reload_font) {
     if (ReaderWorkersBusy()) {
         CancelReaderPageWork();
         st.reader.layout_again = true;
-        st.reader.layout_reload_font = st.reader.layout_reload_font || reload_font;
+        st.reader.layout_reload_font = st.reader.layout_reload_font || reload_font || BookFontReloadBusy();
         st.reader.session->AbortTxtPaginate();
         st.reader.session->AbortChapterPageTable();
         st.reader.page_image_abort.store(true);
@@ -46,13 +46,11 @@ void ApplyReaderLayoutLive(bool reload_font) {
 
     CancelReaderPageWork();
     if (reload_font) {
-        if (!ReloadBookFont()) {
-            ScreenShowToast(Lang::Strings::TTF_APPLY_FAILED);
-            return;
-        }
+        if (!StartBookFontReload()) ScreenShowToast(Lang::Strings::TTF_APPLY_FAILED);
+        return;
     }
     BindSessionLayoutPrefs(*st.reader.session);
-    if (reload_font && DeferComicTextSetting()) return;
+    if (DeferComicTextSetting()) return;
     ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
     st.reader.session->SetViewport(st.reader.viewport_w, st.reader.viewport_h);
 
@@ -68,8 +66,6 @@ void ApplyReaderLayoutLive(bool reload_font) {
     RenderReaderPage();
     if (keep_sheet) {
         EnsureSettingsSheetAfterLayout();
-    } else {
-        UpdateReadFooter();
     }
 }
 
@@ -111,6 +107,12 @@ void OnLayoutHintTick(lv_timer_t* /*t*/) {
     if (EpdGetStats().busy) return;
     // 沉浸阅读时只接收状态，底栏随翻页绘制，避免周期更新另占一次刷屏。
     if (IsLayoutHintBusy()) return;
+    if (st.reader.read_chrome == BookUiState::ReadChrome::kReading) {
+        if (esp_timer_get_time() < st.reader.layout_hint_done_until_us) return;
+        st.reader.layout_hint_done_until_us = 0;
+        StopLayoutHintTimer();
+        return;
+    }
     if (esp_timer_get_time() < st.reader.layout_hint_done_until_us) {
         UpdateReadFooter();
         return;
@@ -132,14 +134,14 @@ void MarkLayoutHintBusy() {
     auto& st = Book_State();
     st.reader.layout_hint_done_until_us = 0;
     EnsureLayoutHintTimer();
-    UpdateReadFooter();
+    if (st.reader.read_chrome != BookUiState::ReadChrome::kReading) UpdateReadFooter();
 }
 
 void MarkLayoutHintDone() {
     auto& st = Book_State();
     st.reader.layout_hint_done_until_us = esp_timer_get_time() + kLayoutHintDoneUs;
     EnsureLayoutHintTimer();
-    UpdateReadFooter();
+    if (st.reader.read_chrome != BookUiState::ReadChrome::kReading) UpdateReadFooter();
 }
 
 void OnLayoutDebounceTimer(lv_timer_t* t) {

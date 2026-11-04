@@ -76,7 +76,7 @@ POWER and wake requests remain polled during these waits. SD cleanup and standby
 
 A failed refresh keeps the device awake and is retried before light sleep. See [display documentation](../../../display/README.md) for cleaning and waveform details. Physical refresh and Flash log writes are mutually excluded. The frame must be parked before the display supply and bus are parked.
 
-When light sleep is enabled, the standby frame is parked first. Every sleep slice then starts with panel and bus sleep, cellular-driver shutdown, audio power-off notification, and P5/P14 removal in board order. Only a successful rail shutdown is followed by a continuous high motor output for 0.5 seconds, then a low output and restoration of the previous driver intensity. Rail failures keep the motor off and are retried. This action is independent of the UI haptic setting and runs before every sleep slice, including re-entry after each timer wake. Exit requests and the POWER key remain polled during the wait. Leaving standby drives the output low early and restores peripheral power and the display bus; otherwise light sleep follows the 0.5-second wait.
+When light sleep is enabled, the standby frame is parked first. Initial parking sleeps the panel and bus, stops the cellular driver, notifies audio of power removal, and removes P5/P14 in board order. Subsequent timer wakes retain that parked state. Each slice confirms rail shutdown before the motor action. Only a successful rail shutdown is followed by a continuous high motor output for 0.5 seconds, then a low output and restoration of the previous driver intensity. Rail failures keep the motor off and are retried. This action is independent of the UI haptic setting and runs before every sleep slice, including re-entry after each timer wake. Exit requests and the POWER key remain polled during the wait. Leaving standby drives the output low early and restores peripheral power and the display bus; otherwise light sleep follows the 0.5-second wait.
 
 ## Entering light sleep: hardware order
 
@@ -86,7 +86,7 @@ Before every attempt, `power_hw_light_sleep_once()` checks that SD admission is 
 2. **Sleep the panel PMIC.** The board sequence puts TPS65185 into SLEEP, then holds the display bus low.
 3. **Release shared interrupts.** `MetalioAccel_ReleaseIntLine()` stops reading-orientation tracking and deinitializes or silences accelerometer interrupts so shared INT is not held low.
 4. **Stop key sampling and set safe levels.** `MetalioKeys_MaskForSleep()` stops side-key scanning before changing IO-expander ports. Pending POWER clicks and standby-exit requests are checked again.
-5. **Arm wake sources.** Waits for shared INT to become idle-high, restores only the POWER channel as an input, arms MCU EXT1 low-level wake, and configures the slice timer. A stuck INT or failed configuration aborts the attempt.
+5. **Arm wake sources.** Restores the POWER channel as an input, lets it settle, and reads the port to acknowledge interrupts left by the direction change. It confirms that POWER is released and shared INT is idle-high before arming MCU EXT1 low-level wake and the slice timer. A stuck INT or failed configuration aborts the attempt.
 6. **Remove shared peripheral power.** Forces frontlight outputs low again. In cellular mode, stops the modem and its UART/UHCI/network tasks first. `MetalioAudio_OnPowerOff()` invalidates audio-mode readiness. `sleep_cut_rails()` then removes camera/display power followed by the shared cellular/Bluetooth/PA supply.
 7. **Latch the bus and sleep.** Holds display-bus sleep levels, records the RTC phase, and calls `esp_light_sleep_start()` through `s31_sleep::LightSleep()`.
 
@@ -124,7 +124,7 @@ Direction changes have three stages; keys do not simply remain inputs throughout
 
 - Normal: Port0 input mask is `0xC0`; Port1 input mask is `0xE3`.
 - `ioexp_mask_for_sleep()`: writes safe output latches first, then writes both configuration registers to `0x00` (all outputs). Key sampling stops before this step.
-- `ioexp_enable_power_wake_pin()`: after shared INT is idle-high, changes only Port1 configuration to `0x80` (P17 input only); Port0 remains `0x00`. After wake, `ioexp_restore_keys()` restores the normal direction masks.
+- `ioexp_enable_power_wake_pin()`: changes only Port1 configuration to `0x80` (P17 input only), settles and reads the port to acknowledge the direction-change interrupt, then checks that shared INT is idle-high; Port0 remains `0x00`. After wake, `ioexp_restore_keys()` restores the normal direction masks.
 
 | Expander pin | Signal / normal state | Before and during sleep | Wake restoration |
 |---|---|---|---|
@@ -150,17 +150,15 @@ The complete POWER wake path is **P17 input low → TCA INT low → MCU GPIO2 EX
 
 ### 1. Hardware restoration after every light-sleep return
 
-After `esp_light_sleep_start()` returns, hardware restoration occurs before deciding whether to leave standby:
+After `esp_light_sleep_start()` returns, key sampling is restored to evaluate the wake request:
 
 1. Latches POWER state before restoring key directions so a released short press is not lost.
 2. Disables this attempt's EXT1/timer wake configuration. `MetalioKeys_ResumeAfterSleep()` restores key inputs, waits for stable levels, and rebuilds sampling baselines to avoid false press/release edges.
-3. `sleep_restore_rails()` restores shared supplies in the reverse order and notifies audio and the cellular board that power is present. These notifications do not mean audio mode or cellular connectivity is ready. The frontlight remains forced low to prevent stale PWM duty from causing a flash.
-4. A **non-timer wake** calls `power_hw_sd_restore()` to release holds and attempt an SD remount. After the SD initialization call, the enabled USB Serial/JTAG console receives a soft disconnect/re-enumeration to accommodate SDMMC pin-routing restoration. A **timer wake skips SD restoration**.
-5. Restores the display bus and returns to standby scheduling. Ordinary SD access may still be blocked by `Quiesce`; remounting does not replace the software resume entry point.
+3. Successful returns leave peripheral supplies, the display bus, and SD parked. The standby worker decides whether exit or shutdown requires restoration. Timer wakes and shared interrupts without key evidence therefore avoid repeated peripheral power cycles. Failed restoration rolls back applied stages and returns an error.
 
 ### 2. Timer wake: stay in standby
 
-Timer wakes account for standby time and check automatic power-off. They do not remove the overlay, resume application networking, start recording, or remount SD. After hardware restoration, another sleep sequence runs unless the power-off deadline or a key-exit request requires action.
+Timer wakes account for standby time and check automatic power-off. They do not remove the overlay, resume application networking, start recording, restore peripheral supplies or the display bus, or remount SD. Another sleep sequence runs with peripherals still powered down unless the power-off deadline or a key-exit request requires action.
 
 Standby therefore consists of repeated light-sleep slices, with short awake intervals and hardware operations between them. It is neither continuous whole-device power removal nor a deep-sleep reboot.
 
@@ -168,12 +166,12 @@ Standby therefore consists of repeated light-sleep slices, with short awake inte
 
 A short POWER press requests standby exit; a press held to the long-press threshold requests hardware power-off. When POWER is still held as key sampling resumes, hold timing starts then and includes subsequent SD, console, and display-bus restoration. A long-press request remains latched even if the key is released during restoration. The LP task consumes long-press requests during standby; the display task dispatches them outside standby.
 
-An EXT1 wake is interpreted only as POWER. If no long press was latched and the key is already released when sampled, the event still causes short-press exit. Touch is not a light-sleep wake source. BOOT long press can open the assistant only while standby is awake and polling; it is not a configured light-sleep wake source.
+EXT1 comes from a shared interrupt line. It is handled as POWER only when a pressed level is captured immediately after wake or during recovery, or a short-press latch is available. Without key evidence, the device stays in standby and returns to light sleep. Touch is not a light-sleep wake source. BOOT long press can open the assistant only while standby is awake and polling; it is not a configured light-sleep wake source.
 
 The standby worker finishes an exit request through the same restoration path even if it arrives before SD draining or display parking completes:
 
-1. Calls `power_hw_sd_restore()` to attempt SD restoration, requests asynchronous cellular recovery for the active network board, clears the consumed POWER click, and posts `FinishWake()` to the priority UI queue. This caller does not gate exit on the SD restoration result: exit continues after a mount failure, while application access remains constrained by actual mount state. An application-loop network wait does not discard the exit request.
-2. `StandbyScreen::Dismiss()` unfreezes display submissions and prepares saved frontlight brightness. `sd_access::Resume()` reopens ordinary SD admission and resumes SD logging, then the standby variant, timers, and overlay are removed.
+1. Restores peripheral supplies and the display bus first, retrying on failure. Board restoration enables P14, waits for settling, enables P5, then waits again before restoring the bus; the board configuration owns the delay. Successful restoration notifies audio and cellular drivers that power is present while keeping the frontlight off; it does not imply service readiness. Then calls `power_hw_sd_restore()` to attempt SD restoration, requests asynchronous cellular recovery for the active network board, clears the consumed POWER click, and posts `FinishWake()` to the priority UI queue. This caller does not gate exit on the SD restoration result: exit continues after a mount failure, while application access remains constrained by actual mount state. An application-loop network wait does not discard the exit request.
+2. `StandbyScreen::Dismiss()` unfreezes display submissions and prepares saved frontlight brightness. `sd_access::Resume()` reopens ordinary SD admission and resumes SD logging, then the standby variant, timers, and overlay are removed. The display task renders the underlying page after the exit callback finishes restoring its resources.
 3. `OnStandbyOverlayDismissed()` clears requests and accumulated standby time, records user activity, and reevaluates the mode. New needs drive network restoration; returning to Home does not guarantee immediate reconnection. The saved manual Wi-Fi-off setting has priority.
 4. A retained assistant or WorkBuddy page reacquires foreground networking and resumes session/authorization checks. It does not automatically record or resend accepted requests. Old worker results cannot touch invalid controls or overwrite a newer session.
 5. Resets battery filtering and resamples after wake load settles. Resumes checklist/reader work, fonts/book handles, necessary library warmup, settings frontlight controls, battery-test polling, and touch sampling. Reader restoration waits for previous workers to finish.
@@ -217,7 +215,7 @@ Settings → Power exposes the following defaults for devices without saved pref
 
 ## Hardware power-off path
 
-A long POWER press or the accumulated standby deadline requests hardware power-off. The policy aborts log upload and attempts the touch sleep hook. The power-off task cancels and waits for font conversion, turns PA off, attempts SD restoration for wallpaper loading, waits for the shutdown frame's physical refresh, then turns off the frontlight and sends the board power-off pulses. An unavailable SD uses the default shutdown image; failed physical refreshes are retried. The power circuit removes power: this is not `esp_deep_sleep_start()` and must not be confused with standby cleanup order. See [display documentation](../../../display/README.md) for wallpaper loading and fallback behavior.
+A long POWER press or the accumulated standby deadline requests hardware power-off. The policy aborts log upload and attempts the touch sleep hook. The power-off task cancels and waits for font conversion, turns PA off, restores peripheral supplies and the display bus, attempts SD restoration for wallpaper loading, waits for the shutdown frame's physical refresh, then turns off the frontlight and sends the board power-off pulses. An unavailable SD uses the default shutdown image; failed physical refreshes are retried. The power circuit removes power: this is not `esp_deep_sleep_start()` and must not be confused with standby cleanup order. See [display documentation](../../../display/README.md) for wallpaper loading and fallback behavior.
 
 A standby long-press shutdown does not wake touch first. After requesting shutdown, the LP session ends without waiting for POWER release. Holding POWER to the board's hardware forced-off limit can still cut power directly; the software refresh wait cannot prevent it.
 
@@ -232,7 +230,7 @@ The source cites Espressif commit `9726078b55430ef8d2ce4a460ebf21d889bb5c12` for
 Diagnostics use the existing `PowerPolicy` / `PowerHw` logs:
 
 - `wait_paint` waits for content; `SD drain pending` means SD is not drained; `epd_park` waits for display parking; `pre_sleep` / `post_sleep` bracket the sleep call. These logs are not proof of physical rail removal or low current.
-- Retained RTC snapshots record cycle, phase, applied hardware bits, and registers. See [s31_sleep.h](s31_sleep/s31_sleep.h) for phase definitions. `9` marks return from hardware restoration; `501/502` bracket the actual MPLL calibration call. Interpret them with reset reasons and error codes, not as standalone success flags.
+- Retained RTC snapshots record cycle, phase, applied hardware bits, and registers. See [s31_sleep.h](s31_sleep/s31_sleep.h) for phase definitions. `9` marks return from hardware restoration during error rollback; phase 6 means key sampling is restored while peripherals remain parked; `501/502` bracket the actual MPLL calibration call. Interpret them with reset reasons and error codes, not as standalone success flags.
 - Previous snapshots are replayed 10, 30, and 60 seconds after startup so they remain readable after USB re-enumeration. Sleep diagnostics do not write to SD while asleep.
 - Setting `kStandbyLpUseLightSleep = false` in `power_policy_priv.h` replaces sleep with polled delays for diagnosis only. Its power consumption and wake behavior cannot validate hardware light sleep.
 

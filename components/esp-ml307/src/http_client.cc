@@ -676,7 +676,7 @@ int HttpClient::Write(const char* buffer, size_t buffer_size) {
         if (buffer_size == 0) {
             // 发送结束 chunk
             std::string end_chunk = "0\r\n\r\n";
-            return tcp_->Send(end_chunk);
+            return tcp_->Send(end_chunk) == int(end_chunk.size()) ? 0 : -1;
         }
 
         // 发送 chunk
@@ -686,7 +686,8 @@ int HttpClient::Write(const char* buffer, size_t buffer_size) {
         chunk << "\r\n";
 
         std::string chunk_data = chunk.str();
-        return tcp_->Send(chunk_data);
+        // 返回有效载荷长度，避免调用方把 chunk 帧头长度计入已写数据。
+        return tcp_->Send(chunk_data) == int(chunk_data.size()) ? int(buffer_size) : -1;
     } else {
         // 非 Chunked 模式，直接发送原始数据
         if (buffer_size == 0) {

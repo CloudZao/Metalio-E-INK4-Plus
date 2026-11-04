@@ -36,7 +36,10 @@ public:
     // 读取 HTTP 响应数据
     virtual int Read(char* buffer, size_t buffer_size) = 0;
 
-    // 写入 HTTP 请求数据
+    /**
+     * @brief 写入 HTTP 请求正文，零长度表示结束正文
+     * @return 已写入的正文有效字节数，结束成功返回零，失败返回负值
+     */
     virtual int Write(const char* buffer, size_t buffer_size) = 0;
 
     // 获取 HTTP 响应状态码

@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 
 #include <lvgl.h>
 
@@ -13,4 +14,5 @@ const lv_font_t* TtfRuntimeFont(const TtfRuntime* font);
 /** @brief 获取仅供分页测宽的字体视图；步进缓存不可用时回退正文字体。 */
 const lv_font_t* TtfRuntimeLayoutFont(const TtfRuntime* font);
 /** @brief 批量预热当前页的码点，复用有容量上限的字形缓存；缺字不视为错误。 */
-bool TtfRuntimePrewarm(TtfRuntime* font, const uint32_t* codepoints, size_t count);
+bool TtfRuntimePrewarm(TtfRuntime* font, const uint32_t* codepoints, size_t count,
+                       const std::atomic<bool>* cancelled = nullptr);

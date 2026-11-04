@@ -95,7 +95,7 @@ public:
     /** @brief 按配置保存叠图底图；在待机页面改变方向和内容之前调用。 */
     void PrepareWallpaperOverlay();
 
-    /** @brief 待机定格：冻结 flush 后先全刷白屏，再推白上屏，成功返回 true。 */
+    /** @brief 待机定格：冻结 LVGL 绘制及 flush，先全刷白屏再推白上屏，成功返回 true。 */
     bool ParkEpdForStandby();
 
     /** @brief 退出待机：解冻；下一帧先全刷白屏，再推白恢复界面。 */
@@ -124,7 +124,7 @@ public:
     /** @brief 触摸复位后踢 indev（S31 无 esp_lv_adapter 路径） */
     void KickTouchInput() {}
 
-    /** @brief 冻结 / 解冻 LVGL→EPD flush */
+    /** @brief 冻结或恢复 LVGL 绘制及 LVGL→EPD flush */
     void FreezeFlush(bool on);
 
 protected:

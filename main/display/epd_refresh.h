@@ -41,6 +41,8 @@ void EpdCancelPageTurn();
  * @param full_gc 先使用完整 GC16 全刷清理白屏，再推白显示目标画面。
  */
 void EpdRequestScreenChange(bool full_gc = false);
+/** @brief 请求下一次提交时统一整页纯黑像素的推黑驱动，不执行整页擦白。 */
+void EpdRequestBlackEqualization();
 /** @brief 下一次 EpdSubmit 完成投递后调用一次。用于等进页帧提交后再启动解码。 */
 void EpdAfterNextSubmit(void (*fn)());
 void EpdSetTestActive(bool active);

@@ -181,6 +181,8 @@ private:
 }
 
 static bool RenderDisplay(lv_display_t* display, bool wait) {
+    // 待机可能已关闭底层页面的字体及 SD 资源，不能只在 flush 时丢弃像素。
+    if (s_freeze_updates.load(std::memory_order_relaxed)) return false;
     if (display == nullptr) display = lv_display_get_default();
     lv_timer_t* timer = display != nullptr ? lv_display_get_refr_timer(display) : nullptr;
     if (timer == nullptr) return false;
@@ -744,6 +746,8 @@ void LvAdapterEpdiy::FreezeFlush(bool on) {
 }
 
 static void ShowWallpaperLoading() {
+    // 保存提示写入前的画面，解码失败时直接恢复，避免重绘已停放的底层页面。
+    if (!WallpaperFrame_Capture()) return;
     lv_obj_t* notice = lv_label_create(lv_layer_top());
     lv_obj_remove_style_all(notice);
     lv_label_set_text(notice, Lang::Strings::WALLPAPER_ENTER_LOADING);
@@ -809,11 +813,8 @@ bool LvAdapterEpdiy::ParkEpdForStandby() {
     if (!lock) return false;
     if (!s_standby_frame_prepared && !StandbyWallpaper_IsOverlay() &&
         Wallpaper_HasStandbySelection() && StandbyWallpaper_DecodedImage() == nullptr) {
-        // 解码失败时恢复底层页面，移除已落墨的加载提示。
-        s_defer_standby_commit.store(true, std::memory_order_relaxed);
-        FreezeFlush(false);
-        if (lv_screen_active() != nullptr) lv_obj_invalidate(lv_screen_active());
-        if (!RefreshDisplayNow(s_disp, true)) return false;
+        // 无提示时帧缓冲仍是原页面；有提示时用底图恢复，不访问已关闭的 SD 资源。
+        if (WallpaperFrame_HasBase() && !WallpaperFrame_Restore()) return false;
     }
     // 经典页已完成 flush；壁纸直接写入同一缓冲，均只提交一次。
     FreezeFlush(true);
@@ -827,8 +828,6 @@ bool LvAdapterEpdiy::ParkEpdForStandby() {
                 if (!WallpaperFrame_Restore()) return false;
             }
         } else if (const auto* wallpaper = StandbyWallpaper_DecodedImage()) {
-            DisplayUiSetFullScreen(true);
-            DisplayUiSetOrient(kDisplayUiPortrait);
             if (!BlitL8ToEpdFullScreen(*wallpaper)) return false;
         }
         s_standby_frame_prepared = true;
@@ -847,6 +846,10 @@ bool LvAdapterEpdiy::ParkEpdForStandby() {
 
 void LvAdapterEpdiy::WakeEpdFromStandby() {
     WallpaperFrame_Clear();
+    // 待机壁纸直接覆盖物理全屏；唤醒重绘前清除普通 UI 内缩范围之外的旧像素。
+    if (uint8_t* fb = EpdRenderBuffer()) {
+        memset(fb, 0xFF, static_cast<size_t>(epd_width() / 2) * epd_height());
+    }
     // Wake UI refreshes before the EPD commit that turns the light back on.
     // Populate its target now so sliders never render the standby-only zero.
     Frontlight::GetInstance().PrepareBrightnessRestore();
@@ -920,7 +923,7 @@ bool TryDecodeShutdownFromSd(reader::RasterImage& out) {
         ESP_LOGI(TAG, "shutdown img: no NVS shutdown file");
         return false;
     }
-    if (!reader::DecodeImageFileToL8(path, 0, 0, out) ||
+    if (!reader::DecodeImageFileToL8(path, DISPLAY_WIDTH, DISPLAY_HEIGHT, out) ||
         out.empty()) {
         ESP_LOGW(TAG, "shutdown img: SD decode fail %s", path);
         return false;

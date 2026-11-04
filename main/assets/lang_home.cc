@@ -24,7 +24,8 @@
 // X(name, zh, en)
 #define LANG_STRING_LIST(X)                                                                                    \
     X(SETTINGS_TEST_FRONTLIGHT_START, "点击开启", "Tap to turn on") \
-    X(DEVICE_ACTIVATE_FIRST, "请先激活设备", "Activate the device first") \
+    X(DEVICE_ACTIVATE_FIRST, "请先前往CloudZao app绑定设备", "Please link your device in the CloudZao app first") \
+    X(XIAOZHI_ACTIVATE_FIRST, "请先前往xiaozhi.me绑定设备", "Please link your device at xiaozhi.me first") \
     X(STORAGE_IO_ERROR, "SD 卡读写异常", "SD card read/write error") \
     X(AUDIO_SERVICE_NOT_READY, "音频服务尚未就绪，请稍后重试", "Audio service is not ready. Try again shortly.") \
     X(AUDIO_CALLBACK_UNAVAILABLE, "录音回调不可用，请重新进入应用", "Recording is unavailable. Reopen the app.") \
@@ -355,11 +356,12 @@
     X(SETTINGS_NET_CFUN1, "正在重新搜网…\nAT+CFUN=1", "Searching network…\nAT+CFUN=1") \
     X(SETTINGS_NET_CFUN1_FAIL, "恢复4G通信失败，请重试或重启设备", "Could not restore 4G. Retry or restart the device.") \
     X(SETTINGS_NET_CURRENT_FMT, "当前：%s", "Current: %s") \
-    X(SETTINGS_NET_CUR_4G, "当前：4G 上网", "Current: Cellular") \
     X(SETTINGS_NET_CUR_DASH, "当前：--", "Current: --") \
     X(SETTINGS_NET_ECSIMCFG_FAIL, "AT+ECSIMCFG 执行失败", "AT+ECSIMCFG failed") \
     X(SETTINGS_NET_MODE_4G, "4G 上网", "Cellular") \
-    X(SETTINGS_NET_MODE_TITLE, "上网方式", "Network mode") \
+    X(SETTINGS_NET_MODE_FMT, "上网方式：%s", "Network mode: %s") \
+    X(SETTINGS_NET_WIFI_STATUS_TITLE, "WiFi 状态：", "Wi-Fi status:") \
+    X(SETTINGS_NET_WIFI_ENABLED, "启用中", "Enabled") \
     X(SETTINGS_NET_MODE_WIFI, "WiFi 上网", "Wi-Fi") \
     X(SETTINGS_NET_NOT_4G, "当前不在 4G 模式，无法切换", "Not in 4G mode, cannot switch") \
     X(SETTINGS_NET_NO_4G, "未检测到 4G 模块", "No 4G module") \
@@ -787,7 +789,6 @@
     X(SETTINGS_NET_WIFI_CFG_TITLE, "WiFi 网络", "Wi-Fi network")                                               \
     X(SETTINGS_NET_WIFI_CFG_HINT, "扫描附近 WiFi，选择后输入密码", "Scan nearby Wi-Fi and enter the password") \
     X(SETTINGS_NET_ENTER_CFG, "配置 WIFI 网络", "Configure Wi-Fi")                                             \
-    X(SETTINGS_NET_CUR_WIFI, "当前：WiFi 上网", "Current: Wi-Fi")                                               \
     X(SETTINGS_NET_REBOOT_COUNT_FMT, "%s\n%d 秒后重启…", "%s\nRebooting in %d s…")                             \
     X(SETTINGS_NET_REBOOTING, "正在重启…", "Rebooting…")                                                       \
     X(NETWORK_TITLE, "配置 WIFI", "Configure Wi-Fi")                                                           \
@@ -1074,13 +1075,15 @@
     X(WALLPAPER_SELECTED_FMT, "已选 %d", "Selected %d") \
     X(WALLPAPER_SET_SHUTDOWN, "设为关机", "Set as power-off") \
     X(WALLPAPER_SET_STANDBY, "设为待机", "Set as standby") \
+    X(WALLPAPER_SET_READING, "设为阅读背景", "Set as reading background") \
+    X(WALLPAPER_READING_ON, "已设为阅读背景", "Reading background selected") \
     X(WALLPAPER_DISPLAY_MODE, "显示方式", "Display mode") \
     X(WALLPAPER_DECODE_FAIL_CODE, "解码失败（%u）", "Decode failed (%u)") \
     X(WALLPAPER_MODE_FULLSCREEN, "全屏壁纸", "Fullscreen wallpaper") \
     X(WALLPAPER_MODE_OVERLAY, "叠加当前界面", "Overlay current screen") \
     X(WALLPAPER_CLEAR_SELECTION, "取消设置", "Clear selection") \
     X(WALLPAPER_SHUTDOWN_ON, "已设为关机", "Power-off selected") \
-    X(WALLPAPER_STANDBY_ON, "待机中", "Standby on")
+    X(WALLPAPER_STANDBY_ON, "已设为待机", "Standby selected")
 
 
 namespace Lang {

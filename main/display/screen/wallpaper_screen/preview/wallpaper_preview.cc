@@ -17,6 +17,7 @@
 #include <freertos/idf_additions.h>
 
 #include "assets/lang_config.h"
+#include "assets/lang_wallpaper.h"
 #include "haptic_feedback.h"
 #include "reader/reader.h"
 
@@ -41,12 +42,10 @@ void ClearPreviewImage() {
 static void ShowPreviewDecodeFailure(reader::ImageDecodeError error) {
     auto& st = Wallpaper_State();
     st.preview.decode_error = error == reader::ImageDecodeError::kNone ? reader::ImageDecodeError::kFailed : error;
-    if (st.ui.preview_status) {
-        char message[80] = {};
-        Wallpaper_FormatDecodeFailure(message, sizeof(message), st.preview.decode_error);
-        lv_label_set_text(st.ui.preview_status, message);
-        lv_obj_clear_flag(st.ui.preview_status, LV_OBJ_FLAG_HIDDEN);
-    }
+    char message[80] = {};
+    Wallpaper_FormatDecodeFailure(message, sizeof(message), st.preview.decode_error);
+    if (st.ui.preview_status) lv_obj_add_flag(st.ui.preview_status, LV_OBJ_FLAG_HIDDEN);
+    ScreenShowToast(message);
     UpdateEnableButtonUi();
     UpdateDeleteButtonUi();
     UpdateAdjustUi();
@@ -104,9 +103,9 @@ void ApplyPreviewAsync(void* p) {
 
     Wallpaper_State().preview.raster = msg->img;
     msg->img = nullptr;
-    TrimBakedLetterbox(*Wallpaper_State().preview.raster);
-    Wallpaper_State().preview.raster->BindDsc();
     try {
+        TrimBakedLetterbox(*Wallpaper_State().preview.raster);
+        Wallpaper_State().preview.raster->BindDsc();
         Wallpaper_State().preview.base = new reader::RasterImage(*Wallpaper_State().preview.raster);
     } catch (const std::bad_alloc&) {
         ClearPreviewImage();
@@ -152,12 +151,9 @@ void LoadPreviewTask(void* arg) {
         auto* img = new (std::nothrow) reader::RasterImage();
         if (!img) {
             msg->error = reader::ImageDecodeError::kNoMemory;
-        } else if (!reader::DecodeImageFileToL8(work->path, 0, 0, *img, Wallpaper_DecodeCancelled, &token,
-                                               &msg->error)) {
-            delete img;
-        } else if (!reader::ScaleRasterToFit(*img, FrameInner(kPreviewMaxW, kBorderW),
-                                            FrameInner(kPreviewMaxH, kBorderW), *img)) {
-            msg->error = reader::ImageDecodeError::kNoMemory;
+        } else if (!reader::DecodeImageFileToL8(work->path, FrameInner(kPreviewMaxW, kBorderW),
+                                               FrameInner(kPreviewMaxH, kBorderW), *img,
+                                               Wallpaper_DecodeCancelled, &token, &msg->error)) {
             delete img;
         } else {
             msg->ok = true;
@@ -232,7 +228,6 @@ void OpenPreview(int index) {
     Wallpaper_State().preview.adjust_open = false;
     ResetOrientState();
     Wallpaper_State().preview.idx = index;
-    Wallpaper_State().preview.delete_meta_hint[0] = '\0';
     ClearPreviewImage();
     ShowMode(UiMode::kPreview);
     const FileEntry& fe = Wallpaper_State().list.files[static_cast<size_t>(index)];
@@ -351,7 +346,7 @@ void BuildPreviewBody(lv_obj_t* scr, lv_coord_t status_h) {
     Wallpaper_DisableScroll(actions);
     Wallpaper_State().ui.actions_row = actions;
 
-    // 底栏两行槽位高度固定：上行关机/待机/调整 ↔ 左转/右转/镜像；下行删除 ↔ 取消/保存
+    // 底栏两行高度固定：上行关机/待机/调整 ↔ 左转/右转/镜像；下行阅读背景/删除 ↔ 取消/保存
     // 叠放子行须写死高度：创建时 get_height(parent) 常为 0，会导致整行不可见
     const lv_coord_t third_w = (Wallpaper_ContentWidth() - 16) / 3;
     auto make_row = [&](lv_obj_t* parent, lv_coord_t row_h, bool hidden) {
@@ -424,10 +419,15 @@ void BuildPreviewBody(lv_obj_t* scr, lv_coord_t status_h) {
     lv_obj_clear_flag(bottom_slot, LV_OBJ_FLAG_CLICKABLE);
     Wallpaper_State().ui.bottom_slot = bottom_slot;
 
+    const lv_coord_t bottom_w = (Wallpaper_ContentWidth() - 12) / 2;
+    make_slot_btn(bottom_slot, bottom_w, kDeleteH, Lang::Strings::WALLPAPER_SET_READING,
+                  OnEnableReadingClicked, false, &Wallpaper_State().ui.enable_reading_btn,
+                  &Wallpaper_State().ui.enable_reading_lbl);
+
     lv_obj_t* delete_btn = lv_obj_create(bottom_slot);
     lv_obj_remove_style_all(delete_btn);
-    lv_obj_set_size(delete_btn, Wallpaper_ContentWidth(), kDeleteH);
-    lv_obj_set_pos(delete_btn, 0, 0);
+    lv_obj_set_size(delete_btn, bottom_w, kDeleteH);
+    lv_obj_set_pos(delete_btn, Wallpaper_ContentWidth() - bottom_w, 0);
     lv_obj_set_style_pad_all(delete_btn, 0, 0);
     lv_obj_set_flex_flow(delete_btn, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(delete_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,

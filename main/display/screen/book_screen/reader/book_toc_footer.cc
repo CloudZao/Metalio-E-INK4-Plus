@@ -95,6 +95,11 @@ void UpdateReadFooter() {
     if (st.reader.page_label == nullptr) {
         return;
     }
+    if (st.reader.footer_host) {
+        const bool show_background = st.reader.background_image &&
+            st.reader.read_chrome != BookUiState::ReadChrome::kToc;
+        lv_obj_set_style_bg_opa(st.reader.footer_host, show_background ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
+    }
     char buf[128];
     const lv_font_t* footer_font = Book_ItemFont();
     const lv_coord_t footer_w = LV_HOR_RES - 16;

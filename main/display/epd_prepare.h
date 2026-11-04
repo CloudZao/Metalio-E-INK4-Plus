@@ -89,9 +89,11 @@ static inline __attribute__((always_inline)) void EpdRevealSpan(uint8_t* out,con
         out[2*i]=((b&15)<<4)|(a&15);out[2*i+1]=(b&240)|(a>>4);
     }
 }
-// Convert the final LVGL L8 pixels, never reconstruct content from UI objects.
-// Tile rotated writes for locality. Preserve the other nibble at dirty edges.
-[[maybe_unused]] static __attribute__((noinline,optimize("O3"))) void EpdBlitL8(
+static inline __attribute__((always_inline)) unsigned EpdL8Gray(uint8_t pixel) {
+    return (unsigned(pixel)*15+127)/255;
+}
+
+[[maybe_unused]] static __attribute__((noinline,optimize("O3"))) void EpdBlitL8Scalar(
     uint8_t* fb, const uint8_t* pixels, int stride, int origin_x, int origin_y,
     int x1, int y1, int x2, int y2, int panel_w, int panel_h,
     int base_px, int base_py, int dx_px, int dx_py, int dy_px, int dy_py) {
@@ -103,10 +105,75 @@ static inline __attribute__((always_inline)) void EpdRevealSpan(uint8_t* out,con
             int py=base_py+(tx-x1)*dx_py+(y-y1)*dy_py;
             for (int x=tx; x<=ex; ++x,px+=dx_px,py+=dx_py) {
                 if (unsigned(px)>=unsigned(panel_w) || unsigned(py)>=unsigned(panel_h)) continue;
-                const unsigned gray=(unsigned(row[x-origin_x])*15+127)/255;
+                const unsigned gray=EpdL8Gray(row[x-origin_x]);
                 auto& dst=fb[size_t(py)*(panel_w/2)+px/2];
                 const unsigned shift=(px&1)*4;
                 dst=(dst & ~(15u<<shift)) | (gray<<shift);
+            }
+        }
+    }
+}
+
+// 沿面板 X 轴成对量化并写满一个字节；奇数边缘保留相邻半字节。
+[[maybe_unused]] static __attribute__((noinline,optimize("O3"))) void EpdBlitL8(
+    uint8_t* fb, const uint8_t* pixels, int stride, int origin_x, int origin_y,
+    int x1, int y1, int x2, int y2, int panel_w, int panel_h,
+    int base_px, int base_py, int dx_px, int dx_py, int dy_px, int dy_py) {
+    const bool portrait=dx_px==0 && dy_py==0 && (dx_py==1||dx_py==-1) && (dy_px==1||dy_px==-1);
+    const bool landscape=dx_py==0 && dy_px==0 && (dx_px==1||dx_px==-1) && (dy_py==1||dy_py==-1);
+    if((panel_w&1) || (!portrait && !landscape)) {
+        EpdBlitL8Scalar(fb,pixels,stride,origin_x,origin_y,x1,y1,x2,y2,panel_w,panel_h,
+                        base_px,base_py,dx_px,dx_py,dy_px,dy_py);
+        return;
+    }
+    for(int ty=y1;ty<=y2;ty+=16)for(int tx=x1;tx<=x2;tx+=16) {
+        const int ey=ty+15<y2?ty+15:y2,ex=tx+15<x2?tx+15:x2;
+        if(portrait) {
+            for(int y=ty;y<=ey;) {
+                const int px=base_px+(y-y1)*dy_px;
+                if(unsigned(px)>=unsigned(panel_w)) { ++y; continue; }
+                const int neighbour=px+dy_px;
+                const bool pair=y<ey && (px&1)==(dy_px<0) && unsigned(neighbour)<unsigned(panel_w);
+                const auto* row=pixels+size_t(y-origin_y)*stride;
+                const auto* next=pair?row+stride:row;
+                const int offset=(pair && neighbour<px?neighbour:px)/2;
+                int py=base_py+(tx-x1)*dx_py;
+                for(int x=tx;x<=ex;++x,py+=dx_py) {
+                    if(unsigned(py)>=unsigned(panel_h))continue;
+                    const unsigned first=EpdL8Gray(row[x-origin_x]);
+                    auto& dst=fb[size_t(py)*(panel_w/2)+offset];
+                    if(pair) {
+                        const unsigned second=EpdL8Gray(next[x-origin_x]);
+                        dst=dy_px>0?first|(second<<4):second|(first<<4);
+                    } else {
+                        const unsigned shift=(px&1)*4;
+                        dst=(dst&~(15u<<shift))|(first<<shift);
+                    }
+                }
+                y+=pair?2:1;
+            }
+        } else {
+            for(int y=ty;y<=ey;++y) {
+                const auto* row=pixels+size_t(y-origin_y)*stride;
+                const int py=base_py+(y-y1)*dy_py;
+                if(unsigned(py)>=unsigned(panel_h))continue;
+                int px=base_px+(tx-x1)*dx_px;
+                for(int x=tx;x<=ex;) {
+                    if(unsigned(px)>=unsigned(panel_w)) { ++x; px+=dx_px; continue; }
+                    const int neighbour=px+dx_px;
+                    const bool pair=x<ex && (px&1)==(dx_px<0) && unsigned(neighbour)<unsigned(panel_w);
+                    const unsigned first=EpdL8Gray(row[x-origin_x]);
+                    const int offset=(pair && neighbour<px?neighbour:px)/2;
+                    auto& dst=fb[size_t(py)*(panel_w/2)+offset];
+                    if(pair) {
+                        const unsigned second=EpdL8Gray(row[x+1-origin_x]);
+                        dst=dx_px>0?first|(second<<4):second|(first<<4);
+                    } else {
+                        const unsigned shift=(px&1)*4;
+                        dst=(dst&~(15u<<shift))|(first<<shift);
+                    }
+                    const int step=pair?2:1;x+=step;px+=step*dx_px;
+                }
             }
         }
     }

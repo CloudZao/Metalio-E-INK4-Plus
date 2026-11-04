@@ -1,5 +1,7 @@
 #include "wallpaper_screen/wallpaper_ui_helpers.h"
+#include "book_screen/reader/book_reader_prefs.h"
 #include "wallpaper_screen/wallpaper_screen_priv.h"
+#include "wallpaper_screen/wallpaper_active.h"
 
 #include <lvgl.h>
 #include <cstdint>
@@ -201,8 +203,6 @@ void UpdatePreviewMeta() {
         left_hint = Lang::Strings::WALLPAPER_SAVING;
     } else if (Wallpaper_State().workers.delete_busy.load()) {
         left_hint = Lang::Strings::WALLPAPER_DELETING;
-    } else if (Wallpaper_State().preview.delete_meta_hint[0] != '\0') {
-        left_hint = Wallpaper_State().preview.delete_meta_hint;
     }
     if (left_hint != nullptr) {
         lv_obj_t* hint = lv_label_create(Wallpaper_State().ui.preview_meta);
@@ -285,6 +285,9 @@ void UpdateEnableButtonUi() {
           Lang::Strings::WALLPAPER_SHUTDOWN_ON);
     paint(Wallpaper_State().ui.enable_standby_btn, Wallpaper_State().ui.enable_standby_lbl, standby_on, Lang::Strings::WALLPAPER_SET_STANDBY,
           Lang::Strings::WALLPAPER_STANDBY_ON);
+    const bool reading_on = ok_idx && BookReaderPrefsBackground() == 3 && Wallpaper_GetReadingFilename() == name;
+    paint(Wallpaper_State().ui.enable_reading_btn, Wallpaper_State().ui.enable_reading_lbl, reading_on,
+          Lang::Strings::WALLPAPER_SET_READING, Lang::Strings::WALLPAPER_READING_ON);
 }
 
 void UpdateDeleteButtonUi() {

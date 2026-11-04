@@ -24,7 +24,7 @@ namespace {
 constexpr const char* TAG = "BookLibWarm";
 /** DRAM 栈：扫盘 / Peek；禁止 PSRAM 栈碰 Flash 旁路路径以外的 NVS（本任务只碰 SD） */
 constexpr uint32_t kWorkerStack = 10 * 1024;
-constexpr UBaseType_t kWorkerPriority = tskIDLE_PRIORITY + 2;
+constexpr UBaseType_t kWorkerPriority = tskIDLE_PRIORITY + 1; // 低于前台阅读和字体任务，避免连续扫盘抢占 SD 访问
 
 std::atomic<bool> s_running{false};
 std::atomic<uint8_t> s_phase{static_cast<uint8_t>(Phase::kIdle)};

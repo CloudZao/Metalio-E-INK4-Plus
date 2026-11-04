@@ -76,6 +76,20 @@ void McpServer::AddCommonTools() {
             });
     }
 
+    auto camera = board.GetCamera();
+    if (camera) {
+        AddTool("self.camera.take_photo",
+            "Take a photo and explain it. Use when the user asks to see or identify something.\n"
+            "拍照并识别画面，适用于用户要求查看或辨认眼前事物。",
+            PropertyList({Property("question", kPropertyTypeString)}),
+            [camera](const PropertyList& properties) -> ReturnValue {
+                if (!camera->Capture()) {
+                    throw std::runtime_error("Camera capture failed or busy / 摄像头拍摄失败或正忙，请重试");
+                }
+                return camera->Explain(properties["question"].value<std::string>());
+            });
+    }
+
 #if 0 // S31：MCP 屏幕主题/截图工具暂关（无 LvglThemeManager / Snapshot）
 #ifdef HAVE_LVGL
     auto display = board.GetDisplay();
@@ -304,27 +318,20 @@ void McpServer::ParseMessage(const std::string& message) {
 }
 
 void McpServer::ParseCapabilities(const cJSON* capabilities) {
+    auto camera = Board::GetInstance().GetCamera();
+    if (!camera) return;
+    std::string url_str, token_str;
     auto vision = cJSON_GetObjectItem(capabilities, "vision");
     if (cJSON_IsObject(vision)) {
         auto url = cJSON_GetObjectItem(vision, "url");
         auto token = cJSON_GetObjectItem(vision, "token");
         if (cJSON_IsString(url)) {
-#if 0  // 与 take_photo 一并禁用；百问拍照上传走 api::VisionUploadUrl
-            auto camera = Board::GetInstance().GetCamera();
-            if (camera) {
-                std::string url_str = std::string(url->valuestring);
-                std::string token_str;
-                if (cJSON_IsString(token)) {
-                    token_str = std::string(token->valuestring);
-                }
-                camera->SetExplainUrl(url_str, token_str);
-            }
-#else
-            (void)token;
-            ESP_LOGI(TAG, "MCP vision url ignored (take_photo disabled)");
-#endif
+            url_str = url->valuestring;
+            if (cJSON_IsString(token)) token_str = token->valuestring;
         }
     }
+    // 每次初始化替换配置，避免重连后沿用上个会话的地址或凭据。
+    camera->SetExplainUrl(url_str, token_str);
 }
 
 void McpServer::ParseMessage(const cJSON* json) {
@@ -362,12 +369,7 @@ void McpServer::ParseMessage(const cJSON* json) {
     auto id_int = id->valueint;
     
     if (method_str == "initialize") {
-        if (cJSON_IsObject(params)) {
-            auto capabilities = cJSON_GetObjectItem(params, "capabilities");
-            if (cJSON_IsObject(capabilities)) {
-                ParseCapabilities(capabilities);
-            }
-        }
+        ParseCapabilities(cJSON_GetObjectItem(params, "capabilities"));
         auto app_desc = esp_app_get_description();
         std::string message = "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"" BOARD_NAME "\",\"version\":\"";
         message += app_desc->version;

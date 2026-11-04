@@ -220,6 +220,7 @@ struct BatchDeleteWork {
 struct BatchDeleteResultMsg {
     uint32_t epoch = 0;
     int deleted = 0;
+    int failed = 0; // 未能删除的已选文件数
 };
 
 void ApplyBatchDeleteAsync(void* p) {
@@ -234,6 +235,8 @@ void ApplyBatchDeleteAsync(void* p) {
         return;
     }
     ESP_LOGI(TAG, "batch delete done n=%d", msg->deleted);
+    if (msg->failed) ScreenShowToast(Lang::Strings::WALLPAPER_DELETE_FAIL);
+    DetachRasterUsers();
     RefreshActiveName();
     CollectWallpapers();
     Wallpaper_ClampListPage();
@@ -261,12 +264,13 @@ void BatchDeleteTask(void* arg) {
             if (DeleteWallpaperFileOnSd(path, name.c_str(), err)) {
                 ++msg->deleted;
             } else {
+                ++msg->failed;
                 ESP_LOGW(TAG, "batch delete fail %s: %s", name.c_str(), err.c_str());
             }
         }
         delete work;
     }
-    if (lv_async_call(ApplyBatchDeleteAsync, msg) != LV_RESULT_OK) {
+    if (!ScreenLvAsync(ApplyBatchDeleteAsync, msg)) {
         delete msg;
         Wallpaper_State().workers.delete_busy.store(false);
         Wallpaper_State().workers.delete_task = nullptr;
@@ -275,7 +279,7 @@ void BatchDeleteTask(void* arg) {
 }
 
 void OnWpMultiRemove(lv_event_t* /*e*/) {
-    if (!Wallpaper_State().list.multi || Wallpaper_State().workers.delete_busy.load() || Wallpaper_State().workers.enable_busy.load() || Wallpaper_State().workers.load_busy.load()) {
+    if (!Wallpaper_State().list.multi || Wallpaper_State().workers.delete_busy.load() || Wallpaper_State().workers.enable_busy.load() || Wallpaper_State().workers.load_busy.load() || Wallpaper_State().workers.save_busy.load()) {
         return;
     }
     SyncWpSelectedSize();

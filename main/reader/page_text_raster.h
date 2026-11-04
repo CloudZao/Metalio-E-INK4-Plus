@@ -6,13 +6,11 @@
 
 namespace reader {
 
-inline constexpr int kReadingBackgroundPitch = 32; // 方格目标间距与点阵间距，单位像素
-
 /**
- * @brief 计算阅读网格或点阵背景像素；正文与背景层共用相同坐标规则
- * @note 方格按固定内容区均分，边格与内格等大，像素取整误差不超过 1。
+ * @brief 计算整页阅读方格或点阵背景像素
+ * @note 方格和完整灰点均分整页，间距取整误差不超过 1 像素；方格底线内收 1 像素。
  */
-uint8_t ReadingBackgroundPixel(int mode, int x, int y, int left, int width, int height);
+uint8_t ReadingBackgroundPixel(int mode, int x, int y, int width, int height);
 
 /**
  * @brief 将已分页的正文页画成 L8 位图（白 0xFF / 黑 0x00）

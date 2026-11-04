@@ -137,8 +137,12 @@ bool AbortRequested(const std::atomic<bool>* abort) {
 
 struct JpegCtx {
     ZipReader* zip = nullptr;
+    FILE* file = nullptr; // 大文件直接从 SD 读取
     RasterImage* out = nullptr;
     const std::atomic<bool>* abort = nullptr;
+    ImageDecodeCancelled cancelled = nullptr; // 文件调用方取消条件
+    void* user = nullptr; // 取消条件上下文
+    ImageDecodeError* error = nullptr; // 文件调用方错误输出
     int src_w = 0;
     int src_h = 0;
     int scale = 0;
@@ -148,11 +152,20 @@ struct JpegCtx {
     int out_h = 0;
 };
 
+bool JpegCancelled(const JpegCtx& ctx) {
+    return AbortRequested(ctx.abort) || (ctx.cancelled && ctx.cancelled(ctx.user));
+}
+
 UINT JpegInFunc(JDEC* jd, BYTE* buff, UINT nbyte) {
     auto* ctx = static_cast<JpegCtx*>(jd->device);
-    if (ctx == nullptr || ctx->zip == nullptr || AbortRequested(ctx->abort)) {
+    if (ctx == nullptr || JpegCancelled(*ctx)) {
         return 0;
     }
+    if (ctx->file) {
+        if (!buff) return std::fseek(ctx->file, nbyte, SEEK_CUR) == 0 ? nbyte : 0;
+        return static_cast<UINT>(std::fread(buff, 1, nbyte, ctx->file));
+    }
+    if (!ctx->zip) return 0;
     if (buff == nullptr) {
         uint8_t tmp[64];
         UINT left = nbyte;
@@ -172,11 +185,27 @@ UINT JpegInFunc(JDEC* jd, BYTE* buff, UINT nbyte) {
 UINT JpegOutFunc(JDEC* jd, void* bitmap, JRECT* rect) {
     auto* ctx = static_cast<JpegCtx*>(jd->device);
     if (ctx == nullptr || ctx->out == nullptr || ctx->out->empty() || ctx->dec_w <= 0 ||
-        ctx->dec_h <= 0) {
+        ctx->dec_h <= 0 || JpegCancelled(*ctx)) {
         return 0;
     }
     const BYTE* src = static_cast<const BYTE*>(bitmap);
     const int rw = rect->right - rect->left + 1;
+    if (ctx->file) {
+        const int top = (int64_t(rect->top) * ctx->out_h + ctx->dec_h - 1) / ctx->dec_h;
+        const int bottom = std::min<int64_t>(ctx->out_h, ((int64_t(rect->bottom) + 1) * ctx->out_h + ctx->dec_h - 1) / ctx->dec_h);
+        const int left = (int64_t(rect->left) * ctx->out_w + ctx->dec_w - 1) / ctx->dec_w;
+        const int right = std::min<int64_t>(ctx->out_w, ((int64_t(rect->right) + 1) * ctx->out_w + ctx->dec_w - 1) / ctx->dec_w);
+        for (int y = top; y < bottom; ++y) {
+            const int sy = int64_t(y) * ctx->dec_h / ctx->out_h - rect->top;
+            for (int x = left; x < right; ++x) {
+                const int sx = int64_t(x) * ctx->dec_w / ctx->out_w - rect->left;
+                const BYTE* pixel = src + (size_t(sy) * rw + sx) * 3;
+                const uint8_t gray = (pixel[0] * 30 + pixel[1] * 59 + pixel[2] * 11) / 100;
+                ctx->out->pixels[size_t(y) * ctx->out_w + x] = gray;
+            }
+        }
+        return 1;
+    }
     for (int y = rect->top; y <= rect->bottom; ++y) {
         const int dy = y * ctx->out_h / ctx->dec_h;
         if (dy < 0 || dy >= ctx->out_h) {
@@ -199,28 +228,35 @@ UINT JpegOutFunc(JDEC* jd, void* bitmap, JRECT* rect) {
     return 1;
 }
 
-bool DecodeJpegStream(ZipReader& zip, int max_w, int max_h, RasterImage& out,
-                      const std::atomic<bool>* abort) {
+bool DecodeJpegInput(JpegCtx& ctx, int max_w, int max_h, RasterImage& out) {
     constexpr size_t kPool = 32768;
-    void* pool = AllocPs(kPool);
+    constexpr size_t kMemoryReserve = 2 * 1024 * 1024; // 文件解码保留的 PSRAM
+    constexpr size_t kOutputLimit = 8 * 1024 * 1024; // 文件解码的工作区与结果上限
+    if (ctx.file && heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) < kMemoryReserve + kPool) {
+        if (ctx.error) *ctx.error = ImageDecodeError::kNoMemory;
+        return false;
+    }
+    void* pool = ctx.file ? heap_caps_malloc(kPool, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : AllocPs(kPool);
     if (pool == nullptr) {
+        if (ctx.error) *ctx.error = ImageDecodeError::kNoMemory;
         ESP_LOGE(TAG, "decode=stream jpeg pool alloc fail");
         return false;
     }
 
-    JpegCtx ctx{};
-    ctx.zip = &zip;
-    ctx.abort = abort;
-
     JDEC jdec{};
     JRESULT jr = jd_prepare(&jdec, JpegInFunc, pool, kPool, &ctx);
     if (jr != JDR_OK) {
+        if (ctx.error) *ctx.error = JpegCancelled(ctx) ? ImageDecodeError::kCancelled :
+            ctx.file && std::ferror(ctx.file) ? ImageDecodeError::kFileIo :
+            (jr == JDR_MEM1 || jr == JDR_MEM2) ? ImageDecodeError::kNoMemory :
+            jr == JDR_FMT3 ? ImageDecodeError::kUnsupported : ImageDecodeError::kInvalidData;
         ESP_LOGW(TAG, "decode=stream jpeg prepare err=%d%s", static_cast<int>(jr),
                  jr == JDR_FMT3 ? " (unsupported, e.g. progressive)" : "");
         heap_caps_free(pool);
         return false;
     }
-    if (AbortRequested(abort)) {
+    if (JpegCancelled(ctx)) {
+        if (ctx.error) *ctx.error = ImageDecodeError::kCancelled;
         heap_caps_free(pool);
         out.Reset();
         return false;
@@ -232,7 +268,11 @@ bool DecodeJpegStream(ZipReader& zip, int max_w, int max_h, RasterImage& out,
     // 先算目标拟合框，再选仍能盖住该框的最大 tjpgd scale（避免 1/8 解得比槽位还小）
     int fit_w = 0;
     int fit_h = 0;
-    FitImageSize(ctx.src_w, ctx.src_h, max_w, max_h, &fit_w, &fit_h);
+    if (max_w == 0 && max_h == 0) { max_w = ctx.src_w; max_h = ctx.src_h; }
+    if (!FitImageSize(ctx.src_w, ctx.src_h, max_w, max_h, &fit_w, &fit_h)) {
+        heap_caps_free(pool);
+        return false;
+    }
     int scale = 0;
     for (int s = 0; s <= 3; ++s) {
         const int ow = std::max(1, ctx.src_w >> s);
@@ -247,23 +287,52 @@ bool DecodeJpegStream(ZipReader& zip, int max_w, int max_h, RasterImage& out,
     ctx.dec_w = std::max(1, ctx.src_w >> scale);
     ctx.dec_h = std::max(1, ctx.src_h >> scale);
     FitImageSize(ctx.dec_w, ctx.dec_h, max_w, max_h, &ctx.out_w, &ctx.out_h);
+    if (ctx.file) { ctx.out_w = fit_w; ctx.out_h = fit_h; }
+    if (ctx.file) {
+        const size_t bytes = size_t(ctx.out_w) * ctx.out_h;
+        const size_t free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (free < kMemoryReserve || bytes > free - kMemoryReserve ||
+            bytes > kOutputLimit - kPool) {
+            if (ctx.error) *ctx.error = ImageDecodeError::kNoMemory;
+            heap_caps_free(pool);
+            return false;
+        }
+    }
     if (!AllocRasterL8(out, ctx.out_w, ctx.out_h)) {
+        if (ctx.error) *ctx.error = ImageDecodeError::kNoMemory;
         heap_caps_free(pool);
         return false;
     }
     ctx.out = &out;
+    if (ctx.file && out.pixels.size() > 4096 && !esp_ptr_external_ram(out.pixels.data())) {
+        if (ctx.error) *ctx.error = ImageDecodeError::kNoMemory;
+        heap_caps_free(pool);
+        out.Reset();
+        return false;
+    }
 
     ESP_LOGI(TAG, "decode=stream jpeg %dx%d scale=1/%d -> %dx%d", ctx.src_w, ctx.src_h, 1 << scale,
              ctx.out_w, ctx.out_h);
     jr = jd_decomp(&jdec, JpegOutFunc, static_cast<BYTE>(scale));
     heap_caps_free(pool);
     if (jr != JDR_OK) {
+        if (ctx.error) *ctx.error = JpegCancelled(ctx) ? ImageDecodeError::kCancelled :
+            ctx.file && std::ferror(ctx.file) ? ImageDecodeError::kFileIo : ImageDecodeError::kInvalidData;
         ESP_LOGW(TAG, "decode=stream jpeg decomp err=%d", static_cast<int>(jr));
         out.Reset();
         return false;
     }
     out.BindDsc();
+    if (ctx.error) *ctx.error = ImageDecodeError::kNone;
     return true;
+}
+
+bool DecodeJpegStream(ZipReader& zip, int max_w, int max_h, RasterImage& out,
+                      const std::atomic<bool>* abort) {
+    JpegCtx ctx{};
+    ctx.zip = &zip;
+    ctx.abort = abort;
+    return DecodeJpegInput(ctx, max_w, max_h, out);
 }
 
 #endif
@@ -382,10 +451,10 @@ bool PngCancelled(const PngStream& s) {
     return AbortRequested(s.abort) || (s.cancelled != nullptr && s.cancelled(s.cancel_context));
 }
 
-void SamplePngRowToL8(const PngStream& s, const uint8_t* row_data, int src_y, RasterImage& out) {
+bool SamplePngRowToL8(const PngStream& s, const uint8_t* row_data, int src_y, RasterImage& out) {
     // 最近邻只选定一条源行，避免高度增加时反复覆盖同一目标行。
     const int dy = static_cast<int>((int64_t(src_y) * out.height + s.height - 1) / s.height);
-    if (dy >= out.height || int64_t(dy) * s.height / out.height != src_y) return;
+    if (dy >= out.height || int64_t(dy) * s.height / out.height != src_y) return true;
     const int step = s.bit_depth / 8;
     for (int dx = 0; dx < out.width; ++dx) {
         const int sx = int64_t(dx) * s.width / out.width;
@@ -400,7 +469,7 @@ void SamplePngRowToL8(const PngStream& s, const uint8_t* row_data, int src_y, Ra
         unsigned gray = 128, alpha = 255;
         if (s.color_type == 3) {
             const unsigned index = p[0];
-            if (s.pal == nullptr || index >= unsigned(s.pal_n)) continue;
+            if (s.pal == nullptr || index >= unsigned(s.pal_n)) return false;
             const uint8_t* color = s.pal + index * 4;
             gray = (color[0] * 30 + color[1] * 59 + color[2] * 11) / 100;
             alpha = color[3];
@@ -415,9 +484,11 @@ void SamplePngRowToL8(const PngStream& s, const uint8_t* row_data, int src_y, Ra
             if (s.color_type == 6) alpha = sample(3);
         }
         const size_t index = size_t(dy) * out.width + dx;
-        out.pixels[index] = s.alpha ? gray : (gray * alpha + 255 * (255 - alpha) + 127) / 255;
+        const uint8_t value = s.alpha ? gray : (gray * alpha + 255 * (255 - alpha) + 127) / 255;
+        out.pixels[index] = value;
         if (s.alpha && !s.alpha->empty()) (*s.alpha)[index] = alpha;
     }
+    return true;
 }
 
 bool PngEmitFullRows(PngStream& s, RasterImage& out) {
@@ -428,7 +499,7 @@ bool PngEmitFullRows(PngStream& s, RasterImage& out) {
             ESP_LOGW(TAG, "decode=stream png bad filter %u", filter);
             return false;
         }
-        SamplePngRowToL8(s, s.cur + 1, static_cast<int>(s.row_index), out);
+        if (!SamplePngRowToL8(s, s.cur + 1, static_cast<int>(s.row_index), out)) return false;
         std::memcpy(s.prev, s.cur + 1, static_cast<size_t>(s.row_bytes));
         s.row_index++;
         s.row_fill = 0;
@@ -704,7 +775,6 @@ bool DecodePngRows(PngReadFn read, PngSkipFn skip, void* ctx, int max_w, int max
             const bool size_rejected = dst_w <= 0 || dst_h <= 0 || dst_w > UINT16_MAX || dst_h > UINT16_MAX ||
                 (!original_size && output_bytes > kMaxPngOutput);
             if (size_rejected ||
-                heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) < output_bytes ||
                 !AllocRasterL8(out, dst_w, dst_h) ||
                 (output_bytes > 4096 && !esp_ptr_external_ram(out.pixels.data()))) {
                 if (error) *error = size_rejected ? ImageDecodeError::kUnsupported : ImageDecodeError::kNoMemory;
@@ -826,6 +896,28 @@ bool DecodePngStream(ZipReader& zip, int max_w, int max_h, RasterImage& out,
 
 }  // namespace
 
+bool DecodeJpegFileToL8(FILE* input, int max_w, int max_h, RasterImage& out,
+                       ImageDecodeCancelled cancelled, void* context, ImageDecodeError* error) {
+    out.Reset();
+    if (error) *error = ImageDecodeError::kInvalidArgument;
+    if (!input || !((max_w == 0 && max_h == 0) || (max_w > 0 && max_h > 0))) return false;
+    if (cancelled && cancelled(context)) {
+        if (error) *error = ImageDecodeError::kCancelled;
+        return false;
+    }
+    #if READER_HAS_TJPGD
+    JpegCtx ctx{};
+    ctx.file = input;
+    ctx.cancelled = cancelled;
+    ctx.user = context;
+    ctx.error = error;
+    return DecodeJpegInput(ctx, max_w, max_h, out);
+    #else
+    if (error) *error = ImageDecodeError::kUnsupported;
+    return false;
+    #endif
+}
+
 bool DecodePngMemoryToL8(const uint8_t* data, size_t len, int max_w, int max_h, RasterImage& out,
                          ImageDecodeCancelled cancelled, void* context, ImageDecodeError* error) {
     if (data == nullptr || len < 8 || ((max_w != 0 || max_h != 0) && (max_w <= 0 || max_h <= 0))) {
@@ -855,7 +947,10 @@ bool DecodePngFileToL8(const char* path, int max_w, int max_h, RasterImage& out,
     PngFile input{file.get(), cancelled, context};
     const bool ok = DecodePngRows(FilePngRead, FilePngSkip, &input, max_w, max_h, out,
                                   nullptr, cancelled, context, alpha, error);
-    if (!ok && error && std::ferror(file.get())) *error = ImageDecodeError::kFileIo;
+    if (!ok && error) {
+        if (cancelled && cancelled(context)) *error = ImageDecodeError::kCancelled;
+        else if (std::ferror(file.get())) *error = ImageDecodeError::kFileIo;
+    }
     if (!ok && (cancelled == nullptr || !cancelled(context))) ESP_LOGW(TAG, "png decode failed: %s", path);
     return ok;
 } catch (const std::bad_alloc&) {

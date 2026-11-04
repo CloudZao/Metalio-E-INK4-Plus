@@ -9,6 +9,8 @@
 #include "settings.h"
 #include "settings_common.h"
 #include "screen_common.h"
+#include "screen_text.h"
+#include "screen_wifi.h"
 #include "wifi_board.h"
 #include "network_screen/network_screen.h"
 #include "sdkconfig.h"
@@ -26,6 +28,9 @@
 #include <freertos/task.h>
 #include "fontpack_lvgl.h"
 #include "assets/lang_config.h"
+#include "assets/lang_network.h"
+#include "assets/lang_screen.h"
+#include <wifi_station.h>
 
 namespace {
 
@@ -37,8 +42,11 @@ struct NetworkUi {
     lv_obj_t* root_scr = nullptr;
     lv_obj_t* wifi_btn = nullptr;
     lv_obj_t* cell_btn = nullptr;
-    lv_obj_t* current_lbl = nullptr;
+    lv_obj_t* mode_lbl = nullptr; // 上网方式与当前模式
     lv_obj_t* wifi_cfg_box = nullptr;
+    lv_obj_t* wifi_power_btn = nullptr; // 与快捷面板共用的 Wi-Fi 开关
+    lv_timer_t* wifi_timer = nullptr; // 同步开关状态，离页时释放
+    int wifi_power_state = -1; // 已绘制的任务状态与开关状态组合
     lv_obj_t* wifi_cfg_btn = nullptr;
     lv_obj_t* sim_box = nullptr;
     lv_obj_t* sim_ext_btn = nullptr;
@@ -244,6 +252,36 @@ void SetWifiConfigSectionVisible(bool visible) {
     }
 }
 
+void RefreshWifiPower(lv_timer_t* /*timer*/) {
+    if (!s_ui.wifi_power_btn || IsCellNetwork()) return;
+    const auto phase = ScreenWifiGetSwitchState();
+    const bool enabled = WifiStation::GetInstance().IsUserEnabled();
+    const int state = static_cast<int>(phase) * 2 + enabled;
+    if (state == s_ui.wifi_power_state) return;
+    s_ui.wifi_power_state = state;
+    const bool switching = phase == ScreenWifiSwitchState::kSwitching;
+    const char* status = switching ? Lang::Strings::QUICK_SWITCHING :
+        phase == ScreenWifiSwitchState::kFailed ? Lang::Strings::QUICK_FAILED :
+        enabled ? Lang::Strings::SETTINGS_NET_WIFI_ENABLED : Lang::Strings::QUICK_DISABLED;
+    auto* label = lv_obj_get_child(s_ui.wifi_power_btn, 0);
+    lv_label_set_text(label, status);
+    SettingsStyleSelectable(s_ui.wifi_power_btn, label, enabled);
+    for (auto* button : {s_ui.wifi_power_btn, s_ui.wifi_btn, s_ui.cell_btn, s_ui.wifi_cfg_btn}) {
+        if (!button) continue;
+        if (switching) lv_obj_add_state(button, LV_STATE_DISABLED);
+        else lv_obj_remove_state(button, LV_STATE_DISABLED);
+    }
+    lv_obj_update_layout(s_ui.wifi_power_btn);
+    ScreenFitLabel(label, lv_obj_get_content_width(s_ui.wifi_power_btn),
+                   lv_obj_get_content_height(s_ui.wifi_power_btn));
+}
+
+void OnWifiPowerClicked(lv_event_t* /*event*/) {
+    if (IsCellNetwork()) return;
+    ScreenWifiToggle();
+    RefreshWifiPower(nullptr);
+}
+
 void RefreshNetworkOptions() {
     const bool is_cell = IsCellNetwork();
     if (s_ui.wifi_btn != nullptr) {
@@ -252,8 +290,11 @@ void RefreshNetworkOptions() {
     if (s_ui.cell_btn != nullptr) {
         SettingsStyleSelectable(s_ui.cell_btn, lv_obj_get_child(s_ui.cell_btn, 0), is_cell);
     }
-    if (s_ui.current_lbl != nullptr) {
-        lv_label_set_text(s_ui.current_lbl, is_cell ? Lang::Strings::SETTINGS_NET_CUR_4G : Lang::Strings::SETTINGS_NET_CUR_WIFI);
+    if (s_ui.mode_lbl != nullptr) {
+        char text[96];
+        std::snprintf(text, sizeof(text), Lang::Strings::SETTINGS_NET_MODE_FMT,
+                      is_cell ? Lang::Strings::SETTINGS_NET_MODE_4G : Lang::Strings::SETTINGS_NET_MODE_WIFI);
+        lv_label_set_text(s_ui.mode_lbl, text);
     }
     // 仅当前为 WiFi 时展示进入配网；仅 4G 时展示内外置卡切换
     SetWifiConfigSectionVisible(!is_cell);
@@ -296,9 +337,9 @@ void SwitchNetworkTask(void* arg) {
         SettingsStyleSelectable(s_ui.wifi_btn, lv_obj_get_child(s_ui.wifi_btn, 0), true);
         SettingsStyleSelectable(s_ui.cell_btn, lv_obj_get_child(s_ui.cell_btn, 0), false);
         SetSimSectionVisible(false);
-        SetWifiConfigSectionVisible(true);
-        if (s_ui.current_lbl != nullptr) {
-            lv_label_set_text(s_ui.current_lbl, Lang::Strings::SETTINGS_NET_SWITCH_WIFI);
+        SetWifiConfigSectionVisible(!IsCellNetwork());
+        if (s_ui.mode_lbl != nullptr) {
+            lv_label_set_text(s_ui.mode_lbl, Lang::Strings::SETTINGS_NET_SWITCH_WIFI);
         }
     } else {
         SettingsStyleSelectable(s_ui.wifi_btn, lv_obj_get_child(s_ui.wifi_btn, 0), false);
@@ -306,8 +347,8 @@ void SwitchNetworkTask(void* arg) {
         SetWifiConfigSectionVisible(false);
         SetSimSectionVisible(true);
         RefreshSimUi();
-        if (s_ui.current_lbl != nullptr) {
-            lv_label_set_text(s_ui.current_lbl, Lang::Strings::SETTINGS_NET_SWITCH_4G);
+        if (s_ui.mode_lbl != nullptr) {
+            lv_label_set_text(s_ui.mode_lbl, Lang::Strings::SETTINGS_NET_SWITCH_4G);
         }
     }
     auto* job = new SwitchNetworkJob{target};
@@ -547,9 +588,7 @@ void OnEnterWifiConfigClicked(lv_event_t* /*e*/) {
         return;
     }
     if (GetWifiBoard() == nullptr) {
-        if (s_ui.current_lbl != nullptr) {
-            lv_label_set_text(s_ui.current_lbl, Lang::Strings::SETTINGS_NET_BOARD_NO_AP);
-        }
+        ScreenShowToast(Lang::Strings::SETTINGS_NET_BOARD_NO_AP);
         return;
     }
     ScreenNavigateTo(NetworkScreen::Create);
@@ -571,6 +610,16 @@ void AsyncRefreshSimUi(void* /*user_data*/) {
     }, Application::TaskDomain::Storage);
 }
 
+void CreateSectionDivider(lv_obj_t* parent) {
+    lv_obj_t* split = lv_obj_create(parent);
+    lv_obj_remove_style_all(split);
+    lv_obj_set_size(split, lv_pct(100), 2);
+    lv_obj_set_style_bg_color(split, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(split, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(split, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(split, LV_OBJ_FLAG_SCROLLABLE);
+}
+
 void BuildWifiConfigSection(lv_obj_t* page) {
     s_ui.wifi_cfg_box = lv_obj_create(page);
     lv_obj_remove_style_all(s_ui.wifi_cfg_box);
@@ -584,15 +633,18 @@ void BuildWifiConfigSection(lv_obj_t* page) {
     lv_obj_clear_flag(s_ui.wifi_cfg_box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(s_ui.wifi_cfg_box, LV_OBJ_FLAG_CLICKABLE);
 
-    #if !CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
-    lv_obj_t* split = lv_obj_create(s_ui.wifi_cfg_box);
-    lv_obj_remove_style_all(split);
-    lv_obj_set_size(split, lv_pct(100), 2);
-    lv_obj_set_style_bg_color(split, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(split, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(split, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(split, LV_OBJ_FLAG_SCROLLABLE);
-    #endif
+    CreateSectionDivider(s_ui.wifi_cfg_box);
+
+    lv_obj_t* power_title = lv_label_create(s_ui.wifi_cfg_box);
+    lv_label_set_text(power_title, Lang::Strings::SETTINGS_NET_WIFI_STATUS_TITLE);
+    lv_obj_set_width(power_title, lv_pct(100));
+    lv_label_set_long_mode(power_title, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(power_title, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(power_title, lv_color_black(), 0);
+    lv_obj_clear_flag(power_title, LV_OBJ_FLAG_CLICKABLE);
+
+    s_ui.wifi_power_btn = SettingsCreateSelectableOption(s_ui.wifi_cfg_box, "", OnWifiPowerClicked, 0);
+    CreateSectionDivider(s_ui.wifi_cfg_box);
 
     lv_obj_t* title = lv_label_create(s_ui.wifi_cfg_box);
     lv_label_set_text(title, Lang::Strings::SETTINGS_NET_WIFI_CFG_TITLE);
@@ -612,6 +664,8 @@ void BuildWifiConfigSection(lv_obj_t* page) {
         SettingsCreateSelectableOption(s_ui.wifi_cfg_box, Lang::Strings::SETTINGS_NET_ENTER_CFG, OnEnterWifiConfigClicked, 0);
     SettingsStyleSelectable(s_ui.wifi_cfg_btn, lv_obj_get_child(s_ui.wifi_cfg_btn, 0), false);
 
+    RefreshWifiPower(nullptr);
+    s_ui.wifi_timer = lv_timer_create(RefreshWifiPower, 500, nullptr);
     SetWifiConfigSectionVisible(false);
 }
 
@@ -628,13 +682,7 @@ void BuildWifiConfigSection(lv_obj_t* page) {
     lv_obj_clear_flag(s_ui.sim_box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(s_ui.sim_box, LV_OBJ_FLAG_CLICKABLE);
 
-    // SIM 区与上方上网方式之间的分割横线
-    lv_obj_t* split = lv_obj_create(s_ui.sim_box);
-    lv_obj_remove_style_all(split);
-    lv_obj_set_size(split, lv_pct(100), 2);
-    lv_obj_set_style_bg_color(split, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(split, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(split, LV_OBJ_FLAG_CLICKABLE);
+    CreateSectionDivider(s_ui.sim_box);
 
     lv_obj_t* title = lv_label_create(s_ui.sim_box);
     lv_label_set_text(title, Lang::Strings::SETTINGS_NET_SIM_TITLE);
@@ -668,6 +716,7 @@ void BuildWifiConfigSection(lv_obj_t* page) {
 
 void SettingsNetworkTab_Reset() {
     CloseOverlay();
+    if (s_ui.wifi_timer) lv_timer_delete(s_ui.wifi_timer);
     s_tab_alive = false;
     s_sim_switch_pending = false;
     s_ui = {};
@@ -688,16 +737,17 @@ void SettingsNetworkTab_Build(lv_obj_t* page) {
     s_sim_switch_pending = false;
     s_ui.root_scr = lv_obj_get_screen(page);
 
+    s_ui.mode_lbl = lv_label_create(page);
+    lv_obj_set_width(s_ui.mode_lbl, lv_pct(100));
+    lv_label_set_long_mode(s_ui.mode_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(s_ui.mode_lbl, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(s_ui.mode_lbl, lv_color_black(), 0);
+    lv_obj_clear_flag(s_ui.mode_lbl, LV_OBJ_FLAG_CLICKABLE);
+
     #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
     BuildWifiConfigSection(page);
-    SetWifiConfigSectionVisible(true);
+    RefreshNetworkOptions();
     #else
-    lv_obj_t* title = lv_label_create(page);
-    lv_label_set_text(title, Lang::Strings::SETTINGS_NET_MODE_TITLE);
-    lv_obj_set_style_text_font(title, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(title, lv_color_black(), 0);
-    lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
-
     lv_obj_t* hint = lv_label_create(page);
     lv_label_set_text(hint, Lang::Strings::SETTINGS_NET_REBOOT_HINT);
     lv_obj_set_width(hint, lv_pct(100));
@@ -711,12 +761,6 @@ void SettingsNetworkTab_Build(lv_obj_t* page) {
                                                    static_cast<intptr_t>(NetworkType::CELLULAR));
     s_ui.wifi_btn = SettingsCreateSelectableOption(page, Lang::Strings::SETTINGS_NET_MODE_WIFI, OnNetworkOptionClicked,
                                                    static_cast<intptr_t>(NetworkType::WIFI));
-
-    s_ui.current_lbl = lv_label_create(page);
-    lv_label_set_text(s_ui.current_lbl, "");
-    lv_obj_set_style_text_font(s_ui.current_lbl, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(s_ui.current_lbl, lv_color_black(), 0);
-    lv_obj_clear_flag(s_ui.current_lbl, LV_OBJ_FLAG_CLICKABLE);
 
     BuildWifiConfigSection(page);
     BuildSimSection(page);

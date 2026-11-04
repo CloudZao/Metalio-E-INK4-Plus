@@ -304,6 +304,7 @@ void OnSheetUnderlineMode(lv_event_t* e) {
     BookReaderPrefsSetUnderlineMode(next);
     RequestSettingsSheetPaint();
     if (DeferComicTextSetting()) return;
+    CancelReaderPageWork();
     RequestRenderReaderPage();
 }
 
@@ -640,9 +641,14 @@ static void SheetTextDirection(lv_event_t* e) {
 static void SheetBackground(lv_event_t* e) {
     lv_event_stop_bubbling(e);
     const int mode = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    if (mode == 3) {
+        OpenReadingWallpaper();
+        return;
+    }
     BookReaderPrefsSetBackground(BookReaderPrefsBackground() == mode ? 0 : mode);
     RequestSettingsSheetPaint();
     if (DeferComicTextSetting()) return;
+    CancelReaderPageWork();
     RequestRenderReaderPage();
 }
 static void SheetAntialias(lv_event_t* e) {
@@ -652,6 +658,7 @@ static void SheetAntialias(lv_event_t* e) {
     BookReaderPrefsSetAntialias(enabled);
     RequestSettingsSheetPaint();
     if (DeferComicTextSetting()) return;
+    CancelReaderPageWork();
     RequestRenderReaderPage();
 }
 static void BuildSheetSettings(lv_obj_t* body) {
@@ -726,8 +733,8 @@ static void BuildSheetSettings(lv_obj_t* body) {
     const int para_gap_values[] = {20, 21, 22, 23};
     SettingsRow(right, Lang::Strings::BOOK_PARA_GAP_TITLE, kBookReaderParaGapPresetCount,
         presets, SheetPreset, para_gap_values, 20 + BookReaderPrefsParaGapPreset());
-    const char* backgrounds[] = {Lang::Strings::BOOK_BACKGROUND_GRID, Lang::Strings::BOOK_BACKGROUND_DOTS}; const int bg_values[] = {1,2};
-    SettingsRow(right, Lang::Strings::BOOK_BACKGROUND_TITLE, 2, backgrounds, SheetBackground, bg_values, BookReaderPrefsBackground());
+    const char* backgrounds[] = {Lang::Strings::BOOK_BACKGROUND_GRID, Lang::Strings::BOOK_BACKGROUND_DOTS, Lang::Strings::BOOK_CUSTOM}; const int bg_values[] = {1,2,3};
+    SettingsRow(right, Lang::Strings::BOOK_BACKGROUND_TITLE, 3, backgrounds, SheetBackground, bg_values, BookReaderPrefsBackground());
     const char* foot[] = {Lang::Strings::BOOK_FOOTER_TITLE, Lang::Strings::BOOK_FOOTER_TIME, Lang::Strings::BOOK_FOOTER_PROGRESS, Lang::Strings::BOOK_FOOTER_BATTERY};
     const int bits[] = {kBookReaderFooterTitle,kBookReaderFooterTime,kBookReaderFooterProgress,kBookReaderFooterBattery};
     SettingsRow(right, Lang::Strings::BOOK_CHAPTER_PROGRESS, 4, foot, OnSheetFooterBitToggle, bits, BookReaderPrefsFooterMask(), true);

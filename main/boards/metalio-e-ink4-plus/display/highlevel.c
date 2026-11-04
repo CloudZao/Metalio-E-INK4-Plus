@@ -204,10 +204,12 @@ EpdRect _inverse_rotated_area(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
 
 enum EpdDrawError epd_hl_update_area(EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, EpdRect area) {
     assert(state != NULL);
+    const bool equalize_black = (mode & MODE_EQUALIZE_BLACK) != 0;
     // Not right to rotate here since this copies part of buffer directly
 
     // Check rotation FIX
-    EpdRect rotated_area = _inverse_rotated_area(area.x, area.y, area.width, area.height);
+    EpdRect rotated_area = equalize_black ? epd_full_screen() :
+        _inverse_rotated_area(area.x, area.y, area.width, area.height);
     area.x = rotated_area.x;
     area.y = rotated_area.y;
     area.width = rotated_area.width;
@@ -225,7 +227,7 @@ enum EpdDrawError epd_hl_update_area(EpdiyHighlevelState* state, enum EpdDrawMod
         state->dirty_columns
     );
 
-    if (diff_area.height == 0 || diff_area.width == 0) {
+    if (!equalize_black && (diff_area.height == 0 || diff_area.width == 0)) {
         return EPD_DRAW_SUCCESS;
     }
 
@@ -241,11 +243,11 @@ enum EpdDrawError epd_hl_update_area(EpdiyHighlevelState* state, enum EpdDrawMod
         epd_full_screen(),
         state->difference_fb,
         diff_area,
-        // 行列掩码较粗，LUT 继续屏蔽未变化像素；DU 仅放行黑→黑补黑。
+        // 统一黑色时覆盖整页；LUT 仍屏蔽灰白同色驱动，纯黑目标仅推黑。
         MODE_PACKING_1PPB_DIFFERENCE | MODE_SKIP_UNCHANGED | mode,
         temperature,
-        state->dirty_lines,
-        state->dirty_columns,
+        equalize_black ? NULL : state->dirty_lines,
+        equalize_black ? NULL : state->dirty_columns,
         state->waveform
     );
 

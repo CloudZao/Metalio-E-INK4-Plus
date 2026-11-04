@@ -25,7 +25,7 @@ static constexpr const char* kNvsKeyShutdown = "shutdown";
 static constexpr const char* kNvsKeyStandby = "standby";
 static constexpr size_t kNameMax = SD_FILE_NAME_MAX_BYTES;
 
-enum class WallpaperActiveSlot : uint8_t { Shutdown = 0, Standby = 1, Count = 2 };
+enum class WallpaperActiveSlot : uint8_t { Shutdown = 0, Standby = 1, Reading = 2, Count = 3 };
 
 static char s_names[static_cast<size_t>(WallpaperActiveSlot::Count)][kNameMax + 1] = {};
 static std::atomic<bool> s_cache_ready{false};
@@ -39,13 +39,16 @@ struct WallpaperActiveHydrateWork {
 };
 
 static const char* NvsKeyFor(WallpaperActiveSlot slot) {
+    if (slot == WallpaperActiveSlot::Reading) return "reading";
     return slot == WallpaperActiveSlot::Standby ? kNvsKeyStandby : kNvsKeyShutdown;
 }
 static const char* SlotTag(WallpaperActiveSlot slot) {
+    if (slot == WallpaperActiveSlot::Reading) return "reading";
     return slot == WallpaperActiveSlot::Standby ? "standby" : "shutdown";
 }
 
 static const char* OverlayKey(WallpaperActiveSlot slot) {
+    if (slot == WallpaperActiveSlot::Reading) return nullptr;
     return slot == WallpaperActiveSlot::Standby ? "stb_overlay" : "off_overlay";
 }
 
@@ -100,12 +103,13 @@ static void MarkCacheReady() {
 static void PersistSlotToNvs(WallpaperActiveSlot slot, const char* name) {
     Settings settings(kNvsNs, true);
     const char* key = NvsKeyFor(slot);
+    const char* overlay_key = OverlayKey(slot);
     if (name == nullptr || name[0] == '\0') {
         settings.EraseKey(key);
-        settings.EraseKey(OverlayKey(slot));
+        if (overlay_key) settings.EraseKey(overlay_key);
     } else {
         settings.SetString(key, name);
-        settings.SetBool(OverlayKey(slot), s_overlay[static_cast<size_t>(slot)].load());
+        if (overlay_key) settings.SetBool(overlay_key, s_overlay[static_cast<size_t>(slot)].load());
     }
 }
 
@@ -128,12 +132,13 @@ static std::string ReadSlotNameFromNvs(Settings& settings, WallpaperActiveSlot s
 }
 
 static void LoadAllFromNvsIntoCache() {
-    // 先灌入两槽；若 SD 未挂载则延迟标记缓存已就绪。
+    // 先灌入所有槽；若 SD 未挂载则延迟标记缓存已就绪。
     bool defer_ready = false;
     for (uint8_t s = 0; s < static_cast<uint8_t>(WallpaperActiveSlot::Count); ++s) {
         const WallpaperActiveSlot slot = static_cast<WallpaperActiveSlot>(s);
         Settings settings(kNvsNs, false);
-        s_overlay[s].store(settings.GetBool(OverlayKey(slot), false));
+        const char* overlay_key = OverlayKey(slot);
+        s_overlay[s].store(overlay_key && settings.GetBool(overlay_key, false));
         bool erase = false;
         const std::string name = ReadSlotNameFromNvs(settings, slot, &erase);
         if (erase) {
@@ -244,7 +249,7 @@ static bool SetSlotFromFile(WallpaperActiveSlot slot, const char* path_or_name, 
         return false;
     }
 
-    // 若尚未 hydrate，先灌入两槽再更新当前槽，避免覆盖另一槽状态。
+    // 若尚未 hydrate，先灌入所有槽再更新当前槽，避免覆盖其他槽状态。
     if (!s_cache_ready.load(std::memory_order_acquire)) {
         LoadAllFromNvsIntoCache();
     }
@@ -336,6 +341,22 @@ std::string Wallpaper_GetStandbyFilename() {
     return GetSlotFilename(WallpaperActiveSlot::Standby);
 }
 
+std::string Wallpaper_GetReadingFilename() {
+    return GetSlotFilename(WallpaperActiveSlot::Reading);
+}
+
+bool Wallpaper_SetReadingFromFile(const char* path, std::string& err_out) {
+    return SetSlotFromFile(WallpaperActiveSlot::Reading, path, err_out, false);
+}
+
+void Wallpaper_ClearReadingWallpaper() {
+    ClearSlot(WallpaperActiveSlot::Reading);
+}
+
+bool Wallpaper_TryResolveReadingWallpaperPath(char* out_path, size_t out_len) {
+    return TryResolveSlotPath(WallpaperActiveSlot::Reading, out_path, out_len);
+}
+
 bool Wallpaper_HasStandbySelection() {
     return s_standby_selected.load(std::memory_order_acquire);
 }
@@ -383,6 +404,7 @@ void Wallpaper_ClearActiveIfMatches(const char* filename) {
     bool any = false;
     ClearSlotIfMatches(WallpaperActiveSlot::Shutdown, filename, &any);
     ClearSlotIfMatches(WallpaperActiveSlot::Standby, filename, &any);
+    ClearSlotIfMatches(WallpaperActiveSlot::Reading, filename, &any);
     // 未 hydrate 时不要标记 ready，以免把另一槽状态覆盖为空。
     if (any && was_ready) {
         MarkCacheReady();

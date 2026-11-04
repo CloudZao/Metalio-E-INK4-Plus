@@ -65,7 +65,7 @@ void epd_board_metalio_eink4_plus_ana_sw_set(bool high);
 esp_err_t epd_board_metalio_eink4_plus_sleep_cut_rails(void);
 
 /**
- * @brief 浅睡醒后恢复 P14 → P5
+ * @brief 退出待机或绘制关机画面前分阶段恢复 P14 → P5
  * @return 成功返回 ESP_OK，失败返回对应错误
  */
 esp_err_t epd_board_metalio_eink4_plus_sleep_restore_rails(void);
@@ -130,8 +130,8 @@ void epd_board_metalio_eink4_plus_bus_restore(void);
 esp_err_t epd_board_metalio_eink4_plus_ioexp_mask_for_sleep(void);
 
 /**
- * @brief 武装唤醒前：仅把电源键 P17 改回输入
- * @return true 配置成功
+ * @brief 配置电源键输入，清除方向切换中断并确认电源键已松开
+ * @return true 配置及采样成功且电源键已松开
  */
 bool epd_board_metalio_eink4_plus_ioexp_enable_power_wake_pin(void);
 

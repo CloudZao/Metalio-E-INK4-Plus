@@ -59,9 +59,9 @@ void VkKey_AttachScreen(lv_obj_t* scr, const char* name);
  */
 void VkKey_AttachScreen(lv_obj_t* scr, const char* name, const VkKeyScreenDesc& desc);
 
-/** @brief 在 UI 任务分发虚拟键短按 */
+/** @brief 在 UI 任务分发虚拟键短按，HOME 默认返回上一页面 */
 void VkKey_Dispatch(const char* key_name);
-/** @brief 在 UI 任务分发虚拟键长按；true=已消费 */
+/** @brief 在 UI 任务分发虚拟键长按，HOME 默认直达系统首页；true=已消费 */
 bool VkKey_OnLongPress(const char* key_name);
 /** @brief 在 UI 任务分发虚拟键抬起；true=已消费 */
 bool VkKey_OnPressUp(const char* key_name);

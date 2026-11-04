@@ -349,12 +349,23 @@ esp_err_t epd_board_metalio_eink4_plus_sleep_restore_rails(void) {
     }
     s_outputs[CFG_PORT_INT].desired |= CFG_PIN_BT_PA_PWR;
     esp_err_t err = s_ioexp_ok ? output_write_locked(CFG_PORT_INT) : ESP_ERR_INVALID_STATE;
-    if (err == ESP_OK) {
-        s_outputs[CFG_PORT_CTRL].desired |= CFG_PIN_CAM_SCR;
-        err = output_write_locked(CFG_PORT_CTRL);
-    }
     output_unlock();
-    if (err == ESP_OK) ESP_LOGI(TAG, "sleep restore P14 then P5");
+    if (err != ESP_OK) return err;
+
+    // 分开两路上电负载，等待期间允许其他共享端口输出更新。
+    vTaskDelay(pdMS_TO_TICKS(POWER_RAIL_SETTLE_MS));
+    output_lock();
+    if (s_bt_reset_active || !(s_outputs[CFG_PORT_INT].desired & CFG_PIN_BT_PA_PWR)) {
+        output_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_outputs[CFG_PORT_CTRL].desired |= CFG_PIN_CAM_SCR;
+    err = output_write_locked(CFG_PORT_CTRL);
+    output_unlock();
+    if (err == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(POWER_RAIL_SETTLE_MS));
+        ESP_LOGI(TAG, "sleep restore P14 then P5");
+    }
     return err;
 }
 
@@ -561,12 +572,15 @@ bool epd_board_metalio_eink4_plus_ioexp_enable_power_wake_pin(void) {
     if (!s_ioexp_ok) {
         return false;
     }
-    // P17 锁存已是高；改输入时同电平，尽量无假边沿
+    // 切换输入后重新采样，清除方向切换留下的 INT，再由调用方检查共享线。
     if (pca9555_set_config(s_ioexp_port, CFG_IO_BIT(EPD_IO_POWER), CFG_PORT_INT) != ESP_OK) {
         ESP_LOGW(TAG, "enable P17 input fail");
         return false;
     }
-    return true;
+    vTaskDelay(pdMS_TO_TICKS(10));
+    uint8_t p1 = 0xFF;
+    if (pca9555_read_input_ex(s_ioexp_port, CFG_PORT_INT, &p1) != ESP_OK) return false;
+    return (p1 & CFG_IO_BIT(EPD_IO_POWER)) != 0;
 }
 
 esp_err_t epd_board_metalio_eink4_plus_ioexp_restore_keys(void) {
@@ -707,7 +721,7 @@ static void epd_board_init(uint32_t epd_row_width) {
     s_ioexp_ok = probe_and_init_ioexp(s_ioexp_port);
     // 深睡曾关 P14(VOUT)：TCA 锁存仍低，上面已拉高；等轨稳定再启 TPS
     if (s_ioexp_ok) {
-        vTaskDelay(pdMS_TO_TICKS(80));
+        vTaskDelay(pdMS_TO_TICKS(POWER_RAIL_SETTLE_MS));
     }
     epd_board_metalio_eink4_plus_ana_sw_set(true); // GPIO36 默认高（非虚拟 U 盘）
     i2c_scan_log(s_ioexp_port); // 启动即扫；此时 TPS 多半仍 SLEEP，可能只有 TCA

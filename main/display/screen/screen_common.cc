@@ -45,6 +45,7 @@ enum class NavigationKind {
 struct PendingNavigation {
     NavigationKind kind = NavigationKind::None; // 尚未执行的最新导航意图
     ScreenFactory factory = nullptr; // To 目标的建屏工厂
+    ScreenFactory return_to = nullptr; // 指定返回入口，空时使用来源页面工厂
     lv_obj_t* origin = nullptr; // 发起导航的活动屏幕
     bool standby = false; // 待机 Overlay 不改变活动屏幕，需单独校验
 };
@@ -74,7 +75,7 @@ void ExecuteNavigation(const PendingNavigation& target) {
         const char* cur = VkKey_ActiveScreen();
         if (cur != nullptr && std::strcmp(cur, kHomeScreen) != 0 &&
             std::strcmp(cur, "none") != 0) {
-            if (ScreenFactory factory = VkKey_GetScreenFactory(cur)) {
+            if (ScreenFactory factory = target.return_to ? target.return_to : VkKey_GetScreenFactory(cur)) {
                 ScreenCommon_PushBackFactory(factory);
                 ESP_LOGI(TAG, "navigate to: push back factory for %s (depth=%d)", cur, ScreenCommon_back_depth);
             }
@@ -113,10 +114,11 @@ void ProcessPendingNavigation(lv_timer_t*) {
     ExecuteNavigation(target);
 }
 
-void RequestNavigation(NavigationKind kind, ScreenFactory factory = nullptr, bool next_tick = false) {
+void RequestNavigation(NavigationKind kind, ScreenFactory factory = nullptr, bool next_tick = false,
+                       ScreenFactory return_to = nullptr) {
     // 先取消旧翻页，再等待落墨结束；合并期间不创建页面或修改返回栈。
     EpdCancelPageTurn();
-    pending_navigation = {kind, factory, lv_screen_active(), StandbyScreen::IsActive()};
+    pending_navigation = {kind, factory, return_to, lv_screen_active(), StandbyScreen::IsActive()};
     if (!next_tick) {
         ProcessPendingNavigation(nullptr);
         if (pending_navigation.kind == NavigationKind::None) return;
@@ -133,8 +135,8 @@ void RequestNavigation(NavigationKind kind, ScreenFactory factory = nullptr, boo
 }
 } // namespace
 
-void ScreenNavigateTo(lv_obj_t* (*create)()) {
-    if (create != nullptr) RequestNavigation(NavigationKind::To, create);
+void ScreenNavigateTo(lv_obj_t* (*create)(), lv_obj_t* (*return_to)()) {
+    if (create != nullptr) RequestNavigation(NavigationKind::To, create, false, return_to);
 }
 
 void ScreenNavigateBack() {

@@ -18,6 +18,19 @@
 #include "vk_key_handler.h"
 #include "vk_page_repeat.h"
 
+static bool s_return_to_reading = false; // 阅读设置入口的退出目标
+static bool s_return_requested = false; // 保存完成后执行已请求的返回
+
+bool Wallpaper_ReturnToReading(bool request) {
+    if (!s_return_to_reading) return false;
+    s_return_requested |= request;
+    if (s_return_requested && !Wallpaper_State().workers.enable_busy.load()) {
+        s_return_requested = false;
+        ScreenNavigateBack();
+    }
+    return true;
+}
+
 WallpaperUiState& Wallpaper_State() {
     static WallpaperUiState s;
     return s;
@@ -76,6 +89,10 @@ bool WallpaperPageRepeatStep(int page_delta) {
 }
 
 bool Wallpaper_OnVkKeyLongPress(const char* key) {
+    if (s_return_to_reading && key && std::strcmp(key, "vk_home") == 0) {
+        Wallpaper_ReturnToReading(true);
+        return true;
+    }
     return VkPageRepeatTryStart(key, WallpaperPageRepeatStep);
 }
 
@@ -99,8 +116,6 @@ bool Wallpaper_OnVkKey(const char* key) {
             (std::strcmp(key, "vk_prev") == 0 || std::strcmp(key, "vk_home") == 0)) {
             if (Wallpaper_State().workers.save_busy.load()) {
                 ++Wallpaper_State().epoch;
-                Wallpaper_State().workers.save_busy.store(false);
-                Wallpaper_State().workers.save_task = nullptr;
             }
             ScreenLvAsync(AsyncExitAdjustMode);
             return true;
@@ -128,6 +143,7 @@ bool Wallpaper_OnVkKey(const char* key) {
             ExitWpMultiMode(true);
             return true;
         }
+        if (Wallpaper_ReturnToReading(true)) return true;
         return false;
     }
     if (std::strcmp(key, "vk_next") == 0) {
@@ -138,6 +154,10 @@ bool Wallpaper_OnVkKey(const char* key) {
         } else {
             ESP_LOGI(TAG, "vk_next list already last page=%d", Wallpaper_State().list.list_page + 1);
         }
+        return true;
+    }
+    if (s_return_to_reading && std::strcmp(key, "vk_home") == 0) {
+        Wallpaper_ReturnToReading(true);
         return true;
     }
     return false;
@@ -162,13 +182,14 @@ void Wallpaper_OnScreenDeleted(lv_event_t* e) {
     Wallpaper_State().list.suppress_click_until_us = 0;
     Wallpaper_State().list.suppress_click_idx = -1;
     Wallpaper_State().workers.delete_busy.store(false);
-    Wallpaper_State().workers.save_busy.store(false);
     ScreenPaintCoalesceReset(&Wallpaper_State().wp_check_paint);
     ScreenPaintCoalesceReset(&Wallpaper_State().wallpaper_paint);
     Wallpaper_State().ui = {};
 }
 
 lv_obj_t* WallpaperScreen::Create() {
+    s_return_to_reading = false;
+    s_return_requested = false;
     // 旧屏可能仍在 async delete：先拆引用，递增 epoch 丢弃在飞任务；缩略图按文件复用
     Wallpaper_State().screen_alive = false;
     ++Wallpaper_State().epoch;
@@ -182,7 +203,6 @@ lv_obj_t* WallpaperScreen::Create() {
     Wallpaper_State().list.multi = false;
     Wallpaper_State().preview.adjust_open = false;
     ResetOrientState();
-    Wallpaper_State().workers.save_busy.store(false);
     Wallpaper_State().list.selected.clear();
     Wallpaper_State().list.suppress_click_until_us = 0;
     Wallpaper_State().list.suppress_click_idx = -1;
@@ -248,6 +268,13 @@ lv_obj_t* WallpaperScreen::Create() {
                        VkKeyScreenDesc{WallpaperScreen::Create, Wallpaper_OnVkKey, nullptr, nullptr, nullptr,
                                        nullptr, Wallpaper_OnVkKeyLongPress, Wallpaper_OnVkKeyPressUp});
     return scr;
+}
+
+lv_obj_t* WallpaperScreen::CreateForReading() {
+    auto* screen = Create();
+    s_return_to_reading = true;
+    VkKey_SetScreenFactory(kScreenId, CreateForReading);
+    return screen;
 }
 
 bool Wallpaper_DecodeCancelled(void* context) {

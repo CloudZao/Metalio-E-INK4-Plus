@@ -43,6 +43,7 @@ enum class PageDraw { None, Binary, Gray };
 struct GrayRefresh {
     bool differential = false;
     bool reader_aa = false;
+    bool equalize_black = false; // 统一整页纯黑像素的推黑驱动
 };
 uint8_t *render_fb, *pending_fb, *effect_fb;
 uint8_t* effect_source_fb;
@@ -69,6 +70,7 @@ std::atomic<int> last_error{0}, last_mode{0}, partials{0}, effect{1}, next_turn{
 std::atomic<int> reader_effect{static_cast<int>(EpdEffect::None)};
 constexpr unsigned kScreenChange = 1;
 constexpr unsigned kFullGc = 2;
+constexpr unsigned kBlackEqualize = 4;
 std::atomic<unsigned> next_screen_change{0};
 void (*after_submit)() = nullptr; // 下一次提交后的单次回调
 unsigned pending_screen_change=0;
@@ -281,6 +283,8 @@ EpdDrawError Draw(EpdiyHighlevelState* hl, int mode, bool full, bool clean, bool
             result = epd_clear_checked();
             if (result == EPD_DRAW_SUCCESS)
                 result = epd_hl_update_screen_from_white(hl, static_cast<EpdDrawMode>(mode), 25);
+        } else if (gray.equalize_black && !cleanup && pattern<0 && (mode==MODE_DU || mode==MODE_GL16)) {
+            result = epd_hl_update_screen(hl, static_cast<EpdDrawMode>(mode | MODE_EQUALIZE_BLACK), 25);
         } else if (full || mode == MODE_GC16 || pattern>=0 ||
                    (mode == MODE_GL16 && !gray.differential)) {
             // Diagnostic patterns intentionally exercise their requested
@@ -408,7 +412,7 @@ void Worker(void*) {
     for (;;) {
         ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(100));
         bool full=false, stream=false, light=false, frame=false, test=false, screen_change=false;
-        bool scrolling=false, scroll_settle=false, reader_aa=false, full_gc=false;
+        bool scrolling=false, scroll_settle=false, reader_aa=false, full_gc=false, equalize_black=false;
         int turn=0, orient=0;
         uint32_t sequence=consumed;
         TestJob job{};
@@ -424,7 +428,8 @@ void Worker(void*) {
             reader_aa=pending_reader_aa;
             scrolling=pending_scroll; scroll_settle=pending_scroll_settle; pending_scroll_settle=false;
             screen_change=(pending_screen_change & kScreenChange)!=0;
-            full_gc=(pending_screen_change & kFullGc)!=0; pending_screen_change=0;
+            full_gc=(pending_screen_change & kFullGc)!=0;
+            equalize_black=(pending_screen_change & kBlackEqualize)!=0; pending_screen_change=0;
             pending_full=pending_light=false; pending_turn=0;
             frame=true;
         }
@@ -525,20 +530,20 @@ void Worker(void*) {
             const bool reset_gray=!full_gc && gray_on_panel &&
                 (pattern!=static_cast<int>(EpdPattern::Gray) || promote || turn);
             const auto result=preparation!=EPD_DRAW_SUCCESS ? preparation :
-                (!combined && (changed || promote || reset_gray || screen_change || turn || scroll_settle)
-                ? Draw(hl,mode,promote,reset_gray,false,PageDraw::None,orient,{!scroll_settle,reader_aa}) : EPD_DRAW_SUCCESS);
+                (!combined && (changed || promote || reset_gray || screen_change || turn || scroll_settle || equalize_black)
+                ? Draw(hl,mode,promote,reset_gray,false,PageDraw::None,orient,{!scroll_settle,reader_aa,equalize_black}) : EPD_DRAW_SUCCESS);
             // 每个实际上屏的目标帧只记录一次，扫描期间不打印或遍历额外像素。
             if (updates.load()!=draws_before || result!=EPD_DRAW_SUCCESS) {
                 ESP_LOGI(TAG,"route seq=%u merged=%u screen=%d full_gc=%d turn=%d stream=%d scroll=%d settle=%d "
-                         "changed=%d binary=%d gray=%d promote=%d combined=%d partials=%d gc_age=%lldms",
+                         "changed=%d binary=%d gray=%d promote=%d combined=%d equalize=%d partials=%d gc_age=%lldms",
                          (unsigned)sequence,(unsigned)(sequence-consumed-1),screen_change,full_gc,turn,stream,scrolling,scroll_settle,
-                         changed,binary_pages,gray_changed,promote,combined,partials_before,(long long)full_age_ms);
+                         changed,binary_pages,gray_changed,promote,combined,equalize_black,partials_before,(long long)full_age_ms);
             }
             if (result==EPD_DRAW_SUCCESS) {
                 profile_full=false;
                 gray_on_panel=pattern==static_cast<int>(EpdPattern::Gray);
                 if (mode==MODE_GC16 || clean_reveal) { partials.store(0); last_full=esp_timer_get_time(); }
-                else if (changed>0) ++partials;
+                else if (changed>0 || equalize_black) ++partials;
                 if (light) Frontlight::GetInstance().RestoreBrightness();
             }
         }
@@ -668,6 +673,7 @@ void EpdCancelPageTurn() {
 void EpdRequestScreenChange(bool full_gc) {
     next_screen_change.fetch_or(kScreenChange | (full_gc ? kFullGc : 0));
 }
+void EpdRequestBlackEqualization() { next_screen_change.fetch_or(kBlackEqualize); }
 void EpdSetTestActive(bool active) { test_active.store(active); if (!active) EpdTestStop(); }
 bool EpdTestRequest(EpdPattern p,int mode,bool clean,int repeats) {
     if (!worker || !test_active.load() || repeats<1 || repeats>20 ||

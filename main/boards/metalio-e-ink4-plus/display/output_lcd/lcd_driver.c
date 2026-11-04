@@ -202,11 +202,7 @@ typedef struct {
     /// The number of bytes in a horizontal display register line.
     int line_bytes;
 
-    // With 8 bit bus width, we need a dummy cycle before the actual data,
-    // because the LCD peripheral behaves weirdly.
-    // Also see:
-    // https://blog.adafruit.com/2022/06/14/esp32uesday-hacking-the-esp32-s3-lcd-peripheral/
-    int dummy_bytes;
+    int dummy_bytes; // 每行 DMA 数据前的占位字节数，S31 数据阶段不使用占位
 
     /// The number of lines of the display
     int display_lines;
@@ -307,7 +303,7 @@ static IRAM_ATTR bool fill_bounce_buffer(uint8_t* buffer) {
     bool task_awoken = false;
 
     for (int i = 0; i < BOUNCE_BUF_LINES; i++) {
-        // 8bit 时 dummy 占前 1 字节；仍走 line_source 以免队列饿死。
+        // 占位布局与外设的数据阶段一致，完整保留每行首尾像素。
         int buffer_offset = i * (lcd.line_bytes + lcd.dummy_bytes) + (lcd.dummy_bytes % 2);
         if (lcd.lines_fed >= (size_t)lcd.display_lines) {
             memset(&buffer[buffer_offset], 0x00, lcd.line_bytes);
@@ -798,11 +794,11 @@ static void assign_lcd_parameters_from_config(
     lcd.line_bytes = display_width / 4;
     lcd.lcd_res_h = lcd.line_bytes / (lcd.config.bus_width / 8);
 
-    // With 8 bit bus width, we need a dummy cycle before the actual data,
-    // because the LCD peripheral behaves weirdly.
-    // Also see:
-    // https://blog.adafruit.com/2022/06/14/esp32uesday-hacking-the-esp32-s3-lcd-peripheral/
+    #if defined(CONFIG_IDF_TARGET_ESP32S31)
+    lcd.dummy_bytes = 0;
+    #else
     lcd.dummy_bytes = lcd.config.bus_width / 8;
+    #endif
 
     // each bounce buffer holds a number of lines with data + dummy bytes each
     lcd.bb_size = BOUNCE_BUF_LINES * (lcd.line_bytes + lcd.dummy_bytes);
@@ -1332,7 +1328,10 @@ void IRAM_ATTR epd_lcd_start_frame() {
     start_ckv_cycles(initial_lines + 5);
     esp_rom_delay_us(lcd.ckv_period_us);
     gpio_set_level(lcd.config.bus.stv, 1);
+    // S31 去掉额外的一行等待，使 XCL、XLE 与 XSTL 同步前移。
+    #if !defined(CONFIG_IDF_TARGET_ESP32S31)
     esp_rom_delay_us(lcd.ckv_period_us);
+    #endif
     esp_rom_delay_us(lcd.config.ckv_high_time / 10);
 
     // start LCD engine

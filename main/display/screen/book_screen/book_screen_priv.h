@@ -106,6 +106,7 @@ struct BookUiState {
         lv_obj_t* content = nullptr;
         lv_obj_t* text_raster_image = nullptr; // Cleared by the image's DELETE event.
         lv_obj_t* background_layer = nullptr;
+        std::shared_ptr<reader::RasterImage> background_image; // UI 与后台页面准备共享只读背景
         lv_obj_t* footer_host = nullptr; // 底栏白底槽；page_label 放其中
         lv_obj_t* page_label = nullptr;
         lv_obj_t* title_label = nullptr;
@@ -132,8 +133,7 @@ struct BookUiState {
 
         // 异步打开：worker 解析，经 ScreenLvAsync 回 LVGL（禁止 worker 裸 lv_async_call）
         std::atomic<bool> opening{false};
-        int background_mode = 0, background_left = 0, background_width = 0, background_height = 0;
-        int background_screen_width = 0, background_top = 0; // 已发布背景层的几何
+        int background_mode = 0; // 已发布的整页背景模式，尺寸由背景位图持有
         std::atomic<uint32_t> open_token{0};
         bool prefs_reopen_pending = false; // LVGL: wait for all session/font users before reopen
         lv_timer_t* prefs_reopen_timer = nullptr;

@@ -70,7 +70,7 @@ void power_hw_begin_power_off(void);
 /**
  * @brief 阻塞浅睡一次；仅 P17→GPIO2(EXT1) 唤醒，max_sleep_us>0 时兼定时唤醒
  * @param max_sleep_us 最长睡眠微秒；0 表示仅 EXT1 唤醒
- * @note 入睡前 mask TCA 多余 INT 源、松加速度计 INT；仅 EXT1(GPIO2) 唤醒；醒后可 latch_get
+ * @note 入睡前 mask TCA 多余 INT 源、松加速度计 INT；醒后可 latch_get；成功返回时外围仍停放，退出或关机前须恢复
  * @return ESP_OK 或唤醒相关错误
  */
 esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us);

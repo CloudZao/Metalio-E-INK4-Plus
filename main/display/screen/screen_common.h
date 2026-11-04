@@ -30,8 +30,8 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr);
 void ScreenShowToast(const char* text);
 /** @brief 替换加载新屏 */
 void ScreenLoadReplace(lv_obj_t* new_scr);
-/** @brief 导航到工厂函数创建的新屏；落墨期间合并并延后建屏 */
-void ScreenNavigateTo(lv_obj_t* (*create)());
+/** @brief 导航到工厂创建的新屏；落墨期间延后建屏，可指定来源页面的返回工厂。 */
+void ScreenNavigateTo(lv_obj_t* (*create)(), lv_obj_t* (*return_to)() = nullptr);
 /** @brief 返回上一屏 */
 void ScreenNavigateBack();
 /** @brief 标记当前是否为首页 */

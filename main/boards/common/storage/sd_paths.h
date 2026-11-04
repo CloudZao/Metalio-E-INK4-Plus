@@ -83,6 +83,8 @@ static inline size_t SdUtf8PrefixLength(const char* text, size_t max_bytes) {
 #define SD_PATH_A2UI_CACHE  SD_APP_ROOT "/a2ui_cache"   // A2UI 图片缓存
 #define SD_PATH_CHAT_LOG    SD_APP_ROOT "/chat_log"     // 百问会话 JSON
 #define SD_PATH_WALLPAPER    SD_APP_ROOT "/wallpaper"    // 壁纸库
+#define SD_PATH_TEMP SD_APP_ROOT "/temp" // 临时工作文件根目录
+#define SD_PATH_WALLPAPER_TEMP SD_PATH_TEMP "/wallpaper" // 图片解码系数后备文件
 
 #define SD_PATH_BOOK_FONT      SD_PATH_FONTS "/misans_40_2.ef"              // 默认阅读字体
 #define SD_PATH_BOOK_FONT_ALT  SD_PATH_FONTS "/font_misans_regular_25_2.ef" // 备用阅读字体

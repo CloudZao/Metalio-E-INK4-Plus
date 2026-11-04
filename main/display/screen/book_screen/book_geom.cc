@@ -42,10 +42,27 @@ lv_coord_t ReaderFooterHeight() {
 }
 
 namespace {
+bool SyncReaderSurface() {
+    const int width = LV_HOR_RES, height = LV_VER_RES;
+    DisplayUiSetFullScreen(BookReaderPrefsBackground() == 3 && !ReaderPageImagesHint());
+    if (width == LV_HOR_RES && height == LV_VER_RES) return false;
+    if (auto* display = LVAdapterDisplay::Instance()) display->RequestFullOnNextCommit();
+    return true;
+}
+
+lv_coord_t ReaderLayoutWidth() {
+    return DisplayUiIsLandscape() ? DISPLAY_CONTENT_H : DISPLAY_CONTENT_W;
+}
+
+lv_coord_t ReaderLayoutHeight() {
+    return DisplayUiIsLandscape() ? DISPLAY_CONTENT_W : DISPLAY_CONTENT_H;
+}
+
 lv_coord_t ResizeReaderContainers(bool show_footer) {
     auto& reader = Book_State().reader;
     const lv_coord_t footer_h = show_footer ? ReaderFooterHeight() : 0;
-    const lv_coord_t body_h = LV_VER_RES - footer_h;
+    // 全屏背景独立覆盖外圈；正文和底栏保持普通 UI 视口及对应的面板位置。
+    const lv_coord_t body_h = (LV_VER_RES + ReaderLayoutHeight()) / 2 - footer_h;
     if (reader.content && lv_obj_is_valid(reader.content)) {
         lv_obj_set_size(reader.content, LV_HOR_RES, body_h);
         lv_obj_align(reader.content, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -84,18 +101,26 @@ void BindSessionLayoutPrefs(reader::BookSession& session) {
                            static_cast<lv_coord_t>(BookReaderPrefsParaGap()));
 }
 
+lv_area_t ReadBackgroundArea() {
+    const bool full = BookReaderPrefsBackground() == 3 && !ReaderPageImagesHint();
+    const int width = full ? DISPLAY_WIDTH : DISPLAY_CONTENT_W;
+    const int height = full ? DISPLAY_HEIGHT : DISPLAY_CONTENT_H;
+    return DisplayUiIsLandscape() ? lv_area_t{0, 0, height - 1, width - 1} : lv_area_t{0, 0, width - 1, height - 1};
+}
+
 lv_area_t ReadContentArea() {
     BookReaderPrefsEnsureLoaded();
     const bool page_images = ReaderPageImagesHint();
     const bool vertical = !page_images && BookReaderPrefsWritingMode() == kBookReaderWritingVertical;
     const int extra_side = vertical ? kReaderVerticalSideInset : 0;
-    const int left = BookReaderPrefsMarginLeft() + (vertical &&
+    const auto background = ReadBackgroundArea();
+    const int left = (lv_area_get_width(&background) - ReaderLayoutWidth()) / 2 + BookReaderPrefsMarginLeft() + (vertical &&
         BookReaderPrefsTextDirection() != kBookReaderTextRightToLeft ? extra_side : 0);
-    const int top = BookReaderPrefsMarginTop();
-    const int width = std::max<int>(40, LV_HOR_RES - BookReaderPrefsMarginLeft() -
+    const int top = (lv_area_get_height(&background) - ReaderLayoutHeight()) / 2 + BookReaderPrefsMarginTop();
+    const int width = std::max<int>(40, ReaderLayoutWidth() - BookReaderPrefsMarginLeft() -
         BookReaderPrefsMarginRight() - extra_side);
-    const int height = std::max<int>(40, LV_VER_RES -
-        (BookReaderPrefsHideProgress() ? 0 : ReaderFooterHeight()) - top - BookReaderPrefsMarginBottom());
+    const int height = std::max<int>(40, ReaderLayoutHeight() -
+        (BookReaderPrefsHideProgress() ? 0 : ReaderFooterHeight()) - BookReaderPrefsMarginTop() - BookReaderPrefsMarginBottom());
     return {left, top, left + width - 1, top + height - 1};
 }
 
@@ -132,6 +157,7 @@ void ApplyReaderPageGeometry(ReaderGeomMode mode) {
         return;
     }
     BookReaderPrefsEnsureLoaded();
+    if (SyncReaderSurface()) ApplyReaderChromeSize();
     const bool show_footer =
         (mode == ReaderGeomMode::kOverlayList) || (BookReaderPrefsHideProgress() == 0);
     const lv_coord_t body_h = ResizeReaderContainers(show_footer);
@@ -154,6 +180,7 @@ void ApplyReaderPageGeometry(ReaderGeomMode mode) {
 
 void ApplyReaderChromeSize() {
     auto& st = Book_State();
+    SyncReaderSurface();
     if (st.reader.status_bar != nullptr && lv_obj_is_valid(st.reader.status_bar)) {
         lv_obj_set_width(st.reader.status_bar, LV_HOR_RES);
     }

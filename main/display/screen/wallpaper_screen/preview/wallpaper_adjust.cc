@@ -150,6 +150,9 @@ void BindPreviewRasterToImg() {
     if (Wallpaper_State().preview.raster == nullptr || Wallpaper_State().ui.preview_img == nullptr) {
         return;
     }
+    if (!reader::ScaleRasterToFit(*Wallpaper_State().preview.raster,
+                                 FrameInner(kPreviewMaxW, kBorderW), FrameInner(kPreviewMaxH, kBorderW),
+                                 *Wallpaper_State().preview.raster)) return;
     Wallpaper_State().preview.raster->BindDsc();
     lv_image_set_scale(Wallpaper_State().ui.preview_img, LV_SCALE_NONE);
     lv_image_set_src(Wallpaper_State().ui.preview_img, &Wallpaper_State().preview.raster->dsc);
@@ -193,6 +196,7 @@ void UpdateAdjustUi() {
     set_hidden(Wallpaper_State().ui.actions_normal_row, !show_normal);
     set_hidden(Wallpaper_State().ui.actions_adjust_row, show_normal);
     set_hidden(Wallpaper_State().ui.delete_btn, !show_normal);
+    set_hidden(Wallpaper_State().ui.enable_reading_btn, !show_normal);
     set_hidden(Wallpaper_State().ui.save_row, show_normal);
 
     const bool can_enter = show_normal && Wallpaper_State().preview.base != nullptr && !Wallpaper_State().preview.base->empty() &&

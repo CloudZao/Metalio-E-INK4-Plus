@@ -2,8 +2,8 @@
 #include "cloud_screen/cloud_screen_priv.h"
 #include "cloud_screen/push/push_resources_library.h"
 
-#include "cloud_screen/push/wallpaper_cloud_library.h"
 #include "reader/http_download_file.h"
+#include "reader/image_file_write.h"
 #include "sd_paths.h"
 #include "SdCardManager.hpp"
 #include "wallpaper_screen/wallpaper_active.h"
@@ -282,12 +282,11 @@ bool DeleteCloudWallpaperLocal(const CloudWallpaperTask& task, std::string& err_
         err_out = Lang::Strings::CLOUD_NO_LOCAL_FILE;
         return false;
     }
-    if (unlink(path.c_str()) != 0 && errno != ENOENT) {
+    if (!DeleteWallpaperFile(path.c_str())) {
         err_out = Lang::Strings::CLOUD_DELETE_FAIL;
         return false;
     }
     DeleteWallpaperMeta(path.c_str());
-    unlink((path + ".tmp").c_str());
     const char* slash = std::strrchr(path.c_str(), '/');
     const char* base = slash != nullptr ? slash + 1 : path.c_str();
     Wallpaper_ClearActiveIfMatches(base);

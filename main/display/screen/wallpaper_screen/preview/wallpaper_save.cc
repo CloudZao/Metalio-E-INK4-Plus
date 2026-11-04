@@ -16,13 +16,13 @@
 #include <string>
 #include <sys/stat.h>
 #include <vector>
-#include <utility>
 #include <esp_timer.h>
 #include <freertos/task.h>
 #include <freertos/idf_additions.h>
 
 #include "assets/lang_config.h"
 #include "reader/reader.h"
+#include "reader/image_file_write.h"
 #include "cloud_screen/push/wallpaper_cloud_library.h"
 #include "standby_screen/standby_wallpaper.h"
 
@@ -169,6 +169,8 @@ struct SaveWork {
     uint8_t rot_cw = 0;
     bool mirror_h = false;
     bool save_as = false;
+    int decode_w = DISPLAY_WIDTH; // 原图方向对应的屏幕宽度
+    int decode_h = DISPLAY_HEIGHT; // 原图方向对应的屏幕高度
     char src_path[SD_FILE_PATH_CAPACITY] = {};
     char out_path[SD_FILE_PATH_CAPACITY] = {};
     char out_name[SD_FILE_NAME_CAPACITY] = {};
@@ -197,33 +199,42 @@ bool SaveTransformedWallpaper(const SaveWork& work, size_t& size_out, std::strin
         err_out = Lang::Strings::WALLPAPER_SAVE_FAIL;
         return false;
     }
-    reader::RasterImage img;
     WallpaperDecodeToken token{work.epoch, work.generation};
-    if (!reader::DecodeImageFileToL8(work.src_path, 0, 0, img, Wallpaper_DecodeCancelled, &token) || img.empty()) {
-        err_out = Lang::Strings::WALLPAPER_DECODE_FAIL;
+    reader::ImageDecodeError error = reader::ImageDecodeError::kNone;
+    const int long_side = std::max(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    const int short_side = std::min(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    int width = 0, height = 0;
+    int decode_w = work.decode_w, decode_h = work.decode_h;
+    if (reader::PeekRasterFileSize(work.src_path, &width, &height)) {
+        decode_w = width > height ? long_side : short_side;
+        decode_h = width > height ? short_side : long_side;
+    }
+    reader::RasterImage image;
+    if (!reader::DecodeImageFileToL8(work.src_path, decode_w, decode_h, image,
+                                    Wallpaper_DecodeCancelled, &token, &error) || image.empty()) {
+        char message[80];
+        Wallpaper_FormatDecodeFailure(message, sizeof(message), error);
+        err_out = message;
         return false;
     }
-    TrimBakedLetterbox(img);
-    if (work.epoch != Wallpaper_State().epoch || Wallpaper_State().decode_paused.load() ||
-        work.generation != Wallpaper_State().decode_generation.load()) {
-        err_out = Lang::Strings::WALLPAPER_SAVE_FAIL;
-        return false;
-    }
+    TrimBakedLetterbox(image);
     reader::RasterImage oriented;
-    ApplyWallpaperOrient(img, work.rot_cw, work.mirror_h, oriented);
+    ApplyWallpaperOrient(image, work.rot_cw, work.mirror_h, oriented);
+    if (!reader::ScaleRasterToFit(oriented, oriented.width > oriented.height ? long_side : short_side,
+                                  oriented.width > oriented.height ? short_side : long_side, oriented)) {
+        err_out = Lang::Strings::WALLPAPER_SAVE_FAIL;
+        return false;
+    }
     std::vector<uint8_t> encoded;
-    if (!reader::EncodeL8ToA2l8(oriented, encoded) ||
-        !reader::ValidateA2l8Bytes(encoded.data(), encoded.size())) {
+    if (!reader::EncodeL8ToA2l8(oriented, encoded) || !reader::ValidateA2l8Bytes(encoded.data(), encoded.size())) {
         err_out = Lang::Strings::WALLPAPER_SAVE_FAIL;
         return false;
     }
-    if (work.epoch != Wallpaper_State().epoch || Wallpaper_State().decode_paused.load() ||
-        work.generation != Wallpaper_State().decode_generation.load()) {
-        err_out = Lang::Strings::WALLPAPER_SAVE_FAIL;
-        return false;
-    }
-    if (!reader::WriteFileAtomic(work.out_path, encoded.data(), encoded.size())) {
-        err_out = Lang::Strings::WALLPAPER_SAVE_FAIL;
+    if (!reader::WriteWallpaperFileAtomic(work.out_path, encoded.data(), encoded.size(), !work.save_as,
+                                         Wallpaper_DecodeCancelled, &token, &error)) {
+        char message[80];
+        std::snprintf(message, sizeof(message), "%s (%u)", Lang::Strings::WALLPAPER_SAVE_FAIL, unsigned(error));
+        err_out = message;
         return false;
     }
     if (work.save_as) {
@@ -236,7 +247,10 @@ bool SaveTransformedWallpaper(const SaveWork& work, size_t& size_out, std::strin
     size_out = encoded.size();
     return true;
 } catch (const std::bad_alloc&) {
-    err_out = Lang::Strings::WALLPAPER_PREVIEW_OOM;
+    char message[80];
+    std::snprintf(message, sizeof(message), "%s (%u)", Lang::Strings::WALLPAPER_SAVE_FAIL,
+                  unsigned(reader::ImageDecodeError::kNoMemory));
+    err_out = message;
     return false;
 }
 
@@ -258,17 +272,13 @@ void ApplySaveAsync(void* p) {
         return;
     }
     if (!msg->ok) {
-        std::snprintf(Wallpaper_State().preview.delete_meta_hint, sizeof(Wallpaper_State().preview.delete_meta_hint), "%s",
-                      msg->err[0] != '\0' ? msg->err : Lang::Strings::WALLPAPER_SAVE_FAIL);
+        ScreenShowToast(msg->err[0] != '\0' ? msg->err : Lang::Strings::WALLPAPER_SAVE_FAIL);
         UpdateEnableButtonUi();
         UpdateAdjustUi();
         delete msg;
         return;
     }
 
-    Wallpaper_State().preview.delete_meta_hint[0] = '\0';
-    const uint8_t rot_cw = Wallpaper_State().preview.rot_cw;
-    const bool mirror_h = Wallpaper_State().preview.mirror_h;
     Wallpaper_State().preview.adjust_open = false;
     ResetOrientState();
     Wallpaper_CloseDialog();
@@ -298,21 +308,12 @@ void ApplySaveAsync(void* p) {
         Wallpaper_State().list.files[static_cast<size_t>(msg->index)].size_bytes = msg->size_bytes;
         if (msg->index < static_cast<int>(Wallpaper_State().list.thumbs.size())) {
             Wallpaper_State().list.thumbs[static_cast<size_t>(msg->index)].reset();
+            PaintCellThumb(msg->index);
         }
         StandbyWallpaper_InvalidateDecoded();
     }
 
-    // 预览基准也应用同一变换，避免再读盘
-    if (Wallpaper_State().preview.base != nullptr && !Wallpaper_State().preview.base->empty()) {
-        reader::RasterImage oriented;
-        ApplyWallpaperOrient(*Wallpaper_State().preview.base, rot_cw, mirror_h, oriented);
-        *Wallpaper_State().preview.base = std::move(oriented);
-        if (Wallpaper_State().preview.raster == nullptr) {
-            Wallpaper_State().preview.raster = new reader::RasterImage();
-        }
-        *Wallpaper_State().preview.raster = *Wallpaper_State().preview.base;
-        BindPreviewRasterToImg();
-    } else if (Wallpaper_State().preview.idx >= 0) {
+    if (Wallpaper_State().preview.idx >= 0) {
         ScheduleLoadPreview(Wallpaper_State().preview.idx);
     }
 
@@ -374,7 +375,6 @@ void ScheduleSaveTransform(bool save_as) {
         return;
     }
     Wallpaper_CloseDialog();
-    Wallpaper_State().preview.delete_meta_hint[0] = '\0';
     UpdateEnableButtonUi();
     UpdateAdjustUi();
 
@@ -386,6 +386,14 @@ void ScheduleSaveTransform(bool save_as) {
     work->rot_cw = Wallpaper_State().preview.rot_cw;
     work->mirror_h = Wallpaper_State().preview.mirror_h;
     work->save_as = save_as;
+    const auto* base = Wallpaper_State().preview.base;
+    if (base && base->width > base->height) {
+        work->decode_w = std::max(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        work->decode_h = std::min(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    } else {
+        work->decode_w = std::min(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        work->decode_h = std::max(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    }
     std::snprintf(work->src_path, sizeof(work->src_path), "%s", fe.path);
     if (save_as) {
         if (!BuildUniqueSaveAsPath(fe, work->out_path, sizeof(work->out_path), work->out_name,
@@ -393,8 +401,7 @@ void ScheduleSaveTransform(bool save_as) {
             delete work;
             Wallpaper_State().workers.save_busy.store(false);
             Wallpaper_State().workers.save_task = nullptr;
-            std::snprintf(Wallpaper_State().preview.delete_meta_hint, sizeof(Wallpaper_State().preview.delete_meta_hint), "%s",
-                          Lang::Strings::WALLPAPER_SAVE_FAIL);
+            ScreenShowToast(Lang::Strings::WALLPAPER_SAVE_FAIL);
             UpdateEnableButtonUi();
             UpdateAdjustUi();
             return;
@@ -408,8 +415,7 @@ void ScheduleSaveTransform(bool save_as) {
         delete work;
         Wallpaper_State().workers.save_busy.store(false);
         Wallpaper_State().workers.save_task = nullptr;
-        std::snprintf(Wallpaper_State().preview.delete_meta_hint, sizeof(Wallpaper_State().preview.delete_meta_hint), "%s",
-                      Lang::Strings::WALLPAPER_SAVE_FAIL);
+        ScreenShowToast(Lang::Strings::WALLPAPER_SAVE_FAIL);
         UpdateEnableButtonUi();
         UpdateAdjustUi();
     }

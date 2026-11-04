@@ -1,5 +1,6 @@
 #include "wallpaper_screen/wallpaper_screen_priv.h"
 #include "wallpaper_screen/wallpaper_list.h"
+#include "wallpaper_thumb_priority.h"
 
 #include <freertos/FreeRTOS.h>
 #include <atomic>
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <memory>
 #include <vector>
 #include <esp_log.h>
 #include <esp_heap_caps.h>
@@ -21,6 +23,8 @@ namespace {
 struct ThumbWorkItem {
     int index = -1; // 文件列表索引
     char path[SD_FILE_PATH_CAPACITY] = {}; // 图片文件路径
+    size_t bytes = 0; // 列表收集的文件长度
+    uint64_t cost = 0; // 仅影响后台处理顺序的预计成本
 };
 
 struct ThumbFillWork {
@@ -75,6 +79,22 @@ void ApplyThumbOne(void* p) {
 }
 
 void RunThumbWork(ThumbFillWork* work) {
+    struct CancelContext {
+        ThumbFillWork* work; // 缩略图批次
+        WallpaperDecodeToken token; // 页面解码生命周期
+    };
+    CancelContext cancel{work, {work->epoch, work->generation}};
+    auto cancelled = [](void* p) {
+        auto* ctx = static_cast<CancelContext*>(p);
+        return s_thumb_seq.load() != ctx->work->seq || Wallpaper_DecodeCancelled(&ctx->token);
+    };
+    for (auto& item : work->items) {
+        if (cancelled(&cancel)) return;
+        item.cost = Wallpaper_EstimateThumbCost(item.path, item.bytes, cancelled, &cancel);
+    }
+    std::sort(work->items.begin(), work->items.end(), [](const ThumbWorkItem& a, const ThumbWorkItem& b) {
+        return a.cost != b.cost ? a.cost < b.cost : a.index < b.index;
+    });
     for (const auto& item : work->items) {
         if (s_thumb_seq.load(std::memory_order_acquire) != work->seq ||
             Wallpaper_State().epoch != work->epoch) {
@@ -85,15 +105,6 @@ void RunThumbWork(ThumbFillWork* work) {
             ESP_LOGW(TAG, "thumb alloc fail idx=%d", item.index);
             break;
         }
-        struct CancelContext {
-            ThumbFillWork* work; // 缩略图批次
-            WallpaperDecodeToken token; // 页面解码生命周期
-        };
-        CancelContext cancel{work, {work->epoch, work->generation}};
-        auto cancelled = [](void* p) {
-            auto* ctx = static_cast<CancelContext*>(p);
-            return s_thumb_seq.load() != ctx->work->seq || Wallpaper_DecodeCancelled(&ctx->token);
-        };
         reader::ImageDecodeError error = reader::ImageDecodeError::kNone;
         const bool ok = reader::DecodeImageFileToL8(item.path, work->decode_w, work->decode_h,
                                                    *img, cancelled, &cancel, &error) && !img->empty();
@@ -174,7 +185,7 @@ void CancelThumbFill() {
     delete old;
 }
 
-void ScheduleThumbFill() {
+void ScheduleThumbFill() try {
     if (Wallpaper_State().decode_paused.load()) return;
     if (!Wallpaper_State().screen_alive || Wallpaper_State().list.files.empty()) {
         CancelThumbFill();
@@ -187,10 +198,7 @@ void ScheduleThumbFill() {
     const int start = Wallpaper_State().list.list_page * Wallpaper_State().list.list_per_page;
     const int end = std::min(start + Wallpaper_State().list.list_per_page,
                              static_cast<int>(Wallpaper_State().list.files.size()));
-    auto* work = new (std::nothrow) ThumbFillWork{};
-    if (work == nullptr) {
-        return;
-    }
+    auto work = std::make_unique<ThumbFillWork>();
     work->epoch = Wallpaper_State().epoch;
     work->generation = Wallpaper_State().decode_generation.load();
     work->decode_w = FrameInner(Wallpaper_State().list.grid_cell_w, kGridFrameBorder);
@@ -205,18 +213,18 @@ void ScheduleThumbFill() {
         }
         ThumbWorkItem item;
         item.index = i;
+        item.bytes = Wallpaper_State().list.files[static_cast<size_t>(i)].size_bytes;
         std::snprintf(item.path, sizeof(item.path), "%s", Wallpaper_State().list.files[static_cast<size_t>(i)].path);
         work->items.push_back(item);
     }
     if (work->items.empty()) {
-        delete work;
         CancelThumbFill();
         return;
     }
     const unsigned n = static_cast<unsigned>(work->items.size());
     const int page = Wallpaper_State().list.list_page + 1;
     work->seq = s_thumb_seq.fetch_add(1, std::memory_order_acq_rel) + 1;
-    auto* old = s_thumb_posted.exchange(work, std::memory_order_acq_rel);
+    auto* old = s_thumb_posted.exchange(work.release(), std::memory_order_acq_rel);
     delete old;
     ESP_LOGI(TAG, "thumb fill async n=%u page=%d", n, page);
     if (Wallpaper_State().workers.thumb_busy.exchange(true, std::memory_order_acq_rel)) {
@@ -228,4 +236,7 @@ void ScheduleThumbFill() {
         Wallpaper_State().workers.thumb_busy.store(false, std::memory_order_release);
         Wallpaper_State().workers.thumb_task = nullptr;
     }
+} catch (const std::bad_alloc&) {
+    CancelThumbFill();
+    ESP_LOGW(TAG, "thumbnail scheduling allocation failed");
 }

@@ -213,8 +213,8 @@ button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var
       <div class="hint"><span class="chip">待转换字体</span><span class="hintpath">metalio/e-ink/fonts_ttf</span></div>
     </div>
   </details>
-  <div class="autosw"><span>自动分类</span><button type="button" id="autoclass" role="switch" aria-checked="false" aria-label="自动分类"></button></div>
-  <p id="autoclass-note" class="autonote" hidden>开启后自动识别文件后缀，上传时自动保存到对应目录</p>
+  <div class="autosw"><span>自动分类</span><button type="button" id="autoclass" role="switch" aria-checked="true" aria-label="自动分类"></button></div>
+  <p id="autoclass-note" class="autonote">开启后自动识别文件后缀，上传时自动保存到对应目录</p>
 </div>
   <div id="list"></div>
   <p id="msg" class="notice" role="status" aria-live="polite"></p>
@@ -1063,7 +1063,7 @@ function paintConflict() {
   };
   updateChip();
 }
-let autoClass = false;
+let autoClass = true;
 const CLASS_DIR = {
   epub: "/metalio/e-ink/books", txt: "/metalio/e-ink/books", ebook: "/metalio/e-ink/books", epu: "/metalio/e-ink/books",
   png: "/metalio/e-ink/wallpaper", jpg: "/metalio/e-ink/wallpaper", jpeg: "/metalio/e-ink/wallpaper",
@@ -1242,7 +1242,7 @@ applyTheme(theme);
 document.getElementById("theme").onclick = function () {
   applyTheme(document.documentElement.getAttribute("data-theme") === "night" ? "day" : "night");
 };
-try { autoClass = localStorage.getItem("fileman-autoclass") === "1"; } catch (e) {}
+try { autoClass = localStorage.getItem("fileman-autoclass") !== "0"; } catch (e) {}
 setAutoClass(autoClass);
 document.getElementById("autoclass").onclick = function () { setAutoClass(!autoClass); };
 load();

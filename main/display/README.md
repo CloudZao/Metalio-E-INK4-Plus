@@ -1,6 +1,12 @@
 # 屏幕显示与刷新设置
 
-待机或关机壁纸解码达到 1 秒且仍未完成时，在原有画面上显示顶部“壁纸正在加载中...”提示；解码在 1 秒内完成时直接显示壁纸。加载期间保留原有方向及提示区域外的像素，解码完成后再切换方向并绘制壁纸。
+ESP32-S31 的 LCD 输出仅启用数据阶段，每行 DMA 数据从首字节开始承载有效像素，不添加行首占位字节；有效数据窗口按实际行宽配置。面板数据结束后的空时钟仍由板级时序配置控制。每相在 SPV 拉高后按 CKV 高电平配置等待，再启动 LCD 同步输出 XCL、XLE 和 XSTL，不额外等待一个完整行周期。
+
+ESP32-S31 LCD output uses only the data phase. Each DMA row carries active pixels from its first byte, with no leading dummy byte; the active data window matches the row width. Post-data clocks remain controlled by the board timing configuration. After SPV rises, each phase waits according to the CKV high-time configuration, then starts the LCD output for XCL, XLE and XSTL together, without an additional full-line delay.
+
+待机或关机壁纸解码达到 1 秒且仍未完成时，在原有画面上显示顶部“壁纸正在加载中...”提示；解码在 1 秒内完成时直接显示壁纸。加载期间保留原有方向及提示区域外的像素。待机壁纸直接绘制到面板帧缓冲，保留底层页面的方向和尺寸；定格后暂停 LVGL 绘制，恢复页面资源后再开放绘制。加载提示出现前保存底图，解码失败时直接恢复底图；阅读字体在待机内容就绪后才释放。唤醒重绘前将物理目标帧缓冲置白，避免全屏壁纸像素留在普通 UI 的内缩范围之外。
+
+If a standby or shutdown wallpaper is still decoding after one second, a loading notice appears at the top of the existing frame. Faster decodes display the wallpaper directly. Loading preserves the current orientation and pixels outside the notice. Standby wallpapers draw directly into the panel framebuffer while retaining the underlying page's orientation and dimensions. LVGL rendering pauses after parking and resumes after page resources are restored. The frame is saved before showing a notice and restored directly if decoding fails. Reader fonts remain available until standby content is ready. Before wake redraws the page, the physical target framebuffer is filled with white so fullscreen wallpaper pixels cannot remain outside the normal UI bounds.
 
 开机首页准备完成后，先对全白帧执行一次完整 48 相 GC16 全刷，再推白显现首页。全刷清理阶段不绘制首页；保留边框在此次全刷中只推白，成功后恢复不驱动边框。刷新失败仍执行原有清屏恢复，后续时钟、电量和网络状态更新沿用普通刷新策略。
 
@@ -35,7 +41,9 @@ Entering or leaving standby and shutting down use the same cleaning sequence as 
 
 ### 绘制与刷新前准备
 
-准备阶段只转换和分析像素，不决定刷新策略。`lv_adapter_epdiy.cc` 调用 `epd_prepare.h` 完成 I1 到面板 4bpp 的转换；刷新任务负责差异检查、波形选择、扫描与成功后的面板基线提交。按 32 位检查变化、成对写入像素和按条带打包均复用已有缓冲；小块横屏更新保留实测更合适的标量路径。
+准备阶段只转换和分析像素，不决定刷新策略。`lv_adapter_epdiy.cc` 调用 `epd_prepare.h` 完成 I1 / L8 到面板 4bpp 的转换；刷新任务负责差异检查、波形选择、扫描与成功后的面板基线提交。按 32 位检查变化、成对写入像素和按条带打包均复用已有缓冲；小块横屏 I1 更新保留实测更合适的标量路径。L8 按面板 X 轴成对量化，直接写入完整字节，奇数边缘保留相邻半字节；灰度量化规则不变，不增加转换缓存。
+
+Preparation converts and analyzes I1 / L8 pixels without selecting refresh policy. L8 conversion pairs pixels along the panel's X axis and writes complete 4bpp bytes, preserving adjacent nibbles at odd edges. Quantization remains unchanged and uses the existing buffers. Small landscape I1 updates retain the scalar path. The refresh worker handles change detection, waveform selection, scanning and baseline updates after successful draws.
 
 默认 I1 软件渲染。`epd_content_policy` 按可见内容的角色申请 L8：书架底座、书籍封面、书内插图、壁纸缩略图/详情预览、照片、开启抗锯齿的正文、助手内容图片。未登记的 UI、应用/操作/天气图标、书签装饰插画保持黑白，与 PNG/L8 等源格式无关。纯黑白旧缓存不会单独触发 L8。对象隐藏/删除、父级裁剪、同页不透明遮罩和 top/sys 遮罩参与模式判断；显示切换在刷新开始、布局完成后执行，重新绑定同一绘制缓冲并使页面重绘。模式策略集中在 `GrayRole()`；可用 `FastMonochrome` 在任意列表/阅读入口容器上强制整个子树走黑白，而不改动原图、缓存或详情预览。
 
@@ -43,9 +51,17 @@ Entering or leaving standby and shutting down use the same cleaning sequence as 
 
 图片解码和 ZIP 流式解码保留原始亮度。新生成的封面旁路/壁纸另存结果/助手图片缓存使用 A2L8（8 字节头 + 原生 L8），原始传输文件直接保留。旧 A2I1 继续读取，不重建迁移；已丢失的灰度不恢复。壁纸覆盖保存保留原路径及启用记录，内容按 magic 识别，另存为采用 `.a2l8`。新缓存有独立大小上限；后台图片只有绑定到可见对象时才影响显示模式。
 
-阅读抗锯齿在正文栅格化时控制字形覆盖度，灰边向实黑加深约 25%；关闭时正文仍为黑白，图片灰度不受影响。`epd_reader_aa` 仅保存刷新波形选择所需的阅读状态，由提交队列取得快照。原有灰阶差分、清屏、滚动收尾和阅读波形策略保留。
+阅读抗锯齿在正文栅格化时控制字形覆盖度，灰边向实黑加深约 80%；字形重叠合成后按 32 位检查像素块，跳过仅含纯黑和纯白的块，仅处理其余块中的中间灰度，不重复写入纯黑像素。关闭时正文仍为黑白，图片灰度不受影响。`epd_reader_aa` 仅保存刷新波形选择所需的阅读状态，由提交队列取得快照。原有灰阶差分、清屏、滚动收尾和阅读波形策略保留。
 
-清晰 / 均衡的普通 DU 局刷在第 17～20 相对活动脏行与脏列交集中的黑→黑像素补黑四相，总相数仍为 20；快速档普通 DU 在第 11～14 相补黑四相，总相数为 14；极速及 OTA 进度使用的短 DU 在第 5～8 相补黑四相，总相数为 8。应用切页动画保持原有波形。补黑对残影、黑色深度及连续刷新后擦除效果的影响需实屏确认。普通差分刷新在公共 highlevel 局刷入口启用 `MODE_SKIP_UNCHANGED`：逐相构建 LUT 时，DU 保留黑→黑驱动，其余旧值等于新值的对角项置为保持，不修改原始波形，不在逐像素输出热路径增加判断。脏行与汇总脏列交集中的未变化灰色像素也不会受到 DU 驱动。提交前按实际旧/新缓冲核对普通 DU：只要变化涉及任一中间灰，就改用灰阶波形；静止灰底不影响黑白转换继续使用 DU。全刷、清理恢复、诊断图案和主动擦除动画保留原有调理脉冲。
+Reading text antialiasing preserves glyph coverage during rasterization and darkens gray edges by approximately 80% toward black. After glyph overlaps are blended, 32-bit block checks skip blocks containing only pure black and white; only intermediate grays in the remaining blocks are processed, without rewriting pure-black pixels. Disabling antialiasing renders text in black and white without affecting image grayscale. `epd_reader_aa` stores only the reading state needed for waveform selection; the submission queue captures a snapshot. Existing grayscale differential updates, clearing, scroll completion and reading waveform policies remain unchanged.
+
+清晰 / 均衡的普通 DU 局刷在第 17～20 相对活动脏行与脏列交集中的黑→黑像素补黑四相，总相数仍为 20；快速档普通 DU 在第 11～14 相补黑四相，总相数为 14；极速及 OTA 进度使用的短 DU 在第 5～8 相补黑四相，总相数为 8。应用切页动画保持原有波形。补黑对残影、黑色深度及连续刷新后擦除效果的影响需实屏确认。普通差分刷新在公共 highlevel 局刷入口启用 `MODE_SKIP_UNCHANGED`：逐相构建 LUT 时，DU 保留黑→黑补黑；GL16 对变化后的纯黑目标仅保留原表推黑段，不先推白，黑→黑则复用该表白→黑的最后四次推黑补黑。两者仅在活动脏行与脏列交集内驱动，未变化的灰色和白色像素保持不驱动；GL16 其他变化的灰阶目标沿用原表。源波形表保持只读，不增加相数，也不在逐像素输出热路径增加判断。提交前按实际旧/新缓冲核对普通 DU：只要变化涉及任一中间灰，就改用灰阶波形；静止灰底不影响黑白转换继续使用 DU。全刷、清理恢复、诊断图案、滚动收尾的整帧 GL 和主动擦除动画保留原有调理脉冲。
+
+Ordinary differential updates retain DU black-to-black reinforcement. For changed pixels targeting pure black, GL16 keeps the source table's black-driving pulses and suppresses whitening. Unchanged black pixels receive reinforcement during the selected table's last four white-to-black driving pulses. Both modes operate within the intersection of active dirty rows and columns. Unchanged gray and white pixels remain undriven; other changed GL16 targets use the original table. Source tables remain read-only, with no extra phases or per-pixel output checks. Full refreshes, recovery, diagnostic patterns, full-frame GL scroll settling and erase animations retain their original conditioning. Effects on ghosting, black depth and subsequent erasure require panel verification.
+
+收起文字阅读中已显示的设置卡片时，下一次提交对整页纯黑目标统一使用当前波形白→黑的推黑序列，包括未遮挡正文；开启或关闭抗锯齿均适用。此请求与卡片收起的画面合并，不额外执行整页擦白、增加扫描相数或分配画面缓存。未变化的白色和灰色保持不驱动，其他变化像素正常更新；故障恢复、周期清理等完整 GC 刷新仍优先执行。隐藏已收起的卡片不重复请求。纯黑驱动的一致性不代表灰阶历史状态已统一，残影和区域色差仍需实屏确认。
+
+When a visible settings card closes during text reading, the next submission drives every pure-black target with the selected waveform's white-to-black black-driving sequence, including text outside the former card area. This applies with text antialiasing enabled or disabled. The request merges into the closing frame without an extra full-screen whitening pass, scan phases or framebuffer allocation. Unchanged white and gray pixels remain undriven; other changed pixels update normally. Recovery and scheduled full GC cleaning take precedence. Hiding an already hidden card does not repeat the request. Equal black-driving pulses do not equalize grayscale history; ghosting and regional tone differences require panel verification.
 
 首页图标使用 LVGL 解码器接口，保留 SPNG 的 16 行分块边界。`tools/generate_home_icon_pixels.py` 是正式构建依赖：CMake 从首页 PNG 生成 Flash 中的只读 BGRA。彩色或不匹配的资源继续走原路径，解码会话元数据在 PSRAM 按需分配并在关闭时释放，没有整图 RAM 缓存。
 

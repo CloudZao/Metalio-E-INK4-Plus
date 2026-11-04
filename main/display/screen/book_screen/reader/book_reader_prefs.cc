@@ -34,7 +34,7 @@ static constexpr const char* kDefaultFile = "misans_40_2.ef"; // SD 现网默认
 static constexpr size_t kMaxFileLen = SD_FILE_NAME_MAX_BYTES;
 static constexpr int kDefaultSpacingPreset = 1;  // 标准
 static constexpr int kDefaultParaGapPreset = 1; // 标准，56px
-static constexpr int kDefaultMarginPreset = 1;   // 标准（约原 kListPad=12）
+static constexpr int kDefaultMarginPreset = 1;   // 标准
 static constexpr int kDefaultFooterMask = kBookReaderFooterDefault;
 static constexpr int kDefaultShelfView = kBookReaderShelfViewCover;
 static constexpr int kDefaultShelfPct = 0;  // 进度角标默认关
@@ -51,10 +51,10 @@ static constexpr int kParaGapTable[kBookReaderParaGapPresetCount] = {32, 56, 80,
 
 // 成套页边距：与分页 viewport 共用，避免只改 UI pad 导致裁切/留白不一致
 static constexpr BookMarginPreset kMarginTable[kBookReaderMarginPresetCount] = {
-    {8, 8, 8, 6},
-    {12, 12, 12, 8},
-    {20, 20, 18, 12},
-    {28, 28, 24, 16},
+    {16, 16, 16, 12},
+    {24, 24, 24, 16},
+    {40, 40, 36, 24},
+    {56, 56, 48, 32},
 };
 
 static char s_font_file[kMaxFileLen + 1] = {};
@@ -157,7 +157,7 @@ static void LoadFromNvs() {
     s_text_direction = settings.GetInt(kNvsTextDirectionKey, kBookReaderTextLeftToRight) ==
         kBookReaderTextRightToLeft ? kBookReaderTextRightToLeft : kBookReaderTextLeftToRight;
     s_background = settings.GetInt("background", 0);
-    if (s_background < 0 || s_background > 2) s_background = 0;
+    if (s_background < 0 || s_background > 3) s_background = 0;
     s_page_turn = settings.GetInt("page_turn", kBookReaderPageTurnSlide);
     if (s_page_turn != kBookReaderPageTurnSlide && s_page_turn != kBookReaderPageTurnWipe) s_page_turn = kBookReaderPageTurnSlide;
     s_shelf_view = ClampShelfView(settings.GetInt(kNvsShelfViewKey, kDefaultShelfView));
@@ -598,7 +598,7 @@ void BookReaderPrefsSetShowShelfProgress(int enabled) {
 }
 
 int BookReaderPrefsBackground() { BookReaderPrefsEnsureLoaded(); return s_background; }
-void BookReaderPrefsSetBackground(int mode) { if (mode < 0 || mode > 2) return; BookReaderPrefsEnsureLoaded(); s_background=mode; auto* arg=new BookPrefsPersistArg{}; arg->kind=BookPrefsPersistKind::kBackground; arg->ival=mode; StartPersist(arg); }
+void BookReaderPrefsSetBackground(int mode) { if (mode < 0 || mode > 3) return; BookReaderPrefsEnsureLoaded(); s_background=mode; auto* arg=new BookPrefsPersistArg{}; arg->kind=BookPrefsPersistKind::kBackground; arg->ival=mode; StartPersist(arg); }
 
 int BookReaderPrefsPageTurn() {
     BookReaderPrefsEnsureLoaded();

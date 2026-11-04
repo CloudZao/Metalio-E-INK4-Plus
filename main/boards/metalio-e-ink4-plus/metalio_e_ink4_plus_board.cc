@@ -4,6 +4,7 @@
  */
 
 #include "dual_network_board.h"
+#include "dvp_camera_adapter.h"
 
 #include "bt_audio_codec.h"
 #include "bq27220_gauge.h"
@@ -104,6 +105,12 @@ public:
 
     Display* GetDisplay() override {
         return display_;
+    }
+
+    /** @brief 返回按需采集的 DVP 摄像头实例 */
+    Camera* GetCamera() override {
+        static DvpCamera camera;
+        return &camera;
     }
 
     /** @brief 返回板级音频实例，硬件资源在进入音频功能时按需申请 */

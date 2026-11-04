@@ -120,7 +120,7 @@ elseif(CONFIG_USE_CUSTOM_WAKE_WORD)
     list(APPEND WAKE_WORD_SRCS "audio/wake_words/custom_wake_word.cc")
 endif()
 
-# 本轮不编摄像头拍照路径（无 UVC）；用 stub
+# BOOT 双击插图依赖 UVC；S31 拍照使用 DVP/MCP 入口。
 list(FILTER ASSISTANT_SCREEN_SRCS EXCLUDE REGEX "assistant_boot_photo\\.cc$")
 
 idf_component_register(
@@ -158,10 +158,13 @@ idf_component_register(
         "display/font/font_awesome_30_1.c"
         "display/lvgl_display/emoji_collection.cc"
         "display/lvgl_display/jpg/jpeg_to_image.c"
+        "display/lvgl_display/jpg/jpeg_memory.cc"
         "boards/common/camera/dvp_camera.cc"
+        "boards/common/camera/dvp_camera_adapter.cc"
         "display/screen/screen_common.cc"
         "display/screen/screen_common_nav.cc"
         "display/screen/screen_frontlight.cc"
+        "display/screen/screen_wifi.cc"
         "display/screen/vk_key_handler.cc"
         "display/screen/vk_page_repeat.cc"
         "display/screen/boot_key_handler.cc"
@@ -246,7 +249,7 @@ idf_component_register(
         app_update spi_flash esp_psram esp_wifi esp_netif esp_http_client esp_http_server
         mbedtls esp_timer efuse espcoredump 78__uart-uhci espressif__iot_eth esp_driver_cam esp_driver_i2c
     PRIV_REQUIRES
-        esp-wifi-connect esp-ml307 espressif__cjson 78__esp-opus-encoder 78__esp-opus
+        esp-wifi-connect esp-ml307 espressif__cjson 78__esp-opus-encoder 78__esp-opus esp_driver_jpeg
 )
 
 if(CONFIG_IDF_TARGET_ESP32S31)
@@ -287,6 +290,10 @@ target_link_libraries(${COMPONENT_LIB} PRIVATE
     idf::espressif__freetype
     idf::espressif__esp_new_jpeg
 )
+if(TARGET freetype)
+    # FreeType 在普通任务中执行；字形解释和栅格化可使用跳转表。
+    target_compile_options(freetype PRIVATE -O2 -fjump-tables -ftree-switch-conversion)
+endif()
 # 设置页模拟 U 盘（TinyUSB MSC）；IDF 6.1/S31 无独立 idf::usb，依赖由 esp_tinyusb 带入
 if(TARGET idf::espressif__esp_tinyusb)
     target_link_libraries(${COMPONENT_LIB} PRIVATE idf::espressif__esp_tinyusb)
@@ -337,6 +344,11 @@ endif()
 # UI objects never require DMA; keep even tiny labels/events out of DMA SRAM.
 target_link_options(${COMPONENT_LIB} INTERFACE
     "-Wl,--wrap=lv_malloc_core" "-Wl,--wrap=lv_realloc_core")
+
+# 预编译 JPEG 库需要显式保留分配策略包装对象。
+target_link_options(${COMPONENT_LIB} INTERFACE
+    "-Wl,--wrap=jpeg_calloc_inner" "-Wl,--wrap=jpeg_calloc_align_inner"
+    "-Wl,--undefined=__wrap_jpeg_calloc_inner")
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     BOARD_TYPE="${BOARD_TYPE}"

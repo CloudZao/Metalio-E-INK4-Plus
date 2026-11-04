@@ -57,8 +57,6 @@ void Button(lv_obj_t* parent, const char* text, int x, int y, int width, lv_even
 }
 
 bool Key(const char* key) {
-    if (!std::strcmp(key, "vk_prev")) { ScreenNavigateBack(); return true; }
-    if (!std::strcmp(key, "vk_home")) { ScreenRequestHome(); return true; }
     if (!std::strcmp(key, "vk_next")) { RunGray(); return true; }
     return false;
 }

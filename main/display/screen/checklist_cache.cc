@@ -112,18 +112,22 @@ size_t checklist_cache_copy_pending(checklist_cache_item_t* out, size_t max_out)
     return n;
 }
 
-bool checklist_cache_day_counts(const char* date, size_t* total, size_t* done)
+bool checklist_cache_counts(const char* date, size_t* today, size_t* done, size_t* pending)
 {
-    if (total == nullptr || done == nullptr) return false;
-    *total = 0;
+    if (today == nullptr || done == nullptr || pending == nullptr) return false;
+    *today = 0;
     *done = 0;
-    if (date == nullptr || std::strlen(date) != 10) return false;
+    *pending = 0;
+    const bool has_date = date != nullptr && std::strlen(date) == 10;
     std::lock_guard<std::mutex> lock(s_mu);
     if (s_items == nullptr || !s_ready) return false;
     for (size_t i = 0; i < s_count; ++i) {
-        if (std::strcmp(s_items[i].plan_date, date) != 0) continue;
-        ++*total;
-        if (std::strcmp(s_items[i].status, "done") == 0) ++*done;
+        if (has_date && std::strcmp(s_items[i].plan_date, date) == 0) ++*today;
+        if (std::strcmp(s_items[i].status, "done") == 0) {
+            ++*done;
+        } else {
+            ++*pending;
+        }
     }
     return true;
 }

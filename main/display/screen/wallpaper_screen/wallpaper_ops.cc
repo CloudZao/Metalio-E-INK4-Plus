@@ -7,12 +7,10 @@
 
 #include <freertos/FreeRTOS.h>
 #include <lvgl.h>
-#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
-#include <unistd.h>
 #include <esp_log.h>
 #include <freertos/task.h>
 
@@ -20,12 +18,15 @@
 #include "assets/lang_wallpaper.h"
 #include "haptic_feedback.h"
 #include "reader/reader.h"
+#include "reader/image_file_write.h"
 #include "cloud_screen/push/wallpaper_cloud_library.h"
 #include "sd_paths.h"
+#include "book_screen/reader/book_reader_prefs.h"
 
 struct EnableWork {
     uint32_t epoch = 0;
     bool for_standby = false;
+    bool for_reading = false; // 阅读背景独立于关机和待机壁纸
     bool overlay = false; // 当前图片叠加到原界面
     bool clear = false;
     char path[SD_FILE_PATH_CAPACITY] = {};
@@ -34,6 +35,7 @@ struct EnableWork {
 struct EnableResultMsg {
     uint32_t epoch = 0;
     bool ok = false;
+    bool for_reading = false, clear = false; // UI 任务更新阅读偏好
     char err[80] = {};
 };
 
@@ -44,6 +46,7 @@ void ApplyEnableAsync(void* p) {
     if (msg == nullptr) {
         return;
     }
+    if (msg->ok && msg->for_reading) BookReaderPrefsSetBackground(msg->clear ? 0 : 3);
     if (!Wallpaper_State().screen_alive || msg->epoch != Wallpaper_State().epoch) {
         delete msg;
         return;
@@ -69,10 +72,12 @@ void ApplyEnableAsync(void* p) {
         }
     } else {
         ESP_LOGW(TAG, "enable failed: %s", msg->err[0] != '\0' ? msg->err : Lang::Strings::WALLPAPER_ENABLE_FAIL);
+        ScreenShowToast(msg->err[0] != '\0' ? msg->err : Lang::Strings::WALLPAPER_ENABLE_FAIL);
     }
     UpdateEnableButtonUi();
     UpdateDeleteButtonUi();
     delete msg;
+    Wallpaper_ReturnToReading(false);
 }
 
 void EnableTask(void* arg) {
@@ -82,8 +87,12 @@ void EnableTask(void* arg) {
         std::snprintf(msg->err, sizeof(msg->err), "%s", Lang::Strings::WALLPAPER_FILE_INVALID);
     } else {
         msg->epoch = work->epoch;
+        msg->for_reading = work->for_reading;
+        msg->clear = work->clear;
         if (work->clear) {
-            if (work->for_standby) {
+            if (work->for_reading) {
+                Wallpaper_ClearReadingWallpaper();
+            } else if (work->for_standby) {
                 Wallpaper_ClearStandbyWallpaper();
             } else {
                 Wallpaper_ClearShutdownWallpaper();
@@ -91,7 +100,8 @@ void EnableTask(void* arg) {
             msg->ok = true;
         } else {
             std::string err;
-            msg->ok = work->for_standby ? Wallpaper_SetStandbyFromFile(work->path, err, work->overlay)
+            msg->ok = work->for_reading ? Wallpaper_SetReadingFromFile(work->path, err)
+                        : work->for_standby ? Wallpaper_SetStandbyFromFile(work->path, err, work->overlay)
                                         : Wallpaper_SetActiveFromFile(work->path, err, work->overlay);
             if (!msg->ok) {
                 std::snprintf(msg->err, sizeof(msg->err), "%s",
@@ -100,7 +110,7 @@ void EnableTask(void* arg) {
         }
         delete work;
     }
-    if (lv_async_call(ApplyEnableAsync, msg) != LV_RESULT_OK) {
+    if (!ScreenLvAsync(ApplyEnableAsync, msg)) {
         delete msg;
         Wallpaper_State().workers.enable_busy.store(false);
         Wallpaper_State().workers.enable_task = nullptr;
@@ -108,7 +118,7 @@ void EnableTask(void* arg) {
     vTaskDelete(nullptr);
 }
 
-static void ScheduleEnable(int index, bool for_standby, bool clear, bool overlay) {
+static void ScheduleEnable(int index, bool for_standby, bool clear, bool overlay, bool for_reading = false) {
     if (index < 0 || index >= static_cast<int>(Wallpaper_State().list.files.size())) {
         return;
     }
@@ -119,6 +129,7 @@ static void ScheduleEnable(int index, bool for_standby, bool clear, bool overlay
     auto* work = new EnableWork{};
     work->epoch = Wallpaper_State().epoch;
     work->for_standby = for_standby;
+    work->for_reading = for_reading;
     work->overlay = overlay;
     work->clear = clear;
     std::snprintf(work->path, sizeof(work->path), "%s",
@@ -129,6 +140,7 @@ static void ScheduleEnable(int index, bool for_standby, bool clear, bool overlay
         Wallpaper_State().workers.enable_busy.store(false);
         Wallpaper_State().workers.enable_task = nullptr;
         ESP_LOGW(TAG, "enable task create failed");
+        ScreenShowToast(Lang::Strings::WALLPAPER_ENABLE_FAIL);
         UpdateEnableButtonUi();
         UpdateDeleteButtonUi();
     }
@@ -232,6 +244,20 @@ static void ShowDisplayModeDialog(bool for_standby) {
 void OnEnableShutdownClicked(lv_event_t* /*e*/) { ShowDisplayModeDialog(false); }
 void OnEnableStandbyClicked(lv_event_t* /*e*/) { ShowDisplayModeDialog(true); }
 
+void OnEnableReadingClicked(lv_event_t* /*e*/) {
+    const auto& st = Wallpaper_State();
+    if (!CanSelectDisplayMode() || st.ui.dialog_mask) return;
+    if (st.preview.decode_error != reader::ImageDecodeError::kNone) {
+        char message[80] = {};
+        Wallpaper_FormatDecodeFailure(message, sizeof(message), st.preview.decode_error);
+        ScreenShowToast(message);
+        return;
+    }
+    const bool selected = BookReaderPrefsBackground() == 3 &&
+        Wallpaper_GetReadingFilename() == st.list.files[static_cast<size_t>(st.preview.idx)].name;
+    ScheduleEnable(st.preview.idx, false, selected, false, true);
+}
+
 struct DeleteWork {
     uint32_t epoch = 0;
     char path[SD_FILE_PATH_CAPACITY] = {};
@@ -255,17 +281,16 @@ bool DeleteWallpaperFileOnSd(const char* path, const char* name, std::string& er
         err_out = Lang::Strings::WALLPAPER_PATH_INVALID;
         return false;
     }
-    if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0 || std::strchr(name, '/') != nullptr) {
+    if (!SdIsValidFileName(name) || std::strcmp(path + prefix.size(), name) != 0) {
         err_out = Lang::Strings::WALLPAPER_NAME_INVALID;
         return false;
     }
 
-    if (unlink(path) != 0 && errno != ENOENT) {
+    if (!reader::DeleteWallpaperFile(path)) {
         err_out = Lang::Strings::WALLPAPER_DELETE_FAIL;
         return false;
     }
     reader::DeleteWallpaperMeta(path);
-    unlink((std::string(path) + ".tmp").c_str());
 
     // ClearActiveIfMatches / NVS：须在本 worker（内部 RAM 栈），勿在 LVGL 任务调用
     Wallpaper_ClearActiveIfMatches(name);
@@ -285,14 +310,12 @@ void ApplyDeleteAsync(void* p) {
         return;
     }
     if (!msg->ok) {
-        std::snprintf(Wallpaper_State().preview.delete_meta_hint, sizeof(Wallpaper_State().preview.delete_meta_hint), "%s",
-                      msg->err[0] != '\0' ? msg->err : Lang::Strings::WALLPAPER_DELETE_FAIL);
+        ScreenShowToast(msg->err[0] != '\0' ? msg->err : Lang::Strings::WALLPAPER_DELETE_FAIL);
         UpdateEnableButtonUi();
         UpdateDeleteButtonUi();
         delete msg;
         return;
     }
-    Wallpaper_State().preview.delete_meta_hint[0] = '\0';
     ClearPreviewImage();
     RefreshActiveName();
     CollectWallpapers();
@@ -318,7 +341,7 @@ void DeleteTask(void* arg) {
         }
         delete work;
     }
-    if (lv_async_call(ApplyDeleteAsync, msg) != LV_RESULT_OK) {
+    if (!ScreenLvAsync(ApplyDeleteAsync, msg)) {
         delete msg;
         Wallpaper_State().workers.delete_busy.store(false);
         Wallpaper_State().workers.delete_task = nullptr;
@@ -327,13 +350,13 @@ void DeleteTask(void* arg) {
 }
 
 void ScheduleDelete(int index) {
+    if (Wallpaper_State().workers.save_busy.load()) return;
     if (index < 0 || index >= static_cast<int>(Wallpaper_State().list.files.size())) {
         return;
     }
     if (Wallpaper_State().workers.delete_busy.exchange(true)) {
         return;
     }
-    Wallpaper_State().preview.delete_meta_hint[0] = '\0';
     UpdateEnableButtonUi();
     UpdateDeleteButtonUi();
     auto* work = new DeleteWork{};
@@ -347,7 +370,7 @@ void ScheduleDelete(int index) {
         delete work;
         Wallpaper_State().workers.delete_busy.store(false);
         Wallpaper_State().workers.delete_task = nullptr;
-        std::snprintf(Wallpaper_State().preview.delete_meta_hint, sizeof(Wallpaper_State().preview.delete_meta_hint), "%s", Lang::Strings::WALLPAPER_DELETE_START_FAIL);
+        ScreenShowToast(Lang::Strings::WALLPAPER_DELETE_START_FAIL);
         UpdateEnableButtonUi();
         UpdateDeleteButtonUi();
     }

@@ -28,6 +28,8 @@ void ReleaseReaderForSystemHome();
 lv_obj_t* ResumeReaderScreen();
 /** @brief 从正文请求打开百问 */
 void RequestOpenAssistantFromReader();
+/** @brief 打开壁纸应用，并在退出后恢复当前书籍的阅读设置。 */
+void OpenReadingWallpaper();
 /** @brief 与 vk_home 同路：勿在 CLICKED 栈里同步拆 session */
 bool BookLvAsync(void (*cb)(void*), void* user_data = nullptr);
 /** @brief 注册书库相关异步刷屏入口 */
@@ -67,3 +69,5 @@ bool ReaderPageWorkPending();
 std::unique_ptr<ReaderPageResult> TakeReaderPageResult();
 /** @brief 离开或换参时作废结果并清空积压输入。 */
 void CancelReaderPageWork();
+/** @brief 作废正文邻页预取；在分页索引替换后防止使用旧预览结果。 */
+void InvalidateReaderPagePrefetch();

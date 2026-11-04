@@ -89,6 +89,8 @@ struct WallpaperUiState {
         lv_obj_t* enable_shutdown_lbl = nullptr;
         lv_obj_t* enable_standby_btn = nullptr;
         lv_obj_t* enable_standby_lbl = nullptr;
+        lv_obj_t* enable_reading_btn = nullptr;
+        lv_obj_t* enable_reading_lbl = nullptr;
         lv_obj_t* adjust_btn = nullptr;
         lv_obj_t* adjust_lbl = nullptr;
         lv_obj_t* rotate_left_btn = nullptr;
@@ -139,8 +141,6 @@ struct WallpaperUiState {
         reader::ImageDecodeError decode_error = reader::ImageDecodeError::kNone; // 当前预览的解码错误
         uint8_t rot_cw = 0;   // 相对原图顺时针 90° 次数 0..3
         bool mirror_h = false;  // 原图水平镜像（先镜像再旋转）
-        // 设置页的提示文案；为空时不绘制。
-        char delete_meta_hint[80] = {};
     } preview;
 
     struct Workers {
@@ -159,6 +159,8 @@ struct WallpaperUiState {
 
 /** @brief 壁纸页 UI 单例状态 */
 WallpaperUiState& Wallpaper_State();
+/** @brief 阅读入口请求返回；保存进行中时延后，完成回调传 false 继续处理。 */
+bool Wallpaper_ReturnToReading(bool request);
 
 
 /** @brief 切换壁纸页 UI 模式 */

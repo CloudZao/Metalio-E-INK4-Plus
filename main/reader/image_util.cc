@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <climits>
 #include <memory>
 #include <new>
+#include <string>
 #include <unistd.h>
 
 #include <esp_heap_caps.h>
@@ -263,20 +265,53 @@ bool DecodeImageFileToL8(const char* path, int max_w, int max_h, RasterImage& ou
         file.reset();
         return DecodePngFileToL8(path, max_w, max_h, out, cancelled, context, nullptr, error);
     }
+    if (signature_size >= 8 && (!std::memcmp(signature, "A2L8", 4) ||
+        !std::memcmp(signature, "A2I1", 4) || !std::memcmp(signature, "EBGR", 4))) {
+        file.reset();
+        if (original_size) {
+            max_w = signature[4] | unsigned(signature[5]) << 8;
+            max_h = signature[6] | unsigned(signature[7]) << 8;
+        }
+        std::vector<uint8_t> alpha;
+        if (!DecodeImageFileOverlay(path, max_w, max_h, out, alpha, cancelled, context, error)) return false;
+        if (!alpha.empty()) for (size_t i = 0; i < out.pixels.size(); ++i)
+            out.pixels[i] = (out.pixels[i] * alpha[i] + 255 * (255 - alpha[i]) + 127) / 255;
+        return true;
+    }
+    if (!LooksLikeJpeg(signature, signature_size)) {
+        if (error) *error = ImageDecodeError::kUnsupported;
+        return false;
+    }
     if (std::ferror(fp) || std::fseek(fp, 0, SEEK_END) != 0) {
         if (error) *error = ImageDecodeError::kFileIo;
         return false;
     }
     const long sz = std::ftell(fp);
-    if (sz <= 0 || (!original_size && sz > 4 * 1024 * 1024)) {
+    if (sz <= 0 || sz > INT_MAX) {
         if (error && sz != 0) *error = sz < 0 ? ImageDecodeError::kFileIo : ImageDecodeError::kUnsupported;
         return false;
+    }
+    if (IsProgressiveJpegFile(fp, static_cast<size_t>(sz), cancelled, context)) {
+        return DecodeProgressiveJpegFile(fp, static_cast<size_t>(sz), max_w, max_h,
+                                         out, cancelled, context, error);
+    }
+    if (cancelled && cancelled(context)) {
+        if (error) *error = ImageDecodeError::kCancelled;
+        return false;
+    }
+    if (sz > 4 * 1024 * 1024) {
+        std::rewind(fp);
+        return DecodeJpegFileToL8(fp, max_w, max_h, out, cancelled, context, error);
     }
     std::rewind(fp);
     std::unique_ptr<uint8_t, decltype(&heap_caps_free)> buf(
         static_cast<uint8_t*>(heap_caps_malloc(static_cast<size_t>(sz), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
         heap_caps_free);
     if (!buf || (cancelled != nullptr && cancelled(context))) {
+        if (!buf && !(cancelled && cancelled(context))) {
+            std::rewind(fp);
+            return DecodeJpegFileToL8(fp, max_w, max_h, out, cancelled, context, error);
+        }
         if (error) *error = cancelled && cancelled(context) ? ImageDecodeError::kCancelled : ImageDecodeError::kNoMemory;
         return false;
     }
@@ -293,7 +328,20 @@ bool DecodeImageFileToL8(const char* path, int max_w, int max_h, RasterImage& ou
         return false;
     }
     file.reset();
-    const bool ok = DecodeImageToL8(buf.get(), static_cast<size_t>(sz), max_w, max_h, out, cancelled, context, error);
+    ImageDecodeError result = ImageDecodeError::kNone;
+    const bool ok = DecodeImageToL8(buf.get(), static_cast<size_t>(sz), max_w, max_h, out, cancelled, context, &result);
+    buf.reset();
+    if (!ok && result == ImageDecodeError::kNoMemory && !(cancelled && cancelled(context))) {
+        out.Reset();
+        std::vector<uint8_t>().swap(out.pixels);
+        file.reset(std::fopen(path, "rb"));
+        if (!file) {
+            if (error) *error = ImageDecodeError::kFileIo;
+            return false;
+        }
+        return DecodeJpegFileToL8(file.get(), max_w, max_h, out, cancelled, context, error);
+    }
+    if (error) *error = result;
     if (!ok && (cancelled == nullptr || !cancelled(context))) {
         ESP_LOGW(TAG, "image decode failed: %s (%ld bytes)", path, sz);
     }
@@ -453,15 +501,10 @@ bool PeekRasterSize(const uint8_t* data,size_t len,int* width,int* height) {
 }
 bool PeekRasterFileSize(const char* path,int* width,int* height) {
     if(!path) return false;
-    FILE* file=std::fopen(path,"rb"); if(!file) return false;
-    // Pixel envelopes and PNG keep dimensions in the first 24 bytes.
-    uint8_t header[24];const size_t count=std::fread(header,1,sizeof(header),file);
-    if(PeekRasterSize(header,count,width,height)) { std::fclose(file);return true; }
-    if(std::fseek(file,0,SEEK_END)) { std::fclose(file);return false; }
-    const long size=std::ftell(file);
-    if(size<=0 || size>4*1024*1024) { std::fclose(file);return false; }
-    std::rewind(file);std::vector<uint8_t> data(size);
-    const bool read=std::fread(data.data(),1,data.size(),file)==data.size();
-    std::fclose(file);return read && PeekRasterSize(data.data(),data.size(),width,height);
+    std::unique_ptr<FILE, decltype(&std::fclose)> file(std::fopen(path,"rb"), std::fclose);
+    if (!file) return false;
+    return ReadImageDimensions([](void* context, uint8_t* bytes, size_t count) {
+        return std::fread(bytes, 1, count, static_cast<FILE*>(context));
+    }, file.get(), width, height);
 }
 }

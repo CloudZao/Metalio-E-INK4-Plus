@@ -9,6 +9,12 @@
 namespace reader {
 
 /**
+ * @brief 从借用文件流式解码普通 JPEG，不缓存完整压缩输入，支持取消
+ */
+bool DecodeJpegFileToL8(FILE* input, int max_w, int max_h, RasterImage& out,
+                       ImageDecodeCancelled cancelled, void* context, ImageDecodeError* error);
+
+/**
  * @brief 从 ZIP 条目流式解码图片到 L8（JPEG/PNG；工作区 PSRAM）
  * @param abort 非空且为 true 时尽快中止（翻页作废）
  * @note  不整包装入内存；按 max_w×max_h 缩放出图。日志带 decode=stream。

@@ -71,13 +71,12 @@ static void OnLayoutDone(uint32_t token, bool ok) {
         return;
     }
 
+    InvalidateReaderPagePrefetch();
     st.reader.session->CommitLiveRelayout(st.reader.layout_anchor);
     const bool keep_sheet = (st.reader.read_chrome == BookUiState::ReadChrome::kSettings);
     RequestRenderReaderPage();
     if (keep_sheet) {
         EnsureSettingsSheetAfterLayout();
-    } else {
-        UpdateReadFooter();
     }
 
     // 正文绘制请求完成后再启动整书页数统计，避免争用字体任务和 SD。
@@ -116,19 +115,16 @@ static void OnChapterPagesDone(uint32_t token, bool ok) {
     if (st.reader.prefs_reopen_pending || !mine || st.reader.content == nullptr || !st.reader.session) {
         return;
     }
+    if (st.reader.layout_again) return;
     st.reader.session->PollLayoutProgress();
     if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings) {
         EnsureSettingsSheetAfterLayout();
-    } else {
-        UpdateReadFooter();
     }
-    // 换字号曾因页表 worker 占用 font 而 defer：worker 结束后再落地
-    if (st.reader.layout_again) return;
     StartPageImageWorker();
     if (!ok) {
         st.reader.layout_hint_done_until_us = 0;
         StopLayoutHintTimer();
-        UpdateReadFooter();
+        if (st.reader.read_chrome != BookUiState::ReadChrome::kReading) UpdateReadFooter();
         return;
     }
     if (st.reader.session->NeedsChapterPageRebuild()) return;

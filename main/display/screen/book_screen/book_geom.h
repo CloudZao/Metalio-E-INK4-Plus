@@ -10,8 +10,10 @@ inline constexpr lv_coord_t kReaderVerticalSideInset = 20; // 竖排正文在列
 void SyncReaderAaForImmersion(bool text_visible);
 /** @brief 把 NVS 排版偏好绑定到 BookSession */
 void BindSessionLayoutPrefs(reader::BookSession& session);
-/** @brief 计算四边距内的正文可绘区域；方格模式只使用居中的完整网格范围 */
+/** @brief 计算正文可绘区域；全屏背景模式保持普通 UI 视口并补偿面板坐标偏移。 */
 lv_area_t ReadContentArea();
+/** @brief 获取整页背景范围；内置背景使用 UI 尺寸，自定义图片使用完整面板尺寸。 */
+lv_area_t ReadBackgroundArea();
 /** @brief 打开进度 UI 用书库边距；避免阅读页边距档位导致 Book_ContentWidth 溢出 */
 void ApplyOverlayListContentPads(lv_coord_t top_pad);
 /** @brief 应用阅读方向并更新正文、阅读菜单和排版；须在 LVGL 任务调用 */

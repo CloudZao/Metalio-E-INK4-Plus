@@ -66,7 +66,7 @@ void power_hw_cellular_resume(void) {
 
 static std::atomic<int> s_main_rail_state{-1}; // -1=未知，0=关闭，1=开启；策略与联网任务共享
 static bool s_sd_parked = false;
-static bool s_standby_rails_prepared = false; // 待机任务持有，首次断电尝试后即承担恢复责任
+static bool s_standby_rails_prepared = false; // 首次断电尝试后登记，退出待机或关机绘图前恢复
 static bool s_gpio_wake_boot_low = false;
 static bool s_gpio_wake_power_low = false;
 
@@ -100,7 +100,12 @@ static bool WaitIntLineHigh(void) {
 
 /** 醒瞬间锁存 P17（须在 restore_keys 前读） */
 static bool ReadPowerPinLow(void) {
-    return !epd_board_metalio_eink4_plus_ioexp_get_level(EPD_IO_POWER);
+    uint8_t port = 0xFF;
+    if (!epd_board_metalio_eink4_plus_ioexp_read_port(EPD_IO_POWER >> 3, &port)) {
+        ESP_LOGW(TAG, "wake: POWER input read failed");
+        return false;
+    }
+    return (port & (1u << (EPD_IO_POWER & 7))) == 0;
 }
 
 /** EXT1：GPIO2 低电平唤醒（电源键 P17 → TCA INT） */
@@ -122,10 +127,10 @@ static bool EnableGpio2Wake(void) {
  * 浅睡硬件停用范围；SD/CNNT 恢复后确认副控制台时钟与 PHY。
  */
 enum : unsigned {
-    kLsSd = 1u << 0,    // HoldPinsLow + Latch + 醒后 Sd_Init
+    kLsSd = 1u << 0,    // HoldPinsLow + Latch；退出待机或关机绘图前 Sd_Init
     kLsTps = 1u << 1,   // tps_enter_sleep
-    kLsBus = 1u << 2,   // bus_hold_low + latch + 醒后 bus_restore
-    kLsRails = 1u << 3, // sleep_cut_rails + 醒后 restore_rails
+    kLsBus = 1u << 2,   // bus_hold_low + latch；退出待机或关机绘图前 bus_restore
+    kLsRails = 1u << 3, // sleep_cut_rails；退出待机或关机绘图前 restore_rails
 };
 constexpr unsigned kLightSleepHw = kLsSd | kLsTps | kLsBus | kLsRails;
 
@@ -249,7 +254,7 @@ esp_err_t power_hw_bt_power_reset(void) {
         err = epd_board_metalio_eink4_plus_bt_power_reset();
         if (err == ESP_OK) {
             // 与开机 P14 恢复路径一致，待电源稳定后才允许下一次刷屏。
-            vTaskDelay(pdMS_TO_TICKS(80));
+            vTaskDelay(pdMS_TO_TICKS(POWER_RAIL_SETTLE_MS));
         }
     }
     if (err == ESP_OK) {
@@ -380,6 +385,10 @@ static void PwrOffTask(void* /*arg*/) {
     ttf_convert::Cancel();
     while (ttf_convert::Busy()) vTaskDelay(pdMS_TO_TICKS(20));
     power_hw_pa_set(false);
+    while (power_hw_standby_rails_restore() != ESP_OK) {
+        ESP_LOGE(TAG, "power-off: rail restore failed; retry before drawing");
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
     if (power_hw_sd_restore() != ESP_OK) {
         ESP_LOGW(TAG, "power-off: SD restore failed, using default wallpaper");
     }
@@ -413,7 +422,7 @@ void power_hw_begin_power_off(void) {
 }
 
 /**
- * tip 全量浅睡；SD/CNNT hold 保留。醒后：restore → Sd_Init →（若做过 SD）ReviveUsj。
+ * 待机浅睡保留 SD/CNNT hold；成功返回仅恢复按键，外围在退出待机或关机绘图前恢复。
  */
 esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us) {
     // No timeout may force power removal with live files or boot hardware work.
@@ -460,12 +469,12 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (!WaitIntLineHigh()) {
-        SleepAbort("abort light sleep: GPIO2 low", applied);
-        return ESP_ERR_INVALID_STATE;
-    }
     if (!epd_board_metalio_eink4_plus_ioexp_enable_power_wake_pin()) {
         SleepAbort("abort light sleep: P17 input fail", applied);
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!WaitIntLineHigh()) {
+        SleepAbort("abort light sleep: GPIO2 low", applied);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -519,14 +528,17 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us) {
         ESP_LOGE(TAG, "wake: key restore failed: %s", esp_err_to_name(keys_err));
         if (err == ESP_OK) err = keys_err;
     }
+    if (err == ESP_OK) {
+        // 定时及共享 INT 唤醒只恢复按键采样；确认退出或绘制关机画面时再恢复外围。
+        return ESP_OK;
+    }
     if ((applied & kLsRails) != 0) {
         const esp_err_t rail_err = RestoreStandbyRails();
         if (rail_err != ESP_OK) {
             ESP_LOGE(TAG, "wake: rail restore failed: %s", esp_err_to_name(rail_err));
-            if (err == ESP_OK) err = rail_err;
         }
     }
-    if ((applied & kLsSd) != 0 && cause != ESP_SLEEP_WAKEUP_TIMER) {
+    if ((applied & kLsSd) != 0) {
         s31_sleep::Checkpoint(s31_sleep::Phase::BeforeSdRestore, applied); // rails restored; about to restore SD/USB console
         power_hw_sd_restore();
     }
@@ -536,7 +548,7 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us) {
     }
     ESP_LOGI(TAG, "light_sleep wake err=%s cause=%d power_low=%d restore result applied=0x%x",
              esp_err_to_name(err), (int)cause, s_gpio_wake_power_low ? 1 : 0, applied);
-    if (err == ESP_OK) s31_sleep::Checkpoint(s31_sleep::Phase::Restored, applied);
+    s31_sleep::Checkpoint(s31_sleep::Phase::Restored, applied);
     return err;
 }
 

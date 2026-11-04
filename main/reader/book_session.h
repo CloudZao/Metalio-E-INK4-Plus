@@ -125,7 +125,7 @@ public:
     /** @brief 在 UI 创建独立导航游标，不读盘；源会话和字体须保留到游标销毁。 */
     std::unique_ptr<BookSession> CreateNavigationCursor(NavigationKind kind, int& value) const;
     /** @brief 在工作任务中加载游标索引、执行导航并物化目标页，不修改源会话。 */
-    bool PrepareNavigation(NavigationKind kind, int value);
+    bool PrepareNavigation(NavigationKind kind, int value, const std::atomic<bool>* cancelled = nullptr);
     /**
      * @brief 在 UI 发布游标位置及读取缓存，旧资源交回游标由后台清理。
      * @return 会话与缓存匹配且发布成功时返回 true。
@@ -213,7 +213,7 @@ public:
     /** @brief SD 重挂后重新 fopen 书文件句柄 */
     bool ReattachSdHandles();
 
-    /** 排版锚点：TXT=页首源字节；章节书=章+页比例 */
+    /** 排版锚点：TXT 使用源字节；章节书优先使用内容块和块内偏移。 */
     struct LayoutAnchor {
         bool valid = false;
         bool txt = false;
@@ -222,11 +222,17 @@ public:
         int chapter = 0;
         int page = 0;
         int page_count = 1;
+        uint32_t source_block = UINT32_MAX, source_offset = 0; // 章节页首的稳定源位置
+        bool source_para_start = true; // 页首是否需要段首缩进
     };
 
     LayoutAnchor CaptureLayoutAnchor() const;
     /** @brief 是否仍需后台完成 TXT 索引或当前章节重排 */
     bool LiveRelayoutPending() const { return live_preview_active_ || chapter_relayout_pending_; }
+    /** @brief 当前章节是否等待按新参数准备首个可读页。 */
+    bool NeedsCurrentPagePreview() const { return chapter_preview_pending_; }
+    /** @brief 当前章节已有新参数预览页，完整分页仍可在后台继续。 */
+    bool HasCurrentPagePreview() const { return !txt_mode_ && live_preview_active_ && !chapter_preview_pending_; }
     void ClearLivePreview();
     /** @brief TXT 换参后由已有排版任务重建 SD 页表 */
     bool NeedsTxtIndexRebuild() const { return txt_mode_ && !txt_empty_; }
@@ -246,7 +252,7 @@ public:
     void SetBackgroundPaused(bool paused);
 
     /**
-     * @brief 按当前 font/gaps/viewport 即时重排当前位置（LVGL 任务）
+     * @brief 在 UI 记录当前内容位置，交由页面任务准备新参数预览
      * @param anchor_inout 传入可空；成功时写出锚点供 TXT 后台对齐
      * @return 先保留当前页，后续由现有排版任务调用 FinishLiveRelayout 完成索引或章节重排
      */
@@ -274,9 +280,10 @@ public:
 private:
     bool CloseSdHandles();
     const BookSession* navigation_source_ = nullptr; // 后台只读游标的源会话
+    const std::atomic<bool>* navigation_cancelled_ = nullptr; // 仅页面准备期间有效的取消标记
     bool txt_preview_relayout_pending_ = false; // 换参后的预览交给前台工作任务计算
     bool navigation_replaced_pages_ = false; // 游标已构建新章节
-    LayoutAnchor navigation_anchor_; // 已发布的 TXT 源锚点
+    LayoutAnchor navigation_anchor_; // 已发布页面的源位置锚点
     BookSourcePosition navigation_bookmark_; // 导航请求对应的单个书签位置
     BookBookmarkStore bookmarks_;
     // 与永久索引的 6 字节行记录保持一致，可直接窗口读取。
@@ -307,7 +314,8 @@ private:
     bool OpenTxt(const char* path, size_t known_size = 0);
     bool OpenEpub(const char* path);
     bool OpenEbook(const char* path);
-    bool PaginateChapter(int chapter, BookPageStore& built) const;
+    bool PaginateChapter(int chapter, BookPageStore& built, const LayoutAnchor* preview = nullptr,
+                         const std::atomic<bool>* cancelled = nullptr) const;
     bool CountChapterPages(int chapter, int& out_pages) const;
     bool RebuildChapterPageTable();
     static std::string ChapterPageCachePath(const char* book_path);
@@ -418,8 +426,11 @@ private:
     mutable Page txt_view_page_;
     mutable int txt_view_index_ = -1;
 
-    // 换参即时预览：TXT 后台建索引前用此页顶替 CurrentPageData；可流式邻页翻页
+    // 换参预览先替换当前页；TXT 可流式翻页，章节书随后发布完整分页。
     bool live_preview_active_ = false;
+    bool chapter_preview_pending_ = false; // 章节首屏由页面任务准备，完整章节随后重建
+    LayoutAnchor chapter_preview_anchor_{}; // 新字号首屏的内容锚点
+    int pending_chapter_anchor_page_ = 0; // 后台完整章节中包含锚点的页码
     uint32_t live_preview_byte_off_ = 0;
     bool live_preview_at_para_start_ = true;
     uint32_t live_preview_next_off_ = 0; // 下一页字节锚点（页满未消费处）

@@ -192,15 +192,11 @@ bool Cloud_OnVkKey(const char* key) {
     }
     auto& st = Cloud_State();
     if (st.dialogs.storage_error_mask != nullptr) return true;
-    if (std::strcmp(key, "vk_home") == 0) {
-        RequestStopTransfer("vk_home");
-        ScreenRequestHome();
-        return true;
-    }
+    const bool home = std::strcmp(key, "vk_home") == 0;
     if (st.data.mode == kCloudModeWifi) {
         if (NetworkScreen::OnVkKey(key)) return true;
-        if (std::strcmp(key, "vk_prev") == 0) {
-            RequestStopTransfer("wifi_vk_prev");
+        if (home || std::strcmp(key, "vk_prev") == 0) {
+            RequestStopTransfer(home ? "wifi_vk_home" : "wifi_vk_prev");
             ScreenLvAsync([](void*) {
                 if (ScreenAlive()) ScreenNavigateBack();
             });
@@ -208,26 +204,31 @@ bool Cloud_OnVkKey(const char* key) {
         return true;
     }
     if (st.xfer.pending_index >= 0) {
-        if (std::strcmp(key, "vk_prev") == 0) {
+        if (home || std::strcmp(key, "vk_prev") == 0) {
             AbortDownloadJobFromUi();
         }
         return true;
     }
     if (st.xfer.dl_page_open) {
-        if (std::strcmp(key, "vk_prev") == 0) {
+        if (home || std::strcmp(key, "vk_prev") == 0) {
             ScreenLvAsync([](void*) { AbortDownloadJobFromUi(); });
             return true;
         }
         return true;
     }
     if (st.preview.open) {
-        if (std::strcmp(key, "vk_prev") == 0) {
+        if (home || std::strcmp(key, "vk_prev") == 0) {
             ScreenLvAsync([](void*) { CloseWallpaperPreview(); });
             return true;
         }
         if (std::strcmp(key, "vk_next") == 0) {
             return true;
         }
+        return true;
+    }
+    if (home) {
+        RequestStopTransfer("vk_home");
+        ScreenNavigateBack();
         return true;
     }
     // 等网/拉列表中仍可翻页看已有数据；离页再 StopTransfer

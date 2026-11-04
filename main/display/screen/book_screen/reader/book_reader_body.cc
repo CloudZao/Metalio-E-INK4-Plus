@@ -137,6 +137,7 @@ void ShowReaderPageLoading() {
         lv_obj_delete(st.reader.background_layer);
     }
     st.reader.background_layer = nullptr;
+    st.reader.background_image.reset();
     if (st.reader.footer_host) {
         lv_obj_set_style_bg_opa(st.reader.footer_host, LV_OPA_COVER, 0);
     }
@@ -198,7 +199,8 @@ void RenderReaderPage() {
     // 视口尚未生效或章节仍在重排时，不能把旧页按新方向重新绘制。
     if (st.reader.layout_again || viewport_changed ||
         (st.reader.session->Info().format != reader::BookFormat::kTxt &&
-         st.reader.session->LiveRelayoutPending())) {
+         st.reader.session->LiveRelayoutPending() && !st.reader.session->NeedsCurrentPagePreview() &&
+         !st.reader.session->HasCurrentPagePreview())) {
         if (!ReaderWorkersBusy() && st.reader.session->Error() != reader::BookReadError::kNone) {
             Book_ShowMessage(st.reader.content, Lang::Strings::BOOK_PAGE_LOAD_FAILED);
         } else {
@@ -212,6 +214,9 @@ void RenderReaderPage() {
         RequestReaderNavigation(reader::BookSession::NavigationKind::kRefresh);
         return;
     }
+    struct RetiredFontRelease {
+        ~RetiredFontRelease() { ReleaseRetiredBookFont(); }
+    } release_font;
     CancelPageImageLoad();
     const reader::Page* page = st.reader.session->CurrentPageData();
     const bool reuse_raster = page && !page_images && BookReaderPrefsBackground() == 0 &&
@@ -238,7 +243,7 @@ void RenderReaderPage() {
             effect == kBookReaderPageTurnRipple ? EpdEffect::Ripple : EpdEffect::None);
         EpdRequestPageTurn(prepared->direction);
     }
-    EpdSetContentRole(st.reader.content,!page_images && BookReaderPrefsAntialias()
+    EpdSetContentRole(st.reader.content,!page_images && (BookReaderPrefsAntialias() || BookReaderPrefsBackground() == 3)
         ? EpdContentRole::ReaderAntialias : EpdContentRole::Monochrome);
     const int64_t t0 = esp_timer_get_time();
 
@@ -247,32 +252,34 @@ void RenderReaderPage() {
     const auto content_area = ReadContentArea();
     const lv_coord_t content_h = st.reader.viewport_h;
     const int background = page_images ? 0 : BookReaderPrefsBackground();
-    const int background_width = max_w;
-    const int background_left = content_area.x1;
-    const int background_height = content_h;
-    if ((!background || !prepared->background.empty()) && st.reader.background_layer && lv_obj_is_valid(st.reader.background_layer)) {
+    const bool background_changed = st.reader.background_image != prepared->background;
+    if (background_changed && st.reader.background_layer && lv_obj_is_valid(st.reader.background_layer)) {
         lv_obj_delete(st.reader.background_layer);
         st.reader.background_layer = nullptr;
     }
-    if (!prepared->background.empty()) {
-        auto* image = new reader::RasterImage(std::move(prepared->background));
+    st.reader.background_image = prepared->background;
+    if (background_changed && prepared->background) {
+        auto* image = prepared->background.get();
         image->BindDsc();
         auto* slot = lv_obj_create(st.reader.read_scr);
         lv_obj_remove_style_all(slot);
         lv_obj_set_size(slot, image->width, image->height);
-        lv_obj_set_pos(slot, 0, content_area.y1);
+        lv_obj_set_pos(slot, 0, 0);
         st.reader.background_layer = slot;
         lv_obj_move_background(slot);
         lv_obj_clear_flag(slot, LV_OBJ_FLAG_CLICKABLE);
         Book_DisableScroll(slot);
-        AttachPageImageToSlot(slot, image, false);
+        auto* picture = lv_image_create(slot);
+        lv_image_set_src(picture, &image->dsc);
+        EpdSetContentRole(picture, EpdContentRole::ReaderAntialias);
+        lv_obj_clear_flag(picture, LV_OBJ_FLAG_CLICKABLE);
+        Book_DisableScroll(picture);
+        auto* owner = new std::shared_ptr<reader::RasterImage>(prepared->background);
+        lv_obj_add_event_cb(picture, [](lv_event_t* e) {
+            delete static_cast<std::shared_ptr<reader::RasterImage>*>(lv_event_get_user_data(e));
+        }, LV_EVENT_DELETE, owner);
     }
     st.reader.background_mode = background;
-    st.reader.background_left = background_left;
-    st.reader.background_width = background_width;
-    st.reader.background_height = background_height;
-    st.reader.background_screen_width = LV_HOR_RES;
-    st.reader.background_top = content_area.y1;
     const int spacing_percent = st.reader.session->LineSpacingPercent();
     const lv_coord_t para_gap = st.reader.session->ParaGap();
 
@@ -317,7 +324,7 @@ void RenderReaderPage() {
                 if (image == lv_event_get_target(event)) image = nullptr;
             }, LV_EVENT_DELETE, nullptr);
         }
-        EpdSetContentRole(st.reader.text_raster_image,BookReaderPrefsAntialias()
+        EpdSetContentRole(st.reader.text_raster_image,BookReaderPrefsAntialias() || background == 3
             ? EpdContentRole::ReaderAntialias : EpdContentRole::Monochrome);
 
         UpdateReadFooter();
@@ -457,6 +464,7 @@ lv_obj_t* CreateReaderScreen(const reader::BookInfo& info) {
     st.reader.opening_format = info.format;
 
     st.reader.background_layer = nullptr;
+    st.reader.background_image.reset();
     lv_obj_t* scr = lv_obj_create(nullptr);
     lv_obj_remove_style_all(scr);
     lv_obj_set_style_bg_color(scr, lv_color_white(), 0);

@@ -1,6 +1,9 @@
 #pragma once
 
 namespace Lang::Strings {
+extern const char* SETTINGS_NET_MODE_FMT;
+extern const char* SETTINGS_NET_WIFI_STATUS_TITLE;
+extern const char* SETTINGS_NET_WIFI_ENABLED;
 extern const char* WIFI_DISABLED_RETRY;
 extern const char* TRANSFER_SD_CAPACITY_FAILED;
 extern const char* TRANSFER_RECOVERY_FAILED;

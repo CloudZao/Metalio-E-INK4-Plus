@@ -29,14 +29,10 @@ static uint16_t AlignUp8(uint16_t v) {
     return (uint16_t)((v + 7) & ~0x7);
 }
 
-/** 大图优先 PSRAM；内部 DRAM 仅作兜底（封面全尺寸 RGB565 常 >1MB） */
+/** @brief 大块像素仅使用 PSRAM，避免分配失败后挤占内部 RAM */
 static uint8_t* AllocJpegOutBuf(size_t size) {
     uint8_t* p = (uint8_t*)heap_caps_aligned_calloc(16, 1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (p != NULL) {
-        return p;
-    }
-    p = (uint8_t*)jpeg_calloc_align(size, 16);
-    if (p != NULL) {
+    if (p != NULL || size > 4096) {
         return p;
     }
     return (uint8_t*)heap_caps_aligned_calloc(16, 1, size, MALLOC_CAP_8BIT);
@@ -46,7 +42,6 @@ static void FreeJpegOutBuf(uint8_t* p) {
     if (p == NULL) {
         return;
     }
-    // jpeg_calloc_align 与 heap_caps_aligned_* 均可 heap_caps_free（现有调用方亦如此）
     heap_caps_free(p);
 }
 

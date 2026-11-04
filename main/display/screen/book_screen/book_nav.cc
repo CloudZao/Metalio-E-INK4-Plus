@@ -16,6 +16,7 @@
 #include "book_screen/shelf/book_detail.h"
 #include "book_screen/book_font_runtime.h"
 #include "book_screen/book_geom.h"
+#include "book_screen/book_text_util.h"
 #include "book_screen/reader/book_layout_debounce.h"
 #include "book_screen/reader/book_layout_worker.h"
 #include "book_screen/reader/book_open_worker.h"
@@ -27,10 +28,13 @@
 #include "book_screen/reader/book_reader_overlay.h"
 #include "book_screen/settings/book_settings_sheet.h"
 #include "book_screen/settings/book_font_multi.h"
+#include "wallpaper_screen/wallpaper_screen.h"
 
 #include <lvgl.h>
 #include <atomic>
+#include <array>
 #include <cstdint>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 
@@ -55,7 +59,44 @@ uint32_t generation = 0;
 int64_t requested_us = 0;
 int64_t idle_after_us = 0;
 bool page_work_busy = false; // 仅由 UI 调度任务读写
+uint32_t page_work_generation = 0; // 在途页面任务接受时的代次
 int pending_direction = 0; // 合并导航后保留到实际正文发布的移动方向
+std::array<std::unique_ptr<ReaderPageResult>, 2> prefetched; // 当前显示页之外最多保留两页
+std::unique_ptr<ReaderPageResult> cached_completion; // 缓存命中沿用正常导航发布流程
+unsigned prefetch_attempted = 0; // 当前页已尝试的前向距离，避免末页或失败时重复预取
+bool prefetching = false, discard_prefetch = false; // 单个在途页面任务的预取状态
+int prefetch_value = 0; // 在途预取距当前页的距离
+
+bool SameReaderPosition(const reader::BookSession::LayoutAnchor& a,
+                        const reader::BookSession::LayoutAnchor& b) {
+    return a.valid && b.valid && a.txt == b.txt && (a.txt ? a.txt_byte_off == b.txt_byte_off :
+        a.chapter == b.chapter && a.page == b.page);
+}
+
+size_t PrefetchBytes() {
+    size_t bytes = 0;
+    for (const auto& page : prefetched) if (page) bytes += page->raster.pixels.capacity();
+    return bytes;
+}
+
+bool CanPrefetchReaderPage() {
+    const auto& st = Book_State();
+    const size_t frame = size_t(std::max<int>(0, st.reader.viewport_w)) * std::max<int>(0, st.reader.viewport_h);
+    constexpr size_t reserve = 2 * 1024 * 1024; // 与阅读页图预算一致，保留解码及其他业务余量
+    const size_t free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const size_t available = free + PrefetchBytes();
+    const size_t budget = available > reserve ? std::min({frame * 2, available / 2, available - reserve}) : 0;
+    static int reported_limit = -1;
+    const int limit = frame ? static_cast<int>(budget / frame) : 0;
+    if (limit != reported_limit) {
+        ESP_LOGI(kTag, "text prefetch pages=%d cached=%luKB psram_free=%luKB", limit,
+            static_cast<unsigned long>(PrefetchBytes() / 1024), static_cast<unsigned long>(free / 1024));
+        reported_limit = limit;
+    }
+    for (auto it = prefetched.rbegin(); it != prefetched.rend(); ++it)
+        if (PrefetchBytes() > budget) it->reset();
+    return frame && PrefetchBytes() + frame <= budget && free > reserve + frame;
+}
 
 int ReaderNavigationDirection(const reader::BookSession::LayoutAnchor& from,
                               const reader::BookSession::LayoutAnchor& to) {
@@ -70,7 +111,10 @@ bool RequestReaderNavigation(Kind kind, int value) {
     auto& st = Book_State();
     if (!st.reader.session || !st.reader.session->IsOpen() || st.reader.opening.load() ||
         st.reader.deferred_cleanup || st.reader.standby_paused) return false;
-    if (kind == Kind::kRefresh && pending) return true;
+    if (BookFontReloadBusy()) return false;
+    if (kind != Kind::kRefresh && st.reader.session->HasCurrentPagePreview()) return false;
+    if (kind == Kind::kRefresh && (pending || ready ||
+        (page_work_busy && !prefetching && page_work_generation == generation))) return true;
     const bool relative = kind == Kind::kDelta || kind == Kind::kChapterDelta;
     if (kind == Kind::kDelta && pending && pending_kind != kind) {
         after_absolute_delta = std::clamp(after_absolute_delta + std::clamp(value, -128, 128), -128, 128);
@@ -87,6 +131,10 @@ bool RequestReaderNavigation(Kind kind, int value) {
     if (st.reader.layout_busy.load()) st.reader.session->PauseTxtPaginate();
     if (st.reader.chapter_pages_busy.load() ||
         (page_work_busy && !relative && kind != Kind::kRefresh)) st.reader.session->AbortChapterPageTable();
+    if (prefetching && (pending_kind != Kind::kDelta || pending_value != prefetch_value)) {
+        discard_prefetch = true;
+        CancelReaderPagePreparation();
+    }
     CancelPageImageLoad();
     return true;
 }
@@ -101,15 +149,39 @@ void CancelReaderPageWork() {
     after_absolute_delta = 0;
     pending_direction = 0;
     ready.reset();
+    if (cached_completion) page_work_busy = false;
+    cached_completion.reset();
+    CancelReaderPagePreparation();
+    InvalidateReaderPagePrefetch();
     idle_after_us = 0;
     if (Book_State().reader.session) Book_State().reader.session->ResumeTxtPaginate();
 }
 
+void InvalidateReaderPagePrefetch() {
+    for (auto& page : prefetched) page.reset();
+    prefetch_attempted = 0;
+    if (cached_completion) {
+        auto page = std::move(cached_completion);
+        page_work_busy = false;
+        RequestReaderNavigation(page->kind, page->value);
+    }
+    if (prefetching) {
+        discard_prefetch = true;
+        CancelReaderPagePreparation();
+    }
+}
+
 std::unique_ptr<ReaderPageResult> TakeReaderPageResult() { return std::move(ready); }
+
 
 void PollReaderPageWork() {
     PollReaderLayoutWork();
     auto& st = Book_State();
+    const bool apply_font = st.reader.content && st.reader.session && !st.reader.standby_paused &&
+        !st.reader.deferred_cleanup && !st.reader.layout_again;
+    const auto font_result = PollBookFontReload(apply_font);
+    if (font_result == BookFontReloadResult::kApplied) ApplyReaderLayoutLive(false);
+    else if (font_result == BookFontReloadResult::kFailed) ScreenShowToast(Lang::Strings::TTF_APPLY_FAILED);
     if (st.reader.session && !ReaderPageWorkPending() && !ready &&
         esp_timer_get_time() >= idle_after_us)
         st.reader.session->ResumeTxtPaginate();
@@ -126,7 +198,25 @@ void PollReaderPageWork() {
             }
         }
     }
-    if (auto output = TakeCompletedReaderPageWork()) {
+    auto output = std::move(cached_completion);
+    if (!output) output = TakeCompletedReaderPageWork();
+    if (output && output->prefetch) {
+        page_work_busy = prefetching = false;
+        if (!pending && st.reader.session && st.reader.layout_busy.load())
+            st.reader.session->ResumeTxtPaginate();
+        if (discard_prefetch) prefetch_attempted &= ~(1u << (prefetch_value - 1));
+        if (!discard_prefetch && output->token == generation && output->ok && !output->raster.empty() &&
+            st.reader.session && !st.reader.deferred_cleanup && !st.reader.standby_paused) {
+            const auto target = output->cursor->CaptureLayoutAnchor();
+            bool duplicate = SameReaderPosition(target, st.reader.session->CaptureLayoutAnchor());
+            for (const auto& page : prefetched)
+                if (page && SameReaderPosition(target, page->cursor->CaptureLayoutAnchor())) duplicate = true;
+            if (!duplicate && output->value >= 1 && output->value <= 2)
+                prefetched[output->value - 1] = std::move(output);
+        }
+        output.reset();
+    }
+    if (output) {
         page_work_busy = false;
         ready = std::move(output);
         auto* result = ready.get();
@@ -144,6 +234,11 @@ void PollReaderPageWork() {
                 ReaderAutoTurnPageMoved();
                 pending_direction = moved;
             }
+            if (result->kind == Kind::kDelta && result->value == 1 && moved > 0) {
+                prefetched[0] = std::move(prefetched[1]);
+                if (prefetched[0]) prefetched[0]->value = 1;
+                prefetch_attempted >>= 1;
+            } else if (result->kind != Kind::kRefresh) InvalidateReaderPagePrefetch();
             st.reader.session->SaveProgress();
             if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings) RequestSettingsSheetPaint();
             if (pending) ready.reset();
@@ -153,6 +248,7 @@ void PollReaderPageWork() {
                 RequestRenderReaderPage();
             }
         } else {
+            if (st.reader.session->NeedsCurrentPagePreview()) st.reader.session->ClearLivePreview();
             if (retired->Error() != reader::BookReadError::kCancelled) {
                 static int64_t last_log = 0;
                 static unsigned suppressed = 0;
@@ -198,8 +294,41 @@ void PollReaderPageWork() {
         ApplyReaderLayoutLive(reload);
     }
     if (!ReaderPageWorkPending() && !ready && st.reader.content && st.reader.session &&
+        st.reader.session->IsOpen() && !st.reader.standby_paused && !st.reader.deferred_cleanup &&
+        !st.reader.layout_again && !st.reader.prefs_reopen_pending && !st.reader.layout_debounce_timer &&
+        !st.reader.opening.load() && !st.reader.chapter_pages_busy.load() && !st.reader.page_image_busy.load() &&
+        !page_work_busy && !BookFontReloadBusy() &&
+        (!st.reader.layout_busy.load() || st.reader.session->Info().format == reader::BookFormat::kTxt) &&
+        (!st.reader.session->LiveRelayoutPending() || st.reader.session->Info().format == reader::BookFormat::kTxt) &&
+        !st.reader.session->IsPageImagesMode() && st.reader.session->HasNextPage() &&
+        s_reader_paint.seq.load() == s_reader_paint.done.load() && CanPrefetchReaderPage()) {
+        for (int distance = 1; distance <= 2; ++distance) {
+            if (prefetched[distance - 1] || (prefetch_attempted & (1u << (distance - 1)))) continue;
+            if (st.reader.layout_busy.load() && !st.reader.session->PauseTxtPaginate()) break;
+            prefetch_attempted |= 1u << (distance - 1);
+            auto page = std::unique_ptr<ReaderPageResult>(new(std::nothrow) ReaderPageResult);
+            if (!page) break;
+            int value = distance;
+            page->cursor = st.reader.session->CreateNavigationCursor(Kind::kDelta, value);
+            if (!page->cursor) break;
+            page->kind = Kind::kDelta;
+            page->value = distance;
+            page->prefetch = true;
+            page->token = generation;
+            page->started_us = esp_timer_get_time();
+            discard_prefetch = false;
+            if (StartReaderPageWork(std::move(page))) {
+                page_work_generation = generation;
+                page_work_busy = prefetching = true;
+                prefetch_value = distance;
+            }
+            break;
+        }
+    }
+    if (!ReaderPageWorkPending() && !ready && st.reader.content && st.reader.session &&
         st.reader.session->IsOpen() && !st.reader.standby_paused && !st.reader.prefs_reopen_pending && !ReaderWorkersBusy() &&
-        esp_timer_get_time() >= idle_after_us) {
+        s_reader_paint.seq.load() == s_reader_paint.done.load() &&
+        (esp_timer_get_time() >= idle_after_us || st.reader.session->HasCurrentPagePreview())) {
         if (st.reader.session->LiveRelayoutPending()) {
             st.reader.layout_anchor = st.reader.session->CaptureLayoutAnchor();
             StartLayoutWorker();
@@ -208,19 +337,35 @@ void PollReaderPageWork() {
     }
     if (!pending || !st.reader.session || !st.reader.content || st.reader.standby_paused || st.reader.deferred_cleanup) return;
     if (st.reader.opening.load() || st.reader.chapter_pages_busy.load() ||
-        st.reader.page_image_busy.load() || page_work_busy || st.reader.layout_again || st.reader.prefs_reopen_pending) return;
+        st.reader.page_image_busy.load() || page_work_busy || BookFontReloadBusy() ||
+        st.reader.layout_again || st.reader.prefs_reopen_pending) return;
     if (st.reader.layout_busy.load() && !st.reader.session->PauseTxtPaginate()) return;
     const int followup_delta = after_absolute_delta;
     after_absolute_delta = 0;
-    auto result = std::unique_ptr<ReaderPageResult>(new(std::nothrow) ReaderPageResult{});
+    std::unique_ptr<ReaderPageResult> result;
+    if (pending_kind == Kind::kDelta && pending_value >= 1 && pending_value <= 2)
+        result = std::move(prefetched[pending_value - 1]);
+    const bool cached = result != nullptr;
+    if (!cached) {
+        prefetched[1].reset();
+        prefetch_attempted &= ~2u;
+        result.reset(new(std::nothrow) ReaderPageResult{});
+    }
     if (!result) { ESP_LOGE(kTag, "page result allocation failed"); pending = false; return; }
     int value = pending_value;
-    result->cursor = st.reader.session->CreateNavigationCursor(pending_kind, value);
+    if (!cached) result->cursor = st.reader.session->CreateNavigationCursor(pending_kind, value);
     if (!result->cursor) { pending = false; ESP_LOGE(kTag, "navigation snapshot failed"); return; }
     result->kind = pending_kind; result->value = value;
+    result->prefetch = false;
     result->token = generation; result->started_us = requested_us;
     page_work_busy = true;
-    if (!StartReaderPageWork(std::move(result))) {
+    page_work_generation = generation;
+    if (cached) {
+        result->queue_us = esp_timer_get_time() - requested_us;
+        result->navigation_us = result->raster_us = 0;
+        cached_completion = std::move(result);
+    }
+    else if (!StartReaderPageWork(std::move(result))) {
         page_work_busy = false;
         pending = false;
         return;
@@ -331,7 +476,7 @@ bool RetireReaderSession() {
 bool ReaderWorkersBusy() {
     auto& st = Book_State();
     return st.reader.opening.load() || st.reader.layout_busy.load() || st.reader.chapter_pages_busy.load() ||
-           st.reader.page_image_busy.load() || page_work_busy;
+           st.reader.page_image_busy.load() || page_work_busy || BookFontReloadBusy();
 }
 
 // 阅读相关 worker 占线时打一条，便于串口对照「点了继续阅读却无 StartOpenWorker」
@@ -367,6 +512,7 @@ void ReleaseReaderSessionForLeave() {
     CancelReaderPrefsReopen();
     st.reader.open_token.fetch_add(1);
     st.reader.read_scr = nullptr;
+    st.reader.background_image.reset();
     st.reader.content = nullptr;
     st.reader.footer_host = nullptr;
     st.reader.page_label = nullptr;
@@ -418,6 +564,7 @@ void ReleaseReaderSessionForLeave() {
     st.reader.deferred_cleanup = true;
     FinishDeferredCleanup();
     SyncReaderAaForImmersion(false);
+    DisplayUiSetFullScreen(false);
     if (DisplayUiSetOrient(kDisplayUiPortrait)) {
         if (auto* disp = LVAdapterDisplay::Instance()) {
             disp->RequestFullOnNextCommit();
@@ -450,6 +597,41 @@ lv_obj_t* ResumeDetailScreen() {
         return BookScreen::Create();
     }
     return CreateReaderScreen(st.shelf.books[static_cast<size_t>(st.shelf.selected)]);
+}
+
+static lv_obj_t* ResumeReadingSettings() {
+    auto& st = Book_State();
+    if (!ReaderWorkersBusy()) FinishDeferredCleanup();
+    if (ReaderWorkersBusy() || st.reader.deferred_cleanup) {
+        // 快速退出壁纸时，等待旧会话的工作任务收尾，再恢复正文与设置。
+        auto* screen = lv_obj_create(nullptr);
+        Book_DisableScroll(screen);
+        Book_ShowMessage(screen, Lang::Strings::BOOK_LOADING, Book_ListFont());
+        auto* timer = lv_timer_create([](lv_timer_t* timer) {
+            auto* origin = static_cast<lv_obj_t*>(lv_timer_get_user_data(timer));
+            if (lv_screen_active() != origin || ReaderWorkersBusy() || !EpdTryBeginUiRender()) return;
+            struct UiGuard { ~UiGuard() { EpdEndUiRender(); } } guard;
+            FinishDeferredCleanup();
+            if (Book_State().reader.deferred_cleanup) return;
+            ScreenLoadReplace(ResumeReadingSettings());
+        }, 50, screen);
+        if (!timer) {
+            lv_obj_delete(screen);
+            return BookScreen::Create();
+        }
+        lv_obj_add_event_cb(screen, [](lv_event_t* e) {
+            lv_timer_delete(static_cast<lv_timer_t*>(lv_event_get_user_data(e)));
+        }, LV_EVENT_DELETE, timer);
+        VkKey_AttachScreen(screen, kScreenRead, BookAiLongPressDesc(ResumeReadingSettings));
+        return screen;
+    }
+    auto* screen = ResumeReaderScreen();
+    if (screen == st.reader.read_scr) st.reader.settings_resume_after_open = true;
+    return screen;
+}
+
+void OpenReadingWallpaper() {
+    ScreenNavigateTo(WallpaperScreen::CreateForReading, ResumeReadingSettings);
 }
 
 void OpenAssistantFromReaderAsync(void* /*user_data*/) {

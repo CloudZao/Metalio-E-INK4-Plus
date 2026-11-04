@@ -122,26 +122,21 @@ bool PollStandbyPhysicalKeys()
     return false;
 }
 
-/**
- * 浅睡 EXT1 醒：唤醒源仅 P17→GPIO2。短按常在读脚前已松开，仍按 POWER 短按 dismiss。
- * @return true 结束本轮 LP；false 继续浅睡（本路径对 POWER 唤醒应恒为 true）
- */
+/** @brief 核对共享中断对应的电源键状态，确认按键后才退出待机。 */
 bool HandleGpioWakeFromLightSleep()
 {
     if (MetalioKeys_TakeShutdownPulse()) {
         return DispatchStandbyPowerKey(kPowerLongPressMs);
     }
-    bool latch_boot = false;
     bool latch_power = false;
-    power_hw_gpio_wake_latch_get(&latch_boot, &latch_power);
-    (void)latch_boot;
-    bool saw_power = latch_power || MetalioKeys_IsDown(kKeyPower);
+    power_hw_gpio_wake_latch_get(nullptr, &latch_power);
+    bool saw_power = latch_power || MetalioKeys_IsDown(kKeyPower) || MetalioKeys_TakePowerClick();
 
     constexpr int kGraceMs = 300;
     constexpr int kStepMs = 10;
     for (int waited = 0; !saw_power && waited < kGraceMs; waited += kStepMs) {
         vTaskDelay(pdMS_TO_TICKS(kStepMs));
-        saw_power = MetalioKeys_IsDown(kKeyPower);
+        saw_power = MetalioKeys_IsDown(kKeyPower) || MetalioKeys_TakePowerClick();
     }
 
     ESP_LOGI(TAG, "EXT1 wake (POWER/P17) latch_power=%d", saw_power ? 1 : 0);
@@ -150,9 +145,8 @@ bool HandleGpioWakeFromLightSleep()
         const int held = MeasureKeyHoldMs(kKeyPower);
         return DispatchStandbyPowerKey(held);
     }
-    // 脚已松开：仍是 POWER 唤醒事件 → 短按 dismiss（勿再 Poll BOOT）
-    ESP_LOGI(TAG, "EXT1 wake POWER released -> short dismiss");
-    return DispatchStandbyPowerKey(0);
+    ESP_LOGW(TAG, "shared INT wake without POWER evidence; stay standby");
+    return false;
 }
 
 bool DelayMsWithStandbyKeyPoll(uint32_t delay_ms)
@@ -306,7 +300,7 @@ bool RunLightSleepSlice()
     const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     if (IsKeyWakeCause(cause)) {
         ESP_LOGI(TAG, "key wake cause=%d", static_cast<int>(cause));
-        // EXT1=GPIO2 仅 P17 可拉：一律按 POWER 处理（勿 Poll BOOT）
+        // GPIO2 为共享中断，不能仅凭 EXT1 原因合成电源键短按。
         if (HandleGpioWakeFromLightSleep()) {
             return true;
         }
@@ -450,8 +444,9 @@ void StandbyLpTask(void* /*arg*/)
         const bool shutting_down = pwr::shutdown_requested;
         pwr::lp_session_active = false;
         xSemaphoreGive(pwr::mu);
-        if (!shutting_down && power_hw_standby_rails_restore() != ESP_OK) {
-            ESP_LOGE(TAG, "standby exit: rail restore failed");
+        while (!shutting_down && power_hw_standby_rails_restore() != ESP_OK) {
+            ESP_LOGE(TAG, "standby exit: rail restore failed; retry");
+            vTaskDelay(pdMS_TO_TICKS(500));
         }
         if (wake_exit && !shutting_down) {
             // Also covers wake during draining, before light_sleep_once was called.

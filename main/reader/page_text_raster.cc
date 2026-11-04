@@ -15,29 +15,30 @@
 #include <esp_heap_caps.h>
 
 namespace reader {
-uint8_t ReadingBackgroundPixel(int mode, int x, int y, int left, int width, int height) {
-    if (x < left || x >= left + width || y < 0 || y >= height) return 255;
-    x -= left;
-    constexpr int pitch = kReadingBackgroundPitch;
-    if (mode == 2) {
-        const int dot_x = x % pitch, dot_y = y % pitch;
-        // I1 output thresholds gray to black/white. A 4x4 checker keeps the dot
-        // footprint while reducing ink coverage to 50% for a lighter appearance.
-        return (dot_x < 4 && dot_y < 4 && ((dot_x + dot_y) % 2 == 0)) ? 0 : 255;
+uint8_t ReadingBackgroundPixel(int mode, int x, int y, int width, int height) {
+    constexpr int kReadingGridPitch = 24; // 方格目标间距，单位像素
+    constexpr int kReadingDotPitch = 32; // 点阵目标间距，单位像素
+    if (x < 0 || x >= width || y < 0 || y >= height) return 255;
+    if (mode != 1 && mode != 2) return 255;
+    const bool dots = mode == 2;
+    const int size = dots ? 4 : 1;
+    const int pitch = dots ? kReadingDotPitch : kReadingGridPitch;
+    const int bottom = std::max(0, height - 2);
+    if (!dots && y > bottom) return 255;
+    const int span_x = std::max(1, width - size);
+    const int span_y = std::max(1, dots ? height - size : bottom);
+    const int shorter = std::min(span_x, span_y);
+    const int cells = std::max(1, (shorter + pitch / 2) / pitch);
+    const int columns = span_x <= span_y ? cells : (span_x * cells + shorter / 2) / shorter;
+    const int rows = span_y <= span_x ? cells : (span_y * cells + shorter / 2) / shorter;
+    const bool vertical = x * columns % span_x < columns * size;
+    const bool horizontal = y * rows % span_y < rows * size;
+    if (dots) {
+        // 完整点阵均分整页；4×4 棋盘保留半墨覆盖率，维持二值快速刷新。
+        return vertical && horizontal && (x + y) % 2 == 0 ? 0 : 255;
     }
-    if (mode == 1) {
-        const int span_x = std::max(1, width - 1), span_y = std::max(1, height - 1);
-        const int shorter = std::min(span_x, span_y);
-        const int cells = std::max(1, (shorter + pitch / 2) / pitch);
-        const int columns = span_x <= span_y ? cells : (span_x * cells + shorter / 2) / shorter;
-        const int rows = span_y <= span_x ? cells : (span_y * cells + shorter / 2) / shorter;
-        // 均分固定内容区，边线位于两端；相邻格的取整误差不超过 1 像素。
-        const bool vertical = x * columns % span_x < columns;
-        const bool horizontal = y * rows % span_y < rows;
-        const bool corner = (x == 0 || x == width - 1) && (y == 0 || y == height - 1);
-        return ((vertical && y % 3 == 0) || (horizontal && x % 3 == 0) || corner) ? 0 : 255;
-    }
-    return 255;
+    const bool corner = (x == 0 || x == width - 1) && (y == 0 || y == bottom);
+    return ((vertical && y % 3 == 0) || (horizontal && x % 3 == 0) || corner) ? 0 : 255;
 }
 
 namespace {
@@ -85,12 +86,23 @@ void BlitGlyphA8(RasterImage& img, int dst_x, int dst_y, const uint8_t* a8, uint
     }
 }
 
-// Apply the former display-side text darkening once, after overlapping glyphs
-// have blended. Images and UI transparency must never pass through this policy.
+// 字形重叠合成后统一加深灰边；整块黑白像素无需重写。
 void FinishTextRaster(RasterImage& image, bool antialias) {
     if (antialias) {
-        for (auto& pixel : image.pixels) {
-            if (pixel != 255) pixel -= pixel / 4;
+        size_t offset = 0;
+        for (; offset + sizeof(uint32_t) <= image.pixels.size(); offset += sizeof(uint32_t)) {
+            uint32_t pixels;
+            std::memcpy(&pixels, image.pixels.data() + offset, sizeof(pixels));
+            // 每字节内相邻位均相同，表示四个像素各自为纯黑或纯白。
+            if (((pixels ^ (pixels >> 1)) & 0x7f7f7f7fu) == 0) continue;
+            for (unsigned byte = 0; byte < sizeof(pixels); ++byte) {
+                auto& pixel = image.pixels[offset + byte];
+                if (pixel != 0 && pixel != 255) pixel -= pixel * 4 / 5;
+            }
+        }
+        for (; offset < image.pixels.size(); ++offset) {
+            auto& pixel = image.pixels[offset];
+            if (pixel != 0 && pixel != 255) pixel -= pixel * 4 / 5;
         }
     }
     image.BindDsc();

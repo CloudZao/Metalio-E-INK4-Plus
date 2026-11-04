@@ -114,9 +114,10 @@ enum EpdDrawMode {
     MODE_FORCE_NO_PIE = 0x800,
     // S31 full-screen gray wipe/reveal; bits 13..14 encode UI orientation.
     MODE_SPATIAL_WIPE_GL = 0x1000,
-    // 普通差分刷新屏蔽同色驱动，DU 允许保留黑→黑补黑。
+    // 普通差分刷新屏蔽灰白同色驱动；DU 保留补黑，GL16 纯黑仅推黑并补黑。
     // 全刷、恢复、测试及调理动画不使用此标记。
     MODE_SKIP_UNCHANGED = 0x8000,
+    MODE_EQUALIZE_BLACK = 0x10000, // 对整页纯黑目标统一推黑，保留其他同色像素
 };
 
 /** Display software rotation.

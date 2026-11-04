@@ -1,6 +1,7 @@
 #include "ttf_runtime.h"
 #include "ttf_face.h"
 #include "sd_access.h"
+#include FT_ADVANCES_H
 
 #include <algorithm>
 #include <atomic>
@@ -25,7 +26,8 @@ constexpr size_t kAdvanceCount = 65536; // BMP 码点的准确步进缓存
 constexpr uint16_t kAdvanceUnknown = UINT16_MAX; // 尚未测量，回退完整字形度量
 constexpr uint16_t kAdvanceMissing = UINT16_MAX - 1; // 字体缺字，保留 LVGL 回退行为
 constexpr size_t kBitmapCount = 1024;
-constexpr size_t kBitmapBudget = 384 * 1024;
+constexpr size_t kBitmapBudget = 1024 * 1024;
+constexpr size_t kBitmapMinimum = 384 * 1024;
 constexpr size_t kCacheWays = 4;
 constexpr size_t kPrewarmBatch = 32;
 constexpr uint32_t kWorkerStack = 48 * 1024;
@@ -33,6 +35,7 @@ constexpr int64_t kErrorLogIntervalUs = 5 * 1000 * 1000;
 enum class Operation {
     kOpen, // 打开字体
     kMetrics, // 查询字形度量
+    kAdvance, // 仅查询分页步进，不加载字形轮廓
     kBitmap, // 读取字形位图
     kPrewarm, // 批量预热码点
     kClose, // 关闭字体
@@ -61,6 +64,7 @@ struct Request {
     lv_draw_buf_t* bitmap = nullptr; // 调用方提供的 A8 缓冲
     const uint32_t* codepoints = nullptr; // 预热时使用的码点列表
     size_t count = 0; // 待预热码点数量
+    const std::atomic<bool>* cancelled = nullptr; // 可中断的页面预热请求
     bool ok = false; // 操作结果
 };
 } // namespace
@@ -81,6 +85,7 @@ struct TtfRuntime {
     Metric* metrics = nullptr; // PSRAM 中的有界字形度量缓存
     Bitmap* bitmaps = nullptr; // PSRAM 中的位图缓存索引
     uint8_t* pixels = nullptr; // 有容量上限的 A8 环形缓冲
+    size_t bitmap_budget = kBitmapMinimum; // 根据 PSRAM 余量选择位图容量
     uint8_t metric_next[kMetricCount / kCacheWays]{}; // 每组度量缓存的轮换淘汰位置
     uint8_t bitmap_slot_next[kBitmapCount / kCacheWays]{}; // 每组位图缓存的轮换淘汰位置
     uint64_t bitmap_next = 0; // 下一次位图写入的单调位置
@@ -113,7 +118,7 @@ bool LoadGlyph(TtfRuntime& font, uint32_t glyph, bool render) {
     if (font.loaded_glyph != glyph) {
         font.loaded_glyph = 0;
         font.rendered = false;
-        // FreeType 预计算位图边界，分页度量不执行栅格化。
+        // 绘制所需的轮廓与边界；分页步进优先从字体度量表读取。
         error = FT_Load_Glyph(font.face, glyph, FT_LOAD_BITMAP_METRICS_ONLY | FT_LOAD_TARGET_NORMAL);
         if (error == 0 && !font.io_failed.load()) font.loaded_glyph = glyph;
     }
@@ -151,6 +156,14 @@ void CacheAdvance(TtfRuntime& font, const Metric& metric) {
     else if (metric.advance < kAdvanceMissing) font.advances[metric.codepoint] = metric.advance;
 }
 
+bool FastAdvance(TtfRuntime& font, uint32_t glyph, uint16_t& advance) {
+    FT_Fixed value = 0;
+    if (FT_Get_Advance(font.face, glyph, FT_LOAD_NO_HINTING | FT_ADVANCE_FLAG_FAST_ONLY, &value) != 0 ||
+        font.io_failed.load()) return false;
+    advance = std::clamp<int64_t>((static_cast<int64_t>(value) + 0x8000) >> 16, 0, kAdvanceMissing - 1);
+    return true;
+}
+
 Metric* LoadMetric(TtfRuntime& font, uint32_t codepoint) {
     if (auto* cached = FindMetric(font, codepoint)) return cached;
     font.io_failed.store(false);
@@ -170,6 +183,11 @@ Metric* LoadMetric(TtfRuntime& font, uint32_t codepoint) {
             return nullptr;
         }
         value.advance = std::clamp<long>((slot->advance.x + 32) >> 6, 0, UINT16_MAX);
+        uint16_t advance = 0;
+        if (font.advances && codepoint < kAdvanceCount && font.advances[codepoint] < kAdvanceMissing)
+            value.advance = font.advances[codepoint];
+        else if (FastAdvance(font, glyph, advance)) value.advance = advance;
+        if (font.io_failed.load()) return nullptr;
         value.width = slot->bitmap.width;
         value.height = slot->bitmap.rows;
         value.left = slot->bitmap_left;
@@ -186,12 +204,29 @@ Metric* LoadMetric(TtfRuntime& font, uint32_t codepoint) {
     return &metric;
 }
 
+bool LoadAdvance(TtfRuntime& font, uint32_t codepoint, Metric& metric) {
+    if (const auto* cached = FindMetric(font, codepoint)) { metric = *cached; return true; }
+    font.io_failed.store(false);
+    metric.codepoint = codepoint;
+    metric.glyph = FT_Get_Char_Index(font.face, codepoint);
+    if (font.io_failed.load()) return false;
+    if (metric.glyph == 0 || FastAdvance(font, metric.glyph, metric.advance)) {
+        CacheAdvance(font, metric);
+        return true;
+    }
+    if (font.io_failed.load()) return false;
+    const auto* full = LoadMetric(font, codepoint);
+    if (!full) return false;
+    metric = *full;
+    return true;
+}
+
 const Bitmap* FindBitmap(TtfRuntime& font, uint32_t glyph) {
     if (glyph == 0) return nullptr;
     const size_t base = CacheIndex(glyph, kBitmapCount);
     for (size_t i = 0; i < kCacheWays; ++i) {
         const auto& bitmap = font.bitmaps[base + i];
-        if (bitmap.glyph == glyph && font.bitmap_next - bitmap.position <= kBitmapBudget) return &bitmap;
+        if (bitmap.glyph == glyph && font.bitmap_next - bitmap.position <= font.bitmap_budget) return &bitmap;
     }
     return nullptr;
 }
@@ -222,7 +257,7 @@ bool CopyBitmap(TtfRuntime& font, uint32_t glyph, const uint8_t* pixels,
 
 bool RenderBitmap(TtfRuntime& font, uint32_t glyph, lv_draw_buf_t* output) {
     if (const auto* cached = FindBitmap(font, glyph)) {
-        return !output || CopyBitmap(font, glyph, font.pixels + cached->position % kBitmapBudget,
+        return !output || CopyBitmap(font, glyph, font.pixels + cached->position % font.bitmap_budget,
                                      cached->width, cached->height, *output);
     }
     if (!LoadGlyph(font, glyph, true)) return false;
@@ -233,21 +268,21 @@ bool RenderBitmap(TtfRuntime& font, uint32_t glyph, lv_draw_buf_t* output) {
     }
     const size_t bytes = static_cast<size_t>(source.width) * source.rows;
     if (bytes == 0) return true;
-    if (bytes > kBitmapBudget || source.width > UINT16_MAX || source.rows > UINT16_MAX) {
+    if (bytes > font.bitmap_budget || source.width > UINT16_MAX || source.rows > UINT16_MAX) {
         ReportError(font, "bitmap bounds", FT_Err_Invalid_Pixel_Size, glyph);
         return false;
     }
-    const size_t offset = font.bitmap_next % kBitmapBudget;
-    if (offset + bytes > kBitmapBudget) font.bitmap_next += kBitmapBudget - offset;
+    const size_t offset = font.bitmap_next % font.bitmap_budget;
+    if (offset + bytes > font.bitmap_budget) font.bitmap_next += font.bitmap_budget - offset;
     const size_t base = CacheIndex(glyph, kBitmapCount);
     size_t slot = base + font.bitmap_slot_next[base / kCacheWays]++ % kCacheWays;
     for (size_t i = 0; i < kCacheWays; ++i) {
         const auto& entry = font.bitmaps[base + i];
-        if (entry.glyph == 0 || font.bitmap_next - entry.position > kBitmapBudget) { slot = base + i; break; }
+        if (entry.glyph == 0 || font.bitmap_next - entry.position > font.bitmap_budget) { slot = base + i; break; }
     }
     auto& cached = font.bitmaps[slot];
     cached = {glyph, static_cast<uint16_t>(source.width), static_cast<uint16_t>(source.rows), font.bitmap_next};
-    auto* destination = font.pixels + font.bitmap_next % kBitmapBudget;
+    auto* destination = font.pixels + font.bitmap_next % font.bitmap_budget;
     for (unsigned y = 0; y < source.rows; ++y) {
         const auto* row = source.pitch >= 0 ? source.buffer + y * source.pitch :
             source.buffer + (source.rows - 1 - y) * -source.pitch;
@@ -303,10 +338,12 @@ bool Execute(TtfRuntime& font, Request& request) {
         *request.metric = *metric;
         return true;
     }
+    if (request.operation == Operation::kAdvance)
+        return LoadAdvance(font, request.glyph, *request.metric);
     if (request.operation == Operation::kPrewarm) {
         int64_t yielded_us = esp_timer_get_time();
         for (size_t i = 0; i < request.count; ++i) {
-            if (sd_access::IsQuiescing()) return false;
+            if (sd_access::IsQuiescing() || (request.cancelled && request.cancelled->load())) return false;
             const auto* metric = LoadMetric(font, request.codepoints[i]);
             if (!metric) return false;
             if (metric->glyph != 0 && !RenderBitmap(font, metric->glyph, nullptr)) return false;
@@ -375,7 +412,15 @@ bool GetLayoutMetrics(const lv_font_t* lv_font, lv_font_glyph_dsc_t* output,
     const uint32_t key = tab ? ' ' : codepoint;
     if (font.advances && key < kAdvanceCount) {
         std::lock_guard<std::mutex> lock(font.mutex);
-        const uint16_t advance = font.advances[key];
+        uint16_t advance = font.advances[key];
+        if (advance == kAdvanceUnknown) {
+            Metric metric{};
+            Request request{Operation::kAdvance};
+            request.glyph = key;
+            request.metric = &metric;
+            if (!Send(font, request)) return false;
+            advance = metric.glyph == 0 ? kAdvanceMissing : metric.advance;
+        }
         if (advance == kAdvanceMissing) return false;
         if (advance != kAdvanceUnknown) {
             *output = {};
@@ -393,7 +438,7 @@ const void* GetBitmap(lv_font_glyph_dsc_t* dsc, lv_draw_buf_t* output) {
     std::lock_guard<std::mutex> lock(font.mutex);
     bool ok = false;
     if (const auto* cached = FindBitmap(font, dsc->gid.index)) {
-        ok = CopyBitmap(font, dsc->gid.index, font.pixels + cached->position % kBitmapBudget,
+        ok = CopyBitmap(font, dsc->gid.index, font.pixels + cached->position % font.bitmap_budget,
                         cached->width, cached->height, *output);
     } else {
         Request request{Operation::kBitmap};
@@ -416,7 +461,14 @@ TtfRuntime* TtfRuntimeOpen(const char* path, int size_px) {
     }
     font->metrics = static_cast<Metric*>(heap_caps_malloc(kMetricCount * sizeof(Metric), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     font->bitmaps = static_cast<Bitmap*>(heap_caps_calloc(kBitmapCount, sizeof(Bitmap), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    font->pixels = static_cast<uint8_t*>(heap_caps_malloc(kBitmapBudget, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    constexpr size_t reserve = 2 * 1024 * 1024;
+    if (heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) > reserve + kBitmapBudget)
+        font->bitmap_budget = kBitmapBudget;
+    font->pixels = static_cast<uint8_t*>(heap_caps_malloc(font->bitmap_budget, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!font->pixels && font->bitmap_budget != kBitmapMinimum) {
+        font->bitmap_budget = kBitmapMinimum;
+        font->pixels = static_cast<uint8_t*>(heap_caps_malloc(font->bitmap_budget, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    }
     font->queue = xQueueCreate(1, sizeof(Request*));
     font->done = xSemaphoreCreateBinary();
     if (!font->metrics || !font->bitmaps || !font->pixels || !font->queue || !font->done) {
@@ -475,11 +527,12 @@ const lv_font_t* TtfRuntimeLayoutFont(const TtfRuntime* font) {
     return font ? (font->advances ? &font->layout_font : &font->font) : nullptr;
 }
 
-bool TtfRuntimePrewarm(TtfRuntime* font, const uint32_t* codepoints, size_t count) {
+bool TtfRuntimePrewarm(TtfRuntime* font, const uint32_t* codepoints, size_t count,
+                       const std::atomic<bool>* cancelled) {
     if (!font || (!codepoints && count != 0)) return false;
     for (size_t begin = 0; begin < count; begin += kPrewarmBatch) {
         std::lock_guard<std::mutex> lock(font->mutex);
-        if (sd_access::IsQuiescing()) return false;
+        if (sd_access::IsQuiescing() || (cancelled && cancelled->load())) return false;
         const size_t batch = std::min(kPrewarmBatch, count - begin);
         bool ready = true;
         for (size_t i = 0; i < batch; ++i) {
@@ -494,6 +547,7 @@ bool TtfRuntimePrewarm(TtfRuntime* font, const uint32_t* codepoints, size_t coun
         Request request{Operation::kPrewarm};
         request.codepoints = codepoints + begin;
         request.count = batch;
+        request.cancelled = cancelled;
         if (!Send(*font, request)) return false;
     }
     return true;

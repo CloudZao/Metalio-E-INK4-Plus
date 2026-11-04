@@ -75,6 +75,34 @@ struct Job {
     int size_count;
 };
 
+struct BitmapSpool {
+    std::string path; // 随转换任务清理的位图暂存文件
+    FILE* file = nullptr; // 顺序写入，输出字库时回读
+    uint8_t* bytes = nullptr; // 固定大小的 PSRAM 写入和复制窗口
+    static constexpr size_t capacity = 16 * 1024; // 可容纳格式允许的最大单字位图
+    size_t used = 0; // 尚未落盘的窗口字节数
+
+    ~BitmapSpool() {
+        if (file) std::fclose(file);
+        if (!path.empty()) unlink(path.c_str());
+        heap_caps_free(bytes);
+    }
+
+    bool Open(const char* output) {
+        bytes = static_cast<uint8_t*>(heap_caps_malloc(capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!bytes) return false;
+        path = std::string(output) + ".bmp.tmp";
+        file = std::fopen(path.c_str(), "w+b");
+        return file != nullptr;
+    }
+
+    bool Flush() {
+        if (std::fwrite(bytes, 1, used, file) != used) return false;
+        used = 0;
+        return true;
+    }
+};
+
 bool Cancelled() {
     return s_cancel.load(std::memory_order_acquire) || sd_access::IsQuiescing();
 }
@@ -209,8 +237,9 @@ std::string FontStem(const char* ttf_path) {
 }
 
 bool WriteEf(const char* out_path, int line_height, int base_line,
-             const std::vector<GlyphRec>& recs, const uint8_t* blob, size_t blob_size) {
-    if (recs.empty() || out_path == nullptr || out_path[0] == '\0') {
+             const std::vector<GlyphRec>& recs, BitmapSpool& spool, size_t blob_size) {
+    if (recs.empty() || out_path == nullptr || out_path[0] == '\0' ||
+        !spool.Flush() || std::fflush(spool.file) != 0 || std::fseek(spool.file, 0, SEEK_SET) != 0) {
         return false;
     }
     struct Interval {
@@ -276,8 +305,9 @@ bool WriteEf(const char* out_path, int line_height, int base_line,
     }
     if (blob_size > 0) {
         for (size_t offset = 0; ok && offset < blob_size;) {
-            const size_t count = std::min<size_t>(16 * 1024, blob_size - offset);
-            ok = !Cancelled() && fwrite(blob + offset, 1, count, f) == count;
+            const size_t count = std::min(BitmapSpool::capacity, blob_size - offset);
+            ok = !Cancelled() && std::fread(spool.bytes, 1, count, spool.file) == count &&
+                fwrite(spool.bytes, 1, count, f) == count;
             offset += count;
             vTaskDelay(1);
         }
@@ -322,9 +352,13 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
     const int base_line = std::max(desc, 0);
 
     std::vector<GlyphRec> recs;
-    std::unique_ptr<uint8_t, decltype(&heap_caps_free)> blob(nullptr, heap_caps_free);
+    BitmapSpool spool;
     size_t blob_size = 0;
-    size_t blob_capacity = 0;
+    if (!spool.Open(out_path)) {
+        std::snprintf(fail_msg, fail_msg_len, "%s", spool.bytes ? Lang::Strings::TTF_WRITE_FAILED
+                                                             : Lang::Strings::TTF_GLYPH_MEMORY);
+        return false;
+    }
     try {
         recs.reserve(cps.size());
     } catch (...) {
@@ -382,28 +416,19 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
         rec.ox = static_cast<int16_t>(ox);
         rec.oy = static_cast<int16_t>(oy);
         const size_t len = (w == 0 || h == 0) ? 1 : (w * h + 3) / 4;
-        const size_t required = blob_size + len;
-        if (required > blob_capacity) {
-            // 固定步长增长，避免 vector 翻倍扩容的峰值；失败时保留原缓冲并正常退出。
-            constexpr size_t chunk = 64 * 1024;
-            const size_t capacity = ((required + chunk - 1) / chunk) * chunk;
-            auto* next = static_cast<uint8_t*>(heap_caps_realloc(
-                blob.get(), capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-            if (next == nullptr) {
-                std::snprintf(fail_msg, fail_msg_len, Lang::Strings::TTF_GLYPH_MEMORY);
-                return false;
-            }
-            blob.release();
-            blob.reset(next);
-            blob_capacity = capacity;
+        if (len > BitmapSpool::capacity || (spool.used + len > BitmapSpool::capacity && !spool.Flush())) {
+            std::snprintf(fail_msg, fail_msg_len, "%s", Lang::Strings::TTF_WRITE_FAILED);
+            return false;
         }
         rec.bmp_len = static_cast<uint16_t>(len);
         rec.bmp_off = static_cast<uint32_t>(blob_size);
-        std::memset(blob.get() + blob_size, 0, len);
+        auto* pixels = spool.bytes + spool.used;
+        std::memset(pixels, 0, len);
         if (w != 0 && h != 0) {
-            Quantize2bpp(bm.buffer, bm.pitch, w, h, blob.get() + blob_size);
+            Quantize2bpp(bm.buffer, bm.pitch, w, h, pixels);
         }
-        blob_size = required;
+        spool.used += len;
+        blob_size += len;
         try {
             recs.push_back(rec);
         } catch (...) {
@@ -428,7 +453,7 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
     }
     ESP_LOGI(TAG, "writing %s glyphs=%u bytes=%u", out_path,
              static_cast<unsigned>(recs.size()), static_cast<unsigned>(blob_size));
-    if (!WriteEf(out_path, line_height, base_line, recs, blob.get(), blob_size)) {
+    if (!WriteEf(out_path, line_height, base_line, recs, spool, blob_size)) {
         std::snprintf(fail_msg, fail_msg_len, "%s", Lang::Strings::TTF_WRITE_FAILED);
         return false;
     }
@@ -442,7 +467,6 @@ bool RenderOneSize(FT_Face face, const std::vector<uint32_t>& cps, int size_px,
         return false;
     }
     epdfont_close(chk);
-    // 本档结束后立刻释放大块，再进下一档，压峰值内存
     return true;
 }
 

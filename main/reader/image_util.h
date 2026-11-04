@@ -27,7 +27,8 @@ bool DecodeImageFileToL8(const char* path, int max_w, int max_h, RasterImage& ou
 
 /** @brief 等比缩小图片并保留文件透明度；不放大小图，不去除白底。 */
 bool DecodeImageFileOverlay(const char* path, int max_w, int max_h, RasterImage& out,
-                           std::vector<uint8_t>& alpha);
+                           std::vector<uint8_t>& alpha, ImageDecodeCancelled cancelled = nullptr,
+                           void* context = nullptr, ImageDecodeError* error = nullptr);
 
 /** @brief 窥探旧 A2I1 缓冲宽高；失败返回 false */
 bool PeekA2i1Size(const uint8_t* data, size_t len, int* w, int* h);

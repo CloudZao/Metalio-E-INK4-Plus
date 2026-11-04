@@ -11,6 +11,14 @@ std::string Wallpaper_GetActiveFilename();
 
 /** @brief 当前启用的待机壁纸名；未 hydrate 或文件缺失时返回空。 */
 std::string Wallpaper_GetStandbyFilename();
+/** @brief 当前阅读背景文件名；未配置或文件缺失时返回空。 */
+std::string Wallpaper_GetReadingFilename();
+/** @brief 设置阅读背景文件；仅在非 LVGL 任务中调用。 */
+bool Wallpaper_SetReadingFromFile(const char* path, std::string& err_out);
+/** @brief 清除阅读背景文件选择；仅在非 LVGL 任务中调用。 */
+void Wallpaper_ClearReadingWallpaper();
+/** @brief 解析阅读背景路径；仅在后台任务中调用。 */
+bool Wallpaper_TryResolveReadingWallpaperPath(char* out_path, size_t out_len);
 
 /** @brief 是否配置待机壁纸；SD 尚未挂载时保留选择，挂载后由 hydrate 校验。 */
 bool Wallpaper_HasStandbySelection();
@@ -51,7 +59,7 @@ bool Wallpaper_TryResolveActiveWallpaperPath(char* out_path, size_t out_len);
 bool Wallpaper_TryResolveStandbyWallpaperPath(char* out_path, size_t out_len);
 
 using Wallpaper_HydrateDoneFn = void (*)(void* user);
-/** @brief 从 NVS 重新灌入关机/待机缓存；已就绪时只回调。 */
+/** @brief 从 NVS 灌入壁纸选择缓存；已就绪时只回调。 */
 void Wallpaper_RequestHydrateFromNvs(Wallpaper_HydrateDoneFn done, void* user);
 
 /** @brief 同步灌入缓存；仅允许在非 LVGL 任务中调用。 */

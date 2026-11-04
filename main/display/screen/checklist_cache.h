@@ -70,8 +70,11 @@ size_t checklist_cache_copy_all(checklist_cache_item_t* out, size_t max_out);
  */
 size_t checklist_cache_copy_pending(checklist_cache_item_t* out, size_t max_out);
 
-/** @brief 持锁统计指定日期（YYYY-MM-DD）的条目与完成数；无缓存返回 false */
-bool checklist_cache_day_counts(const char* date, size_t* total, size_t* done);
+/**
+ * @brief 持锁统计当日事项及全部已完成、未完成数；无缓存返回 false
+ * @param date 当日日期（YYYY-MM-DD），为空或无效时当日事项为 0，不影响全量统计
+ */
+bool checklist_cache_counts(const char* date, size_t* today, size_t* done, size_t* pending);
 
 #ifdef __cplusplus
 }

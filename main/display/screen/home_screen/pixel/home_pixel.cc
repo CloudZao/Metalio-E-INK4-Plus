@@ -1,5 +1,6 @@
 #include "home_pixel.h"
 #include "book_screen/book_screen.h"
+#include "book_screen/book_text_util.h"
 #include "workbuddy_screen/workbuddy_screen.h"
 #include "home_pixel_font.h"
 #include "home_icon_source.h"
@@ -29,6 +30,7 @@ struct PixelUi {
     lv_obj_t* time = nullptr; // 时分
     lv_obj_t* date = nullptr; // 日期与星期
     lv_obj_t* recent = nullptr; // 最近阅读书名
+    std::string recent_filename; // 已排版的完整文件名，避免每秒重复测宽
     lv_obj_t* percent = nullptr; // 阅读百分比
     lv_obj_t* progress = nullptr; // 阅读进度条
     lv_obj_t* counts[3] = {}; // 今日、完成、未完成计数
@@ -126,13 +128,11 @@ void RefreshRecent() {
     const std::string path = reader::book_home_snapshot::LoadLatestAbsPath();
     reader::BookSession::ProgressPeek peek;
     const bool has_progress = !path.empty() && reader::book_progress_cache::TryGet(path.c_str(), peek);
-    if (path.empty() || (reader::book_progress_cache::IsReady() && !has_progress)) {
-        SetText(s.recent, Lang::Strings::BOOK_NO_RECENT);
-    } else {
-        std::string title = path.substr(path.find_last_of('/') + 1);
-        const auto dot = title.find_last_of('.');
-        if (dot != std::string::npos && dot > 0) title.resize(dot);
-        SetText(s.recent, title.c_str());
+    const std::string filename = path.empty() || (reader::book_progress_cache::IsReady() && !has_progress)
+        ? Lang::Strings::BOOK_NO_RECENT : path.substr(path.find_last_of('/') + 1);
+    if (filename != s.recent_filename) {
+        Book_SetFilenameMiddle(s.recent, filename.c_str());
+        s.recent_filename = filename;
     }
     const int progress = has_progress ? std::clamp(peek.progress_x10, 0, 1000) : 0;
     char percent[12] = "--";
@@ -163,12 +163,13 @@ void Refresh(bool force) {
     }
     SetText(s.time, time_text);
     SetText(s.date, date_text);
-    size_t total = 0, done = 0;
-    const bool has_tasks = valid && checklist_cache_day_counts(day, &total, &done);
-    const size_t values[] = {total, done, total - done};
+    size_t values[3] = {};
+    const bool has_tasks = checklist_cache_counts(valid ? day : nullptr, &values[0], &values[1], &values[2]);
     for (int i = 0; i < 3; ++i) {
         char count[12] = "--";
-        if (has_tasks) std::snprintf(count, sizeof(count), "%02u", static_cast<unsigned>(values[i]));
+        if (has_tasks && (i != 0 || valid)) {
+            std::snprintf(count, sizeof(count), "%02u", static_cast<unsigned>(values[i]));
+        }
         SetText(s.counts[i], count);
     }
     RefreshRecent();
@@ -200,6 +201,7 @@ void HomePixel_Build(lv_obj_t* screen, lv_coord_t status_height) {
     auto* reading = Card(X(64), Y(454), panel_width, Y(144), recent_app);
     BlackTab(reading, Lang::Strings::BOOK_RECENT, false);
     s.recent = Text(reading, Lang::Strings::BOOK_NO_RECENT, X(30), Y(48), TextFont(), X(490));
+    lv_obj_set_height(s.recent, lv_font_get_line_height(TextFont()));
     s.percent = Text(reading, "--", panel_width - X(155), Y(42), &kPixelCounterFont, X(130));
     lv_obj_set_style_text_align(s.percent, LV_TEXT_ALIGN_RIGHT, 0);
     const int progress_width = panel_width - X(60);
