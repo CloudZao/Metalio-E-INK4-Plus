@@ -373,13 +373,16 @@ void EnterCloudMode(int mode) {
     } else {
         HoldActivationPause();
     }
-    if (mode == kCloudModeAp || mode == kCloudModeWifi) {
+    if (mode == kCloudModeApp || mode == kCloudModeAp || mode == kCloudModeWifi) {
         HoldTransferPower();
+    } else {
+        ReleaseTransferPower();
+    }
+    if (mode == kCloudModeAp || mode == kCloudModeWifi) {
         SetRadioStatus(mode == kCloudModeAp ? Lang::Strings::CLOUD_AP_OPENING : Lang::Strings::CLOUD_WIFI_PREPARING);
         KickRadio(mode);
         return;
     }
-    ReleaseTransferPower();
     if (mode == kCloudModeUsb) {
         SetRadioStatus(nullptr);
         if (st.chrome.usb_panel != nullptr && prev != kCloudModeUsb) {

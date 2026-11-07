@@ -1,7 +1,6 @@
 #include "book_screen/book_cloud_library.h"
 
 #include "api_endpoints.h"
-#include "api_http.h"
 #include "assets/lang_config.h"
 #include "board.h"
 #include "book_cover_sidecar.h"
@@ -12,14 +11,13 @@
 #include "reader/book_session.h"
 #include "reader/file_size.h"
 #include "reader/http_download_file.h"
+#include "reader/image_util.h"
+#include "reader/reader_image_budget.h"
 #include "sd_paths.h"
 #include "SdCardManager.hpp"
 
-#include <cctype>
 #include <cstdio>
 #include <cstring>
-#include <memory>
-#include <vector>
 
 #include <esp_log.h>
 #include <sys/stat.h>
@@ -28,133 +26,10 @@
 namespace reader {
 
 static constexpr const char* TAG = "BookCloud";
-static constexpr int kHttpTimeoutMs = 30000;
-static constexpr size_t kMaxBookDownloadBytes = 32 * 1024 * 1024;
-static constexpr size_t kMaxCoverDownloadBytes = 512 * 1024; // coverImageUrl 落旁路，非书本体
-
-// 下载 coverImageUrl 等到内存；失败不抛，err_out 可空
-static bool DownloadUrlToBuffer(const char* url, std::vector<uint8_t>& out, size_t max_bytes,
-                         DownloadGate* gate, std::string& err_out) {
-    out.clear();
-    err_out.clear();
-    if (url == nullptr || url[0] == '\0' || max_bytes == 0) {
-        err_out = Lang::Strings::BOOK_NO_COVER_URL;
-        return false;
-    }
-    if (gate != nullptr && gate->IsCancelled()) {
-        err_out = Lang::Strings::BOOK_CANCELLED;
-        return false;
-    }
-    auto network = Board::GetInstance().GetNetwork();
-    if (network == nullptr) {
-        err_out = Lang::Strings::BOOK_NO_NETWORK;
-        return false;
-    }
-    auto http = network->CreateHttp(0);
-    if (http == nullptr) {
-        err_out = Lang::Strings::BOOK_CONN_FAIL;
-        return false;
-    }
-    DownloadGate::Binding binding;
-    Http* http_raw = http.get();
-    if (gate != nullptr) {
-        if (!gate->BindHttp(http.get())) {
-            err_out = Lang::Strings::BOOK_CANCELLED;
-            return false;
-        }
-    }
-    binding.gate = gate;
-
-    http_raw->SetTimeout(kHttpTimeoutMs);
-    api::ApplyCommonHeaders(http_raw);
-    if (!http_raw->Open("GET", url)) {
-        if (gate != nullptr) {
-            gate->CloseHttp();
-        }
-        err_out = gate != nullptr && gate->IsCancelled() ? Lang::Strings::BOOK_CANCELLED : Lang::Strings::BOOK_DOWNLOAD_FAIL;
-        return false;
-    }
-    const int status = http_raw->GetStatusCode();
-    if (status < 200 || status >= 300) {
-        if (gate != nullptr) {
-            gate->CloseHttp();
-        } else {
-            http_raw->Close();
-        }
-        err_out = Lang::Strings::BOOK_DOWNLOAD_FAIL;
-        return false;
-    }
-
-    const size_t content_length = http_raw->GetBodyLength();
-    if (content_length > max_bytes) {
-        if (gate != nullptr) {
-            gate->CloseHttp();
-        } else {
-            http->Close();
-        }
-        err_out = Lang::Strings::BOOK_COVER_TOO_LARGE;
-        return false;
-    }
-    size_t cap = content_length > 0 ? content_length : max_bytes;
-    if (cap > max_bytes) {
-        cap = max_bytes;
-    }
-
-    constexpr size_t kChunk = 1024;
-    std::unique_ptr<char[]> chunk(new (std::nothrow) char[kChunk]);
-    if (chunk == nullptr) {
-        if (gate != nullptr) {
-            gate->CloseHttp();
-        } else {
-            http_raw->Close();
-        }
-        err_out = Lang::Strings::BOOK_OUT_OF_MEMORY;
-        return false;
-    }
-    out.reserve(cap);
-    while (out.size() < cap) {
-        if (gate != nullptr && gate->IsCancelled()) {
-            gate->CloseHttp();
-            out.clear();
-            err_out = Lang::Strings::BOOK_CANCELLED;
-            return false;
-        }
-        const int n = http_raw->Read(chunk.get(), kChunk);
-        if (n < 0) {
-            if (gate != nullptr) {
-                gate->CloseHttp();
-            } else {
-                http_raw->Close();
-            }
-            out.clear();
-            err_out = Lang::Strings::BOOK_READ_FAIL;
-            return false;
-        }
-        if (n == 0) {
-            break;
-        }
-        if (out.size() + static_cast<size_t>(n) > max_bytes) {
-            if (gate != nullptr) {
-                gate->CloseHttp();
-            } else {
-                http_raw->Close();
-            }
-            out.clear();
-            err_out = Lang::Strings::BOOK_COVER_TOO_LARGE;
-            return false;
-        }
-        out.insert(out.end(), chunk.get(), chunk.get() + static_cast<size_t>(n));
-    }
-    if (gate != nullptr) {
-        gate->CloseHttp();
-    } else {
-        http_raw->Close();
-    }
-    if (out.empty()) {
-        err_out = Lang::Strings::BOOK_EMPTY_COVER;
-        return false;
-    }
-    return true;
+static bool SaveCoverFile(const char* book_path, const char* cover_path) {
+    RasterImage image;
+    return DecodeImageFileToL8(cover_path, kCoverSidecarTargetW, kCoverSidecarTargetH, image) &&
+           SaveBookCoverSidecarFromL8(book_path, image);
 }
 
 std::string CloudBookTask::FileExtension() const {
@@ -210,7 +85,7 @@ std::string FormatCloudFileSize(uint64_t bytes) {
 
 bool DownloadCloudBook(const CloudBookTask& task, std::string& err_out,
                        CloudDownloadProgressFn on_progress, void* progress_user, DownloadGate* gate,
-                       const uint8_t* cover_bytes, size_t cover_len, const char* save_path, bool overwrite) {
+                       const char* cover_path, const char* save_path, bool overwrite) {
     err_out.clear();
     PowerNeedHold hold_net(PowerNeed::OtaDownload);
     if (gate != nullptr && gate->IsCancelled()) {
@@ -245,7 +120,7 @@ bool DownloadCloudBook(const CloudBookTask& task, std::string& err_out,
 
     if (!DownloadHttpToFile(task.download_url.c_str(), tmp_path.c_str(),
                             task.sha256.empty() ? nullptr : task.sha256.c_str(), task.file_size,
-                            kMaxBookDownloadBytes, on_progress, progress_user, err_out, gate)) {
+                            on_progress, progress_user, err_out, gate)) {
         return false;
     }
     if (gate != nullptr && gate->IsCancelled()) {
@@ -261,14 +136,12 @@ bool DownloadCloudBook(const CloudBookTask& task, std::string& err_out,
     ESP_LOGI(TAG, "saved cloud book -> %s", final_path.c_str());
 
     DeleteBookCoverSidecar(final_path.c_str());
-    // 旁路封面：优先列表已缓存的 coverImageUrl 字节；否则再 HTTP；再失败抽书内嵌
+    // 旁路封面复用列表磁盘缓存；无缓存时分块下载，再失败则抽取书内封面。
     const BookFormat fmt = DetectFormatByPath(final_path.c_str());
     if (fmt == BookFormat::kEbook || fmt == BookFormat::kEpub) {
         bool sidecar_ok = false;
-        if (cover_bytes != nullptr && cover_len > 0) {
-            ESP_LOGI(TAG, "cover sidecar try list cache (%u bytes)",
-                     static_cast<unsigned>(cover_len));
-            if (SaveBookCoverSidecarFromBytes(final_path.c_str(), cover_bytes, cover_len)) {
+        if (cover_path != nullptr) {
+            if (SaveCoverFile(final_path.c_str(), cover_path)) {
                 sidecar_ok = true;
                 ESP_LOGI(TAG, "cover sidecar ok source=list_cache %s", final_path.c_str());
             } else {
@@ -277,12 +150,9 @@ bool DownloadCloudBook(const CloudBookTask& task, std::string& err_out,
         }
         if (!sidecar_ok && !task.cover_image_url.empty()) {
             ESP_LOGI(TAG, "cover sidecar try coverImageUrl HTTP");
-            std::vector<uint8_t> downloaded;
             std::string cover_err;
-            if (DownloadUrlToBuffer(task.cover_image_url.c_str(), downloaded, kMaxCoverDownloadBytes,
-                                    gate, cover_err) &&
-                SaveBookCoverSidecarFromBytes(final_path.c_str(), downloaded.data(),
-                                              downloaded.size())) {
+            auto cache = DownloadHttpToCache(task.cover_image_url.c_str(), cover_err, gate);
+            if (cache && SaveCoverFile(final_path.c_str(), cache->path.c_str())) {
                 sidecar_ok = true;
                 ESP_LOGI(TAG, "cover sidecar ok source=coverImageUrl %s", final_path.c_str());
             } else {

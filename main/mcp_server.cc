@@ -84,7 +84,7 @@ void McpServer::AddCommonTools() {
             PropertyList({Property("question", kPropertyTypeString)}),
             [camera](const PropertyList& properties) -> ReturnValue {
                 if (!camera->Capture()) {
-                    throw std::runtime_error("Camera capture failed or busy / 摄像头拍摄失败或正忙，请重试");
+                    return std::string("Camera capture unavailable: check vision service configuration or retry / 无法拍摄，请检查视觉服务配置或重试");
                 }
                 return camera->Explain(properties["question"].value<std::string>());
             });

@@ -1,10 +1,34 @@
 """将快捷控制原始 PNG 无损转换为 Flash 中的 LVGL 灰度透明图像。"""
 
 import argparse
+import zlib
 from pathlib import Path
 
 from PIL import Image
 
+
+def emit(lines, symbol, pixels, width, height, mask):
+    stride = width if mask else width * 2
+    rows = 16 if mask else height
+    offsets = [0]
+    packed = b''
+    for y in range(0, height, rows):
+        tile = zlib.compress(pixels[y * stride:min(y + rows, height) * stride], 9)
+        assert zlib.decompress(tile) == pixels[y * stride:min(y + rows, height) * stride]
+        packed += tile
+        offsets.append(len(packed))
+    lines.append(f'alignas(4) static const uint8_t {symbol}Pixels[] = {{')
+    lines.extend(','.join(map(str, packed[i:i+32])) + ',' for i in range(0, len(packed), 32))
+    lines.append('};')
+    lines.append(f'static const uint32_t {symbol}Offsets[] = {{' + ','.join(map(str, offsets)) + '};')
+    cf = 'LV_COLOR_FORMAT_A8' if mask else 'LV_COLOR_FORMAT_AL88'
+    lines.append(f'const HomeIconCompressed {symbol} = {{ .image = {{ .header = {{'
+                 f'.magic=LV_IMAGE_HEADER_MAGIC, .cf=LV_COLOR_FORMAT_RAW, '
+                 f'.flags=LV_IMAGE_FLAGS_USER8 | LV_IMAGE_FLAGS_USER7, '
+                 f'.w={width}, .h={height}, .stride={stride}, .reserved_2=0}}, '
+                 f'.data_size=sizeof({symbol}Pixels), .data={symbol}Pixels, '
+                 '.reserved=nullptr, .reserved_2=nullptr }, '
+                 f'.tile_offsets={symbol}Offsets, .color_format={cf} }};')
 
 def generate(assets, output):
     lines = ['// 由 tools/generate_quick_control_icons.py 生成；保留原始尺寸及透明留白。',
@@ -23,29 +47,9 @@ def generate(assets, output):
                 raise ValueError('猫爪必须为白色透明图像')
             pixels = bytes(rgba[3::4]) if is_mask else bytes(
                 value for i in range(0, len(rgba), 4) for value in (rgba[i], rgba[i + 3]))
-        lines.append(f'alignas(4) static const uint8_t {symbol}Pixels[] = {{')
-        lines.extend(','.join(str(value) for value in pixels[i:i + 32]) + ','
-                     for i in range(0, len(pixels), 32))
-        lines.append('};')
-        color_format = 'LV_COLOR_FORMAT_A8' if is_mask else 'LV_COLOR_FORMAT_AL88'
-        stride = image.width if is_mask else image.width * 2
-        lines.append(f'const lv_image_dsc_t {symbol} = {{ .header = {{'
-                     f'.magic=LV_IMAGE_HEADER_MAGIC, .cf={color_format}, .flags=0, '
-                     f'.w={image.width}, .h={image.height}, .stride={stride}, .reserved_2=0}}, '
-                     f'.data_size=sizeof({symbol}Pixels), .data={symbol}Pixels, '
-                     '.reserved=nullptr, .reserved_2=nullptr };')
+        emit(lines, symbol, pixels, image.width, image.height, is_mask)
         if not is_mask:
-            mask = symbol.replace('Image', 'Mask')
-            alpha = rgba[3::4]
-            lines.append(f'alignas(4) static const uint8_t {mask}Pixels[] = {{')
-            lines.extend(','.join(str(value) for value in alpha[i:i + 32]) + ','
-                         for i in range(0, len(alpha), 32))
-            lines.append('};')
-            lines.append(f'const lv_image_dsc_t {mask} = {{ .header = {{'
-                         f'.magic=LV_IMAGE_HEADER_MAGIC, .cf=LV_COLOR_FORMAT_A8, .flags=0, '
-                         f'.w={image.width}, .h={image.height}, .stride={image.width}, .reserved_2=0}}, '
-                         f'.data_size=sizeof({mask}Pixels), .data={mask}Pixels, '
-                         '.reserved=nullptr, .reserved_2=nullptr };')
+            emit(lines, symbol.replace('Image', 'Mask'), rgba[3::4], image.width, image.height, True)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 

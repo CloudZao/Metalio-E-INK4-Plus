@@ -15,8 +15,6 @@ std::string SanitizeBasename(const std::string& raw);
 bool IsTtfOrOtfBasename(const std::string& file);
 /** @brief 字体本地路径是否允许 */
 bool IsAllowedFontLocalPath(const std::string& path);
-/** @brief 带进度读取 HTTP 正文 */
-std::string ReadHttpBodyProgress(Http* http, size_t max_bytes, std::string& err_out);
 /** @brief 解析单条推送资源 JSON */
 bool ParsePushResourceObject(const cJSON* obj, CloudPushResource& out);
 /** @brief 转为云书籍任务 */

@@ -4,30 +4,16 @@
 
 /** @brief 密码页取消 */
 void Network_OnPwdCancel(lv_event_t* e);
-/** @brief 显示后再按实际尺寸排布按键 */
-void Network_LayoutCustomKeyboard();
 /** @brief 清空当前密码缓冲 */
 void Network_ClearPassword();
-/** @brief 键盘区域尺寸变化时重排按键 */
-void Network_OnKbAreaSizeChanged(lv_event_t* e);
 /** @brief 刷新密码与末尾静态 I 光标 */
 void Network_RefreshPasswordDisplay();
-/** @brief 退格键长按清空密码 */
-void Network_OnBackspaceLongPressed(lv_event_t* e);
-/** @brief 按当前布局填充键位描述表 */
-void Network_FillKbLayout(KbKeyDesc out[kKbKeysCap]);
-/** @brief 字符/空格/退格：按下即写入 */
-void Network_OnCustomKeyPressed(lv_event_t* e);
-/** @brief 切布局：松手再建盘，避免 PRESSED 里删掉当前键 */
-void Network_OnCustomKeyClicked(lv_event_t* e);
 /** @brief 构建 WiFi 密码输入页 */
 void Network_BuildPasswordPage(lv_obj_t* parent, lv_coord_t top_y);
 /** @brief 打开指定 SSID 的密码页 */
 void Network_OpenPasswordPage(const std::string& ssid, wifi_auth_mode_t authmode);
 /** @brief 密码页连接按钮 */
 void Network_OnPwdConnect(lv_event_t* e);
-/** @brief 按当前模式重建自定义键盘 */
-void Network_RebuildCustomKeyboard();
 /** @brief 关闭密码页并清理临时 UI */
 void Network_ClosePasswordPage();
 /** @brief 密码缓冲退一格 */

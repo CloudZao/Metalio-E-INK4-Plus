@@ -5,6 +5,7 @@
 
 #include "dual_network_board.h"
 #include "dvp_camera_adapter.h"
+#include "dvp_camera.h"
 
 #include "bt_audio_codec.h"
 #include "bq27220_gauge.h"
@@ -107,10 +108,19 @@ public:
         return display_;
     }
 
-    /** @brief 返回按需采集的 DVP 摄像头实例 */
+    /** @brief 首次检测成功后返回 DVP 摄像头实例，检测结果保留至重启 */
     Camera* GetCamera() override {
-        static DvpCamera camera;
-        return &camera;
+        static Camera* camera = []() -> Camera* {
+            dvp_camera::DetectInfo info;
+            const esp_err_t err = dvp_camera::Detect(info, {});
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Camera unavailable; MCP camera tool disabled: %s", esp_err_to_name(err));
+                return nullptr;
+            }
+            static DvpCamera detected_camera;
+            return &detected_camera;
+        }();
+        return camera;
     }
 
     /** @brief 返回板级音频实例，硬件资源在进入音频功能时按需申请 */

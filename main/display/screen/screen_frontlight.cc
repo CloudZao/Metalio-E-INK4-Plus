@@ -115,7 +115,7 @@ void RefreshLightSwitch() {
     lv_label_set_text(s_ui.light_status, on ? Lang::Strings::QUICK_ENABLED : Lang::Strings::QUICK_DISABLED);
     for (auto* slider : {s_ui.brightness, s_ui.warmth})
         lv_obj_set_style_bg_color(slider, on ? lv_color_black() : lv_color_white(), LV_PART_INDICATOR);
-    lv_image_set_src(s_ui.light_icon, on ? &kQuickBrightnessImage : &kQuickBrightnessMask);
+    lv_image_set_src(s_ui.light_icon, on ? &kQuickBrightnessImage.image : &kQuickBrightnessMask.image);
     lv_obj_set_style_image_recolor(s_ui.light_icon, lv_color_black(), 0);
     lv_obj_set_style_image_recolor_opa(s_ui.light_icon, on ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
 }
@@ -286,7 +286,7 @@ lv_obj_t* Slider(lv_obj_t* parent, int x, int y, int width, int height, int valu
     lv_obj_clear_flag(slider, LV_OBJ_FLAG_SCROLLABLE);
     for (auto code : {LV_EVENT_VALUE_CHANGED, LV_EVENT_RELEASED, LV_EVENT_PRESS_LOST})
         lv_obj_add_event_cb(slider, LightChanged, code, nullptr);
-    const auto* mask = warmth ? &kQuickColorTempMask : &kQuickBrightnessMask;
+    const auto* mask = warmth ? &kQuickColorTempMask.image : &kQuickBrightnessMask.image;
     auto* icon = Box(slider, 0, 0, mask->header.w, mask->header.h);
     lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(icon, LV_OBJ_FLAG_FLOATING);
@@ -320,6 +320,7 @@ void ScreenFrontlightHide() {
 }
 
 void ScreenFrontlightShow() {
+    if (!HomeIconDecoderReady()) return;
     if (OtaUpgradeScreen::IsActive() || StandbyScreen::IsActive() ||
         s_ui.root || !Frontlight::GetInstance().initialized()) return;
     auto* root = Box(lv_layer_top(), 0, 0, LV_HOR_RES, LV_VER_RES);
@@ -378,12 +379,12 @@ void ScreenFrontlightShow() {
     s_ui.wifi_title = Label(s_ui.wifi, "Wi-Fi");
     lv_obj_set_pos(s_ui.wifi_title, width * 100 / kDesignWidth, wifi_h / 5);
     s_ui.wifi_status = Label(s_ui.wifi, "");
-    lv_obj_set_width(s_ui.wifi_status, switch_w - kQuickCatPawImage.header.w - 4 - width * 100 / kDesignWidth - 8);
+    lv_obj_set_width(s_ui.wifi_status, switch_w - kQuickCatPawImage.image.header.w - 4 - width * 100 / kDesignWidth - 8);
     lv_obj_set_style_text_font(s_ui.wifi_status, status_font, 0);
     lv_obj_set_height(s_ui.wifi_status, status_font->line_height);
     lv_label_set_long_mode(s_ui.wifi_status, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(s_ui.wifi_status, width * 100 / kDesignWidth, wifi_h * 3 / 5);
-    s_ui.wifi_paw = NativeIcon(s_ui.wifi, &kQuickCatPawImage);
+    s_ui.wifi_paw = NativeIcon(s_ui.wifi, &kQuickCatPawImage.image);
     lv_obj_align(s_ui.wifi_paw, LV_ALIGN_RIGHT_MID, -4, 0);
     s_ui.light_switch = Box(panel, width * 58 / kDesignWidth, top + slider_h - wifi_h, switch_w, wifi_h);
     lv_obj_set_style_bg_opa(s_ui.light_switch, LV_OPA_COVER, 0);
@@ -392,7 +393,7 @@ void ScreenFrontlightShow() {
     lv_obj_set_style_radius(s_ui.light_switch, wifi_h * 2 / 5, 0);
     HapticAttachClick(s_ui.light_switch);
     lv_obj_add_event_cb(s_ui.light_switch, ToggleLight, LV_EVENT_CLICKED, nullptr);
-    s_ui.light_icon = NativeIcon(s_ui.light_switch, &kQuickBrightnessImage);
+    s_ui.light_icon = NativeIcon(s_ui.light_switch, &kQuickBrightnessImage.image);
     lv_obj_align(s_ui.light_icon, LV_ALIGN_LEFT_MID, 6, -16);
     s_ui.light_title = Label(s_ui.light_switch, Lang::Strings::SETTINGS_FRONTLIGHT_TITLE);
     lv_obj_set_pos(s_ui.light_title, width * 100 / kDesignWidth, wifi_h / 5);

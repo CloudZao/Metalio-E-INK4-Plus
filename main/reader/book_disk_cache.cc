@@ -42,7 +42,7 @@ bool BookPageStore::Push(Page&& page) {
         ItemRecord rec{item.source_block, item.source_begin, item.source_end,
             static_cast<uint32_t>(item.text.size()), static_cast<uint32_t>(item.image_href.size()),
             item.image_w, item.image_h, static_cast<uint8_t>(item.kind),
-            static_cast<uint8_t>(item.para_indent | (item.para_gap_before << 1) | (item.chapter_title << 2))};
+            static_cast<uint8_t>(item.para_indent | (item.para_gap_before << 1) | (item.chapter_title << 2) | (item.justify << 3))};
         if (std::fwrite(&rec, sizeof(rec), 1, fp_) != 1 ||
             std::fwrite(item.text.data(), 1, rec.text_bytes, fp_) != rec.text_bytes ||
             std::fwrite(item.image_href.data(), 1, rec.href_bytes, fp_) != rec.href_bytes) return good_ = false;
@@ -93,7 +93,7 @@ const Page& BookPageStore::operator[](size_t index) const {
             PageItem item;
             item.source_block = rec.source_block; item.source_begin = rec.source_begin; item.source_end = rec.source_end;
             item.kind = static_cast<ContentKind>(rec.kind); item.image_w = rec.width; item.image_h = rec.height;
-            item.para_indent = rec.flags & 1; item.para_gap_before = rec.flags & 2; item.chapter_title = rec.flags & 4;
+            item.para_indent = rec.flags & 1; item.para_gap_before = rec.flags & 2; item.chapter_title = rec.flags & 4; item.justify = rec.flags & 8;
             item.text.resize(rec.text_bytes); item.image_href.resize(rec.href_bytes);
             if (std::fread(item.text.data(), 1, rec.text_bytes, fp_) != rec.text_bytes ||
                 std::fread(item.image_href.data(), 1, rec.href_bytes, fp_) != rec.href_bytes) { good_ = false; break; }

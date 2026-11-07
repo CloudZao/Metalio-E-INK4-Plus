@@ -141,9 +141,6 @@ void Network_OnScreenUnload(lv_event_t* /*e*/) {
     Network_CloseStatusOverlay();
     Network_StopForScreen();
     Network_ReleaseUiKeepNet();
-    for (int i = 0; i < kKbKeysCap; ++i) {
-        Network_State().kb_keys[i] = nullptr;
-    }
     Network_State().ui = {};
     Network_State().scan_results.clear();
     Network_State().scan_in_progress = false;
@@ -160,10 +157,6 @@ const lv_font_t* Network_UiFont() {
 }
 
 // 键盘用系统字库 30@2，失败回退 UI 默认字
-const lv_font_t* Network_KbFont() {
-    const lv_font_t* f = fontpack_lv_font_get(30, 2);
-    return f != nullptr ? f : Network_UiFont();
-}
 
 bool Network_IsPasswordPageOpen() {
     return Network_State().ui.pwd_page != nullptr && !lv_obj_has_flag(Network_State().ui.pwd_page, LV_OBJ_FLAG_HIDDEN);

@@ -45,7 +45,8 @@ bool DvpCamera::Capture() {
         jpeg_.reset();
         jpeg_len_ = 0;
         if (explain_url_.empty()) {
-            throw std::runtime_error("Vision service is not configured / 未配置视觉服务");
+            ESP_LOGW(kTag, "Capture skipped: vision service URL is not configured");
+            return false;
         }
     }
     uint8_t* data = nullptr;
@@ -68,7 +69,10 @@ std::string DvpCamera::Explain(const std::string& question) {
         url = explain_url_;
         token = explain_token_;
     }
-    if (url.empty()) throw std::runtime_error("Vision service is not configured / 未配置视觉服务");
+    if (url.empty()) {
+        ESP_LOGW(kTag, "Explain skipped: vision service URL is not configured");
+        return "Vision service is not configured / 未配置视觉服务";
+    }
     if (!jpeg) throw std::runtime_error("No photo captured / 尚未拍摄照片");
     auto& board = Board::GetInstance();
     auto network = board.GetNetwork();

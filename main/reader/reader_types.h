@@ -60,6 +60,7 @@ struct PageItem {
     bool para_gap_before = false;
     // 章名行：加粗居中；「第N章」与章节名可分行；误识别也不丢句
     bool chapter_title = false;
+    bool justify = false; // 容量折行的正文续行或续列，两端对齐；段末和章名不拉伸
 };
 
 struct Page {
@@ -70,7 +71,7 @@ struct Page {
 constexpr int kReaderLineSpacingPercentDefault = 10; // 标准行疏密，按字体行框比例计算
 constexpr lv_coord_t kReaderParaGapDefault = 56; // 普通段落在行距之外增加的默认段距，单位像素
 constexpr lv_coord_t kReaderChapterTitleAfterGap = 10; // 章名与后文额外间距
-constexpr int kReaderUnderlineGap = 2; // 横排字形下沿与下划线之间的净空像素数
+constexpr int kReaderUnderlineGap = 2; // 字形与横排下划线或竖排装饰线之间的净空像素数
 constexpr int kReaderUnderlineThickness = 2; // 横排下划线的像素线宽
 
 inline int ReaderGlyphInkBottom(const lv_font_t* font, const lv_font_glyph_dsc_t& glyph) {
@@ -100,7 +101,8 @@ inline TextLineLayout MakeTextLineLayout(const lv_font_t* font, lv_coord_t exten
     layout.extent = std::max<lv_coord_t>(0, extent);
     const int line_h = font && font->line_height > 0 ? font->line_height : 24;
     // 行内始终预留装饰空间，开关下划线不改变文字位置和分页。
-    const int frame = line_h + (vertical ? 1 : kReaderUnderlineGap + kReaderUnderlineThickness);
+    // 竖排额外预留 1px 线宽及标题向右加粗的 1px。
+    const int frame = line_h + (vertical ? kReaderUnderlineGap + 2 : kReaderUnderlineGap + kReaderUnderlineThickness);
     layout.line_height = static_cast<lv_coord_t>(frame);
     const int desired = std::max(frame, line_h + static_cast<int>(
         (static_cast<int64_t>(line_h) * std::max(0, spacing_percent) + 50) / 100));

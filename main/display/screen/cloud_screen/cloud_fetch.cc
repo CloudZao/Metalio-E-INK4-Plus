@@ -36,8 +36,8 @@ void AsyncFetchDone(void* p) {
         st.data.items = std::move(msg->items);
         st.data.thumbs.clear();
         st.data.thumbs.resize(st.data.items.size());
-        st.data.cover_bytes.clear();
-        st.data.cover_bytes.resize(st.data.items.size());
+        st.data.cover_cache.clear();
+        st.data.cover_cache.resize(st.data.items.size());
         ++st.data.thumb_epoch;
         st.data.error.clear();
         st.data.page = 0;
@@ -50,7 +50,7 @@ void AsyncFetchDone(void* p) {
         st.data.items.clear();
         st.data.filtered.clear();
         st.data.thumbs.clear();
-        st.data.cover_bytes.clear();
+        st.data.cover_cache.clear();
         ++st.data.thumb_epoch;
         st.data.covers_loading = false;
         st.data.error = msg->error[0] != '\0' ? msg->error : Lang::Strings::CLOUD_SYNC_FAIL;

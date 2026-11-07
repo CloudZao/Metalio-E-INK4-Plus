@@ -448,12 +448,6 @@ bool SyncBusy() {
     return st.data.waiting_net || st.data.loading;
 }
 
-void ReleaseUiKeepNet() {
-    if (s_ui_net_held.exchange(false)) {
-        PowerPolicy::GetInstance().Release(PowerNeed::UiKeepNet);
-    }
-}
-
 int PageCount() {
     auto& st = Cloud_State();
     if (st.data.filtered.empty() || st.data.page_size <= 0) {

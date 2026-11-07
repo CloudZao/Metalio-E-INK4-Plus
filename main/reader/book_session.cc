@@ -36,6 +36,7 @@
 #include "text_encoding.h"
 #include "txt_chapter.h"
 #include "vertical_text.h"
+#include "text_spacing.h"
 #ifndef EBOOK_EMULATOR
 #include "assets/lang_config.h"
 #include "assets/lang_reader.h"
@@ -73,9 +74,10 @@ std::atomic<uint32_t> s_txt_work_id{0}; // 区分异步回收期间重叠的 TXT
 constexpr size_t kMaxTxtBytes = static_cast<size_t>(INT32_MAX) - 1; // 源偏移和 fseek 的表示边界
 constexpr size_t kTxtReadChunk = 1024;
 constexpr uint32_t kMaxLineSourceBytes = 512;
-constexpr uint32_t kTxtIdxVersion = 14; // 章节标题保留折行并计入序数拆行高度
+constexpr uint32_t kTxtIdxVersion = 20; // 横排尾标点适度压缩，超限按容量换行
 constexpr uint16_t kTxtLineParaStart = 0x8000u;
-constexpr uint16_t kTxtLineLenMask = 0x7FFFu;
+constexpr uint16_t kTxtLineJustify = 0x4000u;
+constexpr uint16_t kTxtLineLenMask = 0x3FFFu;
 constexpr size_t kMaxTocEntries = 8000;
 // 单章解压合计上限：与 tools/ebook/epdbook/format.py DEVICE_CHAPTER_MAX_UNCOMP 一致。
 // 超限拒绝加载；分页 OOM 软失败。转换默认拆到 DEFAULT_CHAPTER_MAX_BYTES(256KB)。
@@ -161,7 +163,7 @@ bool FlushLineToPage(std::string& line, BookPageStore& pages, Page& cur, lv_coor
                      const TextLineLayout& layout, int& row, lv_coord_t gap_before,
                      bool para_indent = false, bool chapter_title = false,
                      bool para_gap_before = false, uint32_t source_block = UINT32_MAX,
-                     uint32_t source_begin = 0, uint32_t source_end = 0) {
+                     uint32_t source_begin = 0, uint32_t source_end = 0, bool justify = false) {
     if (line.empty()) {
         return true;
     }
@@ -179,6 +181,7 @@ bool FlushLineToPage(std::string& line, BookPageStore& pages, Page& cur, lv_coor
         item.para_indent = para_indent && !chapter_title;
         item.para_gap_before = para_gap_before;
         item.chapter_title = chapter_title;
+        item.justify = justify && !chapter_title;
         item.text = std::move(line);
         line.clear();
         cur.items.push_back(std::move(item));
@@ -1066,7 +1069,9 @@ TextLineLayout BookSession::LineLayout() const {
     return MakeTextLineLayout(font_, viewport_h_, line_spacing_percent_, vertical_writing_);
 }
 lv_coord_t BookSession::LayoutGlyphWidth(uint32_t cp) const {
-    return vertical_writing_ ? VerticalAdvance(cp, LayoutLineHeight()) : GlyphWidth(font_, cp);
+    if (!vertical_writing_) return GlyphWidth(font_, cp);
+    const int space_width = IsTxtParaIndentWs(cp) && cp != 0x3000u ? GlyphWidth(font_, cp) : 0;
+    return VerticalAdvance(cp, LayoutLineHeight(), space_width);
 }
 lv_coord_t BookSession::LayoutIndentWidth() const {
     return vertical_writing_
@@ -1647,6 +1652,7 @@ void BookSession::MaterializeTxtPage(int page) const {
         PageItem item;
         item.kind = ContentKind::kText;
         const bool para_start = (lr.len & kTxtLineParaStart) != 0;
+        item.justify = (lr.len & kTxtLineJustify) != 0;
         if ((lr.len & kTxtLineLenMask) == 0) {
             continue;
         }
@@ -1740,6 +1746,7 @@ bool BookSession::StreamPaginateTxt(FILE* fp, size_t file_size) {
     const lv_coord_t indent_w = LayoutIndentWidth();
     lv_coord_t y = 0;
     VerticalBreakState breaks;
+    TextSpacingState spacing;
     uint32_t line_off = 0;
     uint32_t line_len = 0;
     lv_coord_t line_w = 0;
@@ -1763,8 +1770,8 @@ bool BookSession::StreamPaginateTxt(FILE* fp, size_t file_size) {
     const auto layout = LineLayout();
     if (layout.count <= 0) { error_ = BookReadError::kUnsupported; return false; }
     int row = 0;
-    auto flush_line = [&](uint32_t next_off) -> bool {
-        breaks = {};
+    auto flush_line = [&](uint32_t next_off, bool justify = false) -> bool {
+        breaks = {}; spacing = {};
         if (line_len == 0) {
             line_off = next_off;
             line_w = 0;
@@ -1798,6 +1805,7 @@ bool BookSession::StreamPaginateTxt(FILE* fp, size_t file_size) {
         if (line_para_start && store_len > 0) {
             store_len = static_cast<uint16_t>(store_len | kTxtLineParaStart);
         }
+        if (justify && !is_chap) store_len |= kTxtLineJustify;
         txt_lines_[txt_lines_len_++] = TxtLineRef{line_off, store_len};
         y += layout.CellHeight(row++);
         if (is_chap && !vertical_writing_) {
@@ -1894,18 +1902,22 @@ bool BookSession::StreamPaginateTxt(FILE* fp, size_t file_size) {
         }
 
         const lv_coord_t cw = LayoutGlyphWidth(cp);
+        TextSpacingState candidate_spacing = spacing;
+        if (!vertical_writing_ && line_w + cw > viewport_w_) ObserveTextGlyph(candidate_spacing, font_, cp);
         VerticalBreakState candidate = breaks;
-        if (vertical_writing_) candidate.Observe(cp, goff, para_title_acc.size());
-        if (line_started && (line_w + cw > viewport_w_ || line_len + glen > kMaxLineSourceBytes)) {
+        candidate.Observe(cp, goff, para_title_acc.size());
+        if (line_started && ((line_w + cw > viewport_w_ && (vertical_writing_ ||
+            !CanFitTrailingPunctuation(cp, line_w + cw, viewport_w_, breaks.glyphs + 1, LayoutLineHeight(), candidate_spacing.limit))) ||
+            line_len + glen > kMaxLineSourceBytes)) {
             if (vertical_writing_ && candidate.valid && candidate.offset < goff) {
                 const uint32_t cut = candidate.offset;
                 line_len = cut - line_off;
                 para_title_acc.resize(candidate.text_size);
                 if (!stream.Seek(cut)) { error_ = BookReadError::kFileIo; return false; }
-                if (!flush_line(cut)) return false;
+                if (!flush_line(cut, true)) return false;
                 continue;
             }
-            if (!flush_line(goff)) {
+            if (!flush_line(goff, true)) {
                 ESP_LOGE(TAG, "txt paginate OOM");
                 return false;
             }
@@ -1939,7 +1951,8 @@ bool BookSession::StreamPaginateTxt(FILE* fp, size_t file_size) {
                 at_para_start = false;
             }
         }
-        if (vertical_writing_) breaks.Observe(cp, goff, para_title_acc.size());
+        if (!vertical_writing_) ObserveTextGlyph(spacing, font_, cp);
+        breaks.Observe(cp, goff, para_title_acc.size());
         line_len += glen;
         line_w += cw;
         // 顶格段累加 UTF-8 供章名识别，禁则回退时同步截断。
@@ -2268,20 +2281,21 @@ bool BookSession::PaginateChapter(int chapter, BookPageStore& built, const Layou
     bool previous_title = false;
     std::string line;
     VerticalBreakState breaks;
+    TextSpacingState spacing;
     uint32_t block_index = UINT32_MAX, offset = 0, line_begin = 0;
     bool first_line = true;
     size_t glyphs = 0;
     bool preview_full = false;
     ZipReader image_source;
-    auto flush_line = [&](bool title) {
+    auto flush_line = [&](bool title, bool justify = false) {
         if (line.empty()) return true;
         const bool indent = first_line && !title;
         if (indent) StripLeadingParaWs(line);
         const lv_coord_t gap = first_line ? ReaderParagraphGap(para_gap_, previous_title) : 0;
         const bool ok = FlushLineToPage(line, built, cur, y, layout, row, gap,
-            indent, title, first_line, block_index, line_begin, offset);
+            indent, title, first_line, block_index, line_begin, offset, justify);
         if (preview && !built.empty()) preview_full = true;
-        first_line = false; line_w = 0; breaks = {};
+        first_line = false; line_w = 0; breaks = {}; spacing = {};
         return ok && !preview_full;
     };
     auto interrupted = [&]() {
@@ -2326,16 +2340,20 @@ bool BookSession::PaginateChapter(int chapter, BookPageStore& built, const Layou
                 if (first_line && line.empty() && IsTxtParaIndentWs(cp)) { i += n; offset += n; continue; }
                 lv_coord_t width = LayoutGlyphWidth(cp);
                 if ((cp == 0x20 || cp == 0xA0) && width <= 0) width = std::max<lv_coord_t>(1, line_h / 3);
+                TextSpacingState candidate_spacing = spacing;
+                if (!vertical_writing_ && line_w + width > viewport_w_) ObserveTextGlyph(candidate_spacing, font_, cp);
                 VerticalBreakState candidate = breaks;
-                if (vertical_writing_) candidate.Observe(cp, offset, line.size());
-                if (!line.empty() && (line_w + width > viewport_w_ || line.size() + n > kMaxLineSourceBytes)) {
+                candidate.Observe(cp, offset, line.size());
+                if (!line.empty() && ((line_w + width > viewport_w_ && (vertical_writing_ ||
+                    !CanFitTrailingPunctuation(cp, line_w + width, viewport_w_, breaks.glyphs + 1, line_h, candidate_spacing.limit))) ||
+                    line.size() + n > kMaxLineSourceBytes)) {
                     if (vertical_writing_ && candidate.valid && candidate.offset < offset) {
                         const uint32_t cut = candidate.offset;
                         std::string tail = line.substr(candidate.text_size);
                         line.resize(candidate.text_size);
                         const uint32_t end = offset;
                         offset = cut;
-                        if (!flush_line(block.chapter_title)) return false;
+                        if (!flush_line(block.chapter_title, true)) return false;
                         line = std::move(tail);
                         line_begin = cut;
                         offset = end;
@@ -2349,10 +2367,11 @@ bool BookSession::PaginateChapter(int chapter, BookPageStore& built, const Layou
                             line_w += LayoutGlyphWidth(tail_cp);
                             j += count;
                         }
-                    } else if (!flush_line(block.chapter_title)) return false;
+                    } else if (!flush_line(block.chapter_title, true)) return false;
                 }
                 if (line.empty()) { line_begin = offset; line_w = first_line && !block.chapter_title ? LayoutIndentWidth() : 0; }
-                if (vertical_writing_) breaks.Observe(cp, offset, line.size());
+                if (!vertical_writing_) ObserveTextGlyph(spacing, font_, cp);
+                breaks.Observe(cp, offset, line.size());
                 line.append(block.text.data() + i, n); line_w += width; i += n; offset += n;
             }
             if (!block.continues) {
@@ -2462,7 +2481,7 @@ bool BookSession::CountChapterPages(int chapter, int& out_pages) const {
 
 namespace {
 
-constexpr uint32_t kChapterPageCacheVersion = 5;
+constexpr uint32_t kChapterPageCacheVersion = 11;
 
 #pragma pack(push, 1)
 struct ChapterPageHdr {
@@ -3167,7 +3186,8 @@ bool BookSession::FillTxtLivePreview(uint32_t byte_off, bool at_para_start) {
     };
 
     VerticalBreakState breaks;
-    auto flush_line = [&]() -> int {
+    TextSpacingState spacing;
+    auto flush_line = [&](bool justify = false) -> int {
         // 1=ok, 0=page full, -1=oom；标志与 MaterializeTxtPage 对齐
         if (line.empty()) {
             line_started = false;
@@ -3229,6 +3249,7 @@ bool BookSession::FillTxtLivePreview(uint32_t byte_off, bool at_para_start) {
             item.para_indent = indent;
             item.para_gap_before = line_para_start;
             item.chapter_title = is_chap || chap_cont;
+            item.justify = justify && !item.chapter_title;
             item.text = is_chap && !vertical_writing_ ? FormatChapterHeadingDisplay(line) : std::move(line);
             live_preview_page_.items.push_back(std::move(item));
         } catch (const std::bad_alloc&) {
@@ -3236,7 +3257,7 @@ bool BookSession::FillTxtLivePreview(uint32_t byte_off, bool at_para_start) {
             return -1;
         }
         line.clear();
-        breaks = {};
+        breaks = {}; spacing = {};
         y += layout.CellHeight(row) + chap_extra;
         row += rows_needed;
         line_started = false;
@@ -3277,13 +3298,17 @@ bool BookSession::FillTxtLivePreview(uint32_t byte_off, bool at_para_start) {
         if ((cp == 0x20 || cp == 0xA0) && cw <= 0) {
             cw = std::max<lv_coord_t>(1, LayoutLineHeight() / 3);
         }
+        TextSpacingState candidate_spacing = spacing;
+        if (!vertical_writing_ && line_w + cw > viewport_w_) ObserveTextGlyph(candidate_spacing, font_, cp);
         VerticalBreakState candidate = breaks;
-        if (vertical_writing_) candidate.Observe(cp, goff, line.size());
-        if (line_started && (line_w + cw > viewport_w_ || line.size() + 4 > kMaxLineSourceBytes)) {
+        candidate.Observe(cp, goff, line.size());
+        if (line_started && ((line_w + cw > viewport_w_ && (vertical_writing_ ||
+            !CanFitTrailingPunctuation(cp, line_w + cw, viewport_w_, breaks.glyphs + 1, LayoutLineHeight(), candidate_spacing.limit))) ||
+            line.size() + 4 > kMaxLineSourceBytes)) {
             const bool rewind = vertical_writing_ && candidate.valid && candidate.offset < goff;
             const uint32_t cut = rewind ? candidate.offset : goff;
             if (rewind) line.resize(candidate.text_size);
-            const int fr = flush_line();
+            const int fr = flush_line(true);
             if (fr == 0) {
                 live_preview_next_off_ = line_start_off;
                 live_preview_next_at_para_start_ = line_para_start;
@@ -3310,7 +3335,8 @@ bool BookSession::FillTxtLivePreview(uint32_t byte_off, bool at_para_start) {
                 line_w = 0;
             }
         }
-        if (vertical_writing_) breaks.Observe(cp, goff, line.size());
+        if (!vertical_writing_) ObserveTextGlyph(spacing, font_, cp);
+        breaks.Observe(cp, goff, line.size());
         if (!append_cp(cp)) {
             return false;
         }

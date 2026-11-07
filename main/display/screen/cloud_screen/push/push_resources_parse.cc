@@ -11,6 +11,8 @@
 #include "sd_paths.h"
 #include "SdCardManager.hpp"
 #include <cctype>
+#include <cstdlib>
+#include <new>
 #include <climits>
 #include <cstdio>
 #include <cstring>
@@ -92,51 +94,6 @@ bool IsAllowedFontLocalPath(const std::string& path) {
     const std::string fonts_prefix = std::string(SD_PATH_FONTS) + "/";
     const std::string ttf_prefix = std::string(SD_PATH_FONT_SRC) + "/";
     return path.rfind(fonts_prefix, 0) == 0 || path.rfind(ttf_prefix, 0) == 0;
-}
-
-std::string ReadHttpBodyProgress(Http* http, size_t max_bytes, std::string& err_out) {
-    err_out.clear();
-    if (http == nullptr) {
-        err_out = Lang::Strings::CLOUD_CONN_FAIL;
-        return {};
-    }
-    const size_t expect = http->GetBodyLength();
-    if (expect > max_bytes) {
-        err_out = Lang::Strings::CLOUD_LIST_TOO_LARGE;
-        return {};
-    }
-
-    std::string body;
-    if (expect > 0) {
-        body.reserve(expect);
-    }
-    char buf[1024];
-    const int64_t t0 = esp_timer_get_time();
-    int64_t last_log = t0;
-    while (true) {
-        const int n = http->Read(buf, sizeof(buf));
-        if (n < 0) {
-            err_out = Lang::Strings::CLOUD_READ_TIMEOUT;
-            return {};
-        }
-        if (n == 0) {
-            break;
-        }
-        if (body.size() + static_cast<size_t>(n) > max_bytes) {
-            err_out = Lang::Strings::CLOUD_LIST_TOO_LARGE;
-            return {};
-        }
-        body.append(buf, static_cast<size_t>(n));
-        const int64_t now = esp_timer_get_time();
-        if (now - last_log >= 2000000) {
-            ESP_LOGI(TAG, "Read progress %u/%u bytes %dms", static_cast<unsigned>(body.size()),
-                     static_cast<unsigned>(expect), static_cast<int>((now - t0) / 1000));
-            last_log = now;
-        }
-    }
-    ESP_LOGI(TAG, "Read done %u bytes %dms", static_cast<unsigned>(body.size()),
-             static_cast<int>((esp_timer_get_time() - t0) / 1000));
-    return body;
 }
 
 namespace {
@@ -345,8 +302,132 @@ bool CloudPushResource::IsDownloaded() const {
     return st.st_size > 0;
 }
 
+namespace {
+// 网络输入只保留一个块；资源对象逐条交给现有 cJSON 校验。
+class HttpJsonStream {
+public:
+    using Ch = char;
+    explicit HttpJsonStream(Http* http) : http_(http) {}
+    Ch Peek() {
+        if (position_ == size_ && !ended_) {
+            const int count = http_->Read(buffer_, sizeof(buffer_));
+            failed = count < 0;
+            ended_ = count <= 0;
+            size_ = count > 0 ? static_cast<size_t>(count) : 0;
+            position_ = 0;
+        }
+        return position_ < size_ ? buffer_[position_] : '\0';
+    }
+    Ch Take() {
+        const Ch value = Peek();
+        if (position_ < size_) { ++position_; ++offset_; }
+        return value;
+    }
+    size_t Tell() const { return offset_; }
+    bool AtEnd() { return Peek() == '\0' && ended_ && position_ == size_; }
+    bool failed = false; // 网络读取错误
+private:
+    Http* http_;
+    char buffer_[1024]{};
+    size_t position_ = 0, size_ = 0, offset_ = 0;
+    bool ended_ = false;
+};
+
+class PushListHandler {
+public:
+    explicit PushListHandler(std::vector<CloudPushResource>& out) : out_(out) {}
+    bool Parse(HttpJsonStream& stream) {
+        Space(stream);
+        if (stream.Take() != '{') return false;
+        root_object = true;
+        Space(stream);
+        if (stream.Peek() == '}') stream.Take();
+        else for (;;) {
+            auto key = Value(stream);
+            if (!key || !cJSON_IsString(key.get())) return false;
+            Space(stream);
+            if (stream.Take() != ':') return false;
+            Space(stream);
+            if (std::strcmp(key->valuestring, "data") == 0 && stream.Peek() == '[') {
+                valid_data = true;
+                if (!Items(stream)) return false;
+            } else {
+                auto value = Value(stream);
+                if (!value) return false;
+                if (std::strcmp(key->valuestring, "code") == 0) {
+                    has_code = cJSON_IsNumber(value.get());
+                    if (has_code) code = value->valuedouble;
+                } else if (std::strcmp(key->valuestring, "msg") == 0 && cJSON_IsString(value.get())) {
+                    message = value->valuestring;
+                } else if (std::strcmp(key->valuestring, "data") == 0) {
+                    valid_data = cJSON_IsNull(value.get());
+                }
+            }
+            Space(stream);
+            const char separator = stream.Take();
+            if (separator == '}') break;
+            if (separator != ',') return false;
+        }
+        Space(stream);
+        return stream.AtEnd() && !stream.failed;
+    }
+    bool root_object = false; // 顶层响应类型
+    bool has_code = false; // code 必须为数值
+    double code = -1;
+    bool valid_data = true; // 缺省或 null 表示没有任务
+    std::string message;
+private:
+    using Json = std::unique_ptr<cJSON, decltype(&cJSON_Delete)>;
+    static void Space(HttpJsonStream& stream) {
+        while (stream.Peek() == ' ' || stream.Peek() == '\t' || stream.Peek() == '\r' || stream.Peek() == '\n')
+            stream.Take();
+    }
+    // 只识别一个 JSON 值的边界，语法、转义及嵌套由 cJSON 统一校验。
+    static Json Value(HttpJsonStream& stream) {
+        Space(stream);
+        std::string raw;
+        unsigned depth = 0;
+        bool quoted = false, escaped = false;
+        for (;;) {
+            const char ch = stream.Peek();
+            if (!ch) break;
+            if (!quoted && depth == 0 && (ch == ',' || ch == ']' || ch == '}' ||
+                ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n')) break;
+            raw.push_back(stream.Take());
+            if (quoted) {
+                if (escaped) escaped = false;
+                else if (ch == '\\') escaped = true;
+                else if (ch == '"') { quoted = false; if (depth == 0) break; }
+            } else if (ch == '"') quoted = true;
+            else if (ch == '{' || ch == '[') ++depth;
+            else if (ch == '}' || ch == ']') { if (--depth == 0) break; }
+        }
+        return Json(cJSON_ParseWithLengthOpts(raw.c_str(), raw.size() + 1, nullptr, true), cJSON_Delete);
+    }
+    bool Items(HttpJsonStream& stream) {
+        stream.Take();
+        Space(stream);
+        if (stream.Peek() == ']') { stream.Take(); return true; }
+        for (;;) {
+            auto item = Value(stream);
+            if (!item) return false;
+            CloudPushResource resource;
+            if (ParsePushResourceObject(item.get(), resource)) {
+                LogResourceSummary(item.get(), resource, out_.size());
+                out_.push_back(std::move(resource));
+            } else ESP_LOGW(TAG, "skip invalid push resource item");
+            Space(stream);
+            const char separator = stream.Take();
+            if (separator == ']') return true;
+            if (separator != ',') return false;
+        }
+    }
+    std::vector<CloudPushResource>& out_;
+};
+} // namespace
+
 bool FetchPushResources(std::vector<CloudPushResource>& out, std::string& err_out,
-                        DownloadGate* gate) {
+                        DownloadGate* gate) try {
     out.clear();
     err_out.clear();
 
@@ -403,78 +484,32 @@ bool FetchPushResources(std::vector<CloudPushResource>& out, std::string& err_ou
     }
 
     const int status = http_raw->GetStatusCode();
-    std::string read_err;
-    const std::string body = ReadHttpBodyProgress(http_raw, kMaxTaskListBodyBytes, read_err);
-    if (gate != nullptr) {
-        gate->CloseHttp();
-        if (gate->IsCancelled()) {
-            err_out = Lang::Strings::CLOUD_CANCELLED;
-            return false;
-        }
-    } else {
-        http_raw->Close();
-    }
-    ESP_LOGI(TAG, "list response status=%d bytes=%u", status,
-             static_cast<unsigned>(body.size()));
-    if (status >= 100 && (status < 200 || status >= 300)) {
+    HttpJsonStream stream(http_raw);
+    PushListHandler handler(out);
+    const bool parsed = handler.Parse(stream);
+    if (gate != nullptr) gate->CloseHttp();
+    else http_raw->Close();
+    ESP_LOGI(TAG, "list response status=%d bytes=%u", status, static_cast<unsigned>(stream.Tell()));
+    if (gate != nullptr && gate->IsCancelled()) err_out = Lang::Strings::CLOUD_CANCELLED;
+    else if (status < 200 || status >= 300) {
         err_out = std::string(Lang::Strings::CLOUD_FETCH_FAIL) + " (HTTP " + std::to_string(status) + ")";
-        return false;
-    }
-    if (!read_err.empty() || body.empty()) {
-        err_out = read_err.empty() || read_err == Lang::Strings::CLOUD_READ_TIMEOUT
-            ? Lang::Strings::CLOUD_FETCH_FAIL : read_err;
-        return false;
-    }
-    if (status < 200 || status >= 300) {
-        err_out = Lang::Strings::CLOUD_FETCH_FAIL;
-        return false;
-    }
-
-    cJSON* root = cJSON_Parse(body.c_str());
-    if (root == nullptr) {
-        err_out = Lang::Strings::CLOUD_JSON_PARSE_FAIL;
-        return false;
-    }
-
-    const cJSON* code = cJSON_GetObjectItemCaseSensitive(root, "code");
-    if (!cJSON_IsNumber(code) || code->valueint != 0) {
-        const cJSON* msg = cJSON_GetObjectItemCaseSensitive(root, "msg");
-        if (cJSON_IsString(msg) && msg->valuestring != nullptr && msg->valuestring[0] != '\0') {
-            err_out = msg->valuestring;
-        } else {
-            err_out = Lang::Strings::CLOUD_API_ERROR;
+    } else if (stream.failed) err_out = Lang::Strings::CLOUD_FETCH_FAIL;
+    else if (!parsed || !handler.root_object) err_out = Lang::Strings::CLOUD_JSON_PARSE_FAIL;
+    else if (!handler.has_code || handler.code != 0) {
+        err_out = handler.message.empty() ? Lang::Strings::CLOUD_API_ERROR : handler.message;
+        if (handler.has_code) {
+            const int code = handler.code >= INT_MAX ? INT_MAX : handler.code <= INT_MIN ? INT_MIN :
+                static_cast<int>(handler.code);
+            err_out += " (code " + std::to_string(code) + ")";
         }
-        if (cJSON_IsNumber(code)) {
-            err_out += " (code " + std::to_string(code->valueint) + ")";
-        }
-        cJSON_Delete(root);
-        return false;
-    }
-
-    const cJSON* data = cJSON_GetObjectItemCaseSensitive(root, "data");
-    if (data == nullptr || cJSON_IsNull(data)) {
-        cJSON_Delete(root);
-        return true;
-    }
-    if (!cJSON_IsArray(data)) {
-        err_out = Lang::Strings::CLOUD_DATA_FORMAT_ERR;
-        cJSON_Delete(root);
-        return false;
-    }
-
-    const cJSON* item = nullptr;
-    cJSON_ArrayForEach(item, data) {
-        CloudPushResource res;
-        if (!ParsePushResourceObject(item, res)) {
-            ESP_LOGW(TAG, "skip invalid push resource item");
-            continue;
-        }
-        LogResourceSummary(item, res, out.size());
-        out.push_back(std::move(res));
-    }
-    cJSON_Delete(root);
+    } else if (!handler.valid_data) err_out = Lang::Strings::CLOUD_DATA_FORMAT_ERR;
+    if (!err_out.empty()) { out.clear(); return false; }
     ESP_LOGI(TAG, "push resources: parsed n=%u", static_cast<unsigned>(out.size()));
     return true;
+} catch (const std::bad_alloc&) {
+    out.clear();
+    err_out = Lang::Strings::BOOK_OUT_OF_MEMORY;
+    return false;
 }
 
 }  // namespace reader

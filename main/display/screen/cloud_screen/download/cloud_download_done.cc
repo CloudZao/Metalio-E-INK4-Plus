@@ -41,8 +41,8 @@ void EraseItemAt(int idx) {
     if (idx < static_cast<int>(st.data.thumbs.size())) {
         st.data.thumbs.erase(st.data.thumbs.begin() + idx);
     }
-    if (idx < static_cast<int>(st.data.cover_bytes.size())) {
-        st.data.cover_bytes.erase(st.data.cover_bytes.begin() + idx);
+    if (idx < static_cast<int>(st.data.cover_cache.size())) {
+        st.data.cover_cache.erase(st.data.cover_cache.begin() + idx);
     }
     if (idx < static_cast<int>(st.data.selected.size())) {
         st.data.selected.erase(st.data.selected.begin() + idx);

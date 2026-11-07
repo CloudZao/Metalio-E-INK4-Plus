@@ -74,3 +74,6 @@ enum class VkTouchPhase {
 void VkKey_PostTouch(VkTouchPhase phase, const char* key_name);
 /** @brief 在 UI 任务按序处理盖板键边沿，保持长按与抬起配对。 */
 void VkKey_DrainTouch();
+
+/** @brief 获取页面输入代次，用于作废跨页面积压事件；允许跨任务读取 */
+uint32_t VkKey_InputEpoch();

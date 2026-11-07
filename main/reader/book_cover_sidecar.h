@@ -21,9 +21,6 @@ bool SaveBookCoverSidecar(const char* book_path);
 // 已有 L8 封面时写入旁路；仅在更大时覆盖，供详情 worker 回写。
 bool SaveBookCoverSidecarFromL8(const char* book_path, const RasterImage& l8);
 
-// 用原始图片字节写入旁路缓存（新 .a2l8，旧 .a2i1）（JPEG/PNG/A2I1 等），供云推送 coverImageUrl 落盘。
-bool SaveBookCoverSidecarFromBytes(const char* book_path, const uint8_t* data, size_t len);
-
 // 删除旁路封面；路径无效或无文件时静默返回。
 void DeleteBookCoverSidecar(const char* book_path);
 

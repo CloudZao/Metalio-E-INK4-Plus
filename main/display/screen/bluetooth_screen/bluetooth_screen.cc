@@ -12,7 +12,11 @@
 #include "power_hw.h"
 #include "epd_refresh.h"
 #include "settings_common.h"
+#include "settings_screen.h"
+#include "vk_key_handler.h"
 #include "screen_common.h"
+#include "screen_text.h"
+#include "screen_keyboard.h"
 #include "simple_uart.hpp"
 #include "ui_scale.h"
 
@@ -42,6 +46,269 @@ std::atomic<bool> Bluetooth_screen_active{false};
 
 namespace {
 lv_timer_t* version_query_timer = nullptr; // UI 线程持有的版本查询超时计时器
+lv_obj_t* CreateHidTestScreen();
+lv_obj_t* name_keyboard_panel = nullptr; // 名称键盘遮罩。
+lv_obj_t* name_confirm_panel = nullptr; // 名称确认遮罩。
+lv_obj_t* name_hint = nullptr; // 键盘内提示。
+lv_obj_t* name_input = nullptr; // 静态输入文本。
+lv_obj_t* name_box = nullptr; // 输入框。
+lv_obj_t* name_keyboard = nullptr; // 与 Wi-Fi 共用的键盘。
+char edited_name[64] = {}; // 当前编辑内容。
+char pending_name[64] = {}; // 勾选时冻结的待确认名称。
+
+void CloseNameConfirmation() {
+    if (name_confirm_panel != nullptr) lv_obj_delete(name_confirm_panel);
+}
+
+void CloseNameKeyboard() {
+    CloseNameConfirmation();
+    if (name_keyboard_panel != nullptr) lv_obj_delete(name_keyboard_panel);
+}
+
+void RefreshNameInput() {
+    if (name_input == nullptr) return;
+    const char* tail = edited_name;
+    const auto* font = fontpack_lv_font_ui();
+    if (font == nullptr) font = LV_FONT_DEFAULT;
+    const int width = lv_obj_get_content_width(name_box) - UiSx(12);
+    lv_point_t size;
+    while (true) {
+        lv_text_get_size(&size, tail, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if (width <= 0 || size.x <= width || *tail == '\0') break;
+        do { ++tail; } while ((static_cast<unsigned char>(*tail) & 0xC0) == 0x80);
+    }
+    lv_label_set_text(name_input, tail);
+    lv_obj_set_width(name_input, size.x > 0 ? size.x : 1);
+}
+
+void ShowNameConfirmation() {
+    if (name_confirm_panel != nullptr) return;
+    if (!Bluetooth_is_valid_name(edited_name)) {
+        lv_label_set_text(name_hint, Lang::Strings::BT_NAME_INVALID);
+        return;
+    }
+    snprintf(pending_name, sizeof(pending_name), "%s", edited_name);
+    ScreenKeyboardPause(name_keyboard);
+    auto* mask = lv_obj_create(lv_screen_active());
+    name_confirm_panel = mask;
+    Bluetooth_strip_container(mask);
+    lv_obj_set_size(mask, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_opa(mask, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(mask, [](lv_event_t* e) {
+        if (lv_event_get_target(e) == lv_event_get_current_target(e)) CloseNameConfirmation();
+    }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(mask, [](lv_event_t*) { name_confirm_panel = nullptr; }, LV_EVENT_DELETE, nullptr);
+    auto* card = lv_obj_create(mask);
+    Bluetooth_strip_container(card);
+    lv_obj_set_width(card, LV_HOR_RES - UiSx(80));
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(card, UiSx(20), 0);
+    lv_obj_set_style_pad_row(card, UiSy(20), 0);
+    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_image_src(card, nullptr, 0);
+    lv_obj_set_style_border_width(card, kSettingsBorderW, 0);
+    lv_obj_set_style_border_color(card, lv_color_black(), 0);
+    lv_obj_set_style_radius(card, kSettingsOptionRadius, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_center(card);
+    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    auto* message = lv_label_create(card);
+    lv_label_set_text_fmt(message, Lang::Strings::BT_NAME_CONFIRM_FMT, pending_name);
+    lv_obj_set_width(message, lv_pct(100));
+    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(message, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(message, lv_color_black(), 0);
+    lv_obj_clear_flag(message, LV_OBJ_FLAG_CLICKABLE);
+    auto* row = lv_obj_create(card);
+    Bluetooth_strip_container(row);
+    lv_obj_set_size(row, lv_pct(100), kSettingsOptionH);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(row, kSettingsOptionGap, 0);
+    auto* cancel = Bluetooth_make_action_button(row, Lang::Strings::COMMON_CANCEL,
+        [](lv_event_t*) { CloseNameConfirmation(); });
+    auto* confirm = Bluetooth_make_action_button(row, Lang::Strings::BT_NAME_CONFIRM,
+        [](lv_event_t*) {
+            if (Bluetooth_rename(pending_name)) CloseNameKeyboard();
+            else CloseNameConfirmation();
+        });
+    for (auto* button : {cancel, confirm}) {
+        lv_obj_set_width(button, 0);
+        lv_obj_set_flex_grow(button, 1);
+        lv_obj_add_event_cb(button, ScreenFitButtonLabelOnSize, LV_EVENT_SIZE_CHANGED,
+                            lv_obj_get_child(button, 0));
+    }
+}
+
+[[maybe_unused]] void OpenNameKeyboard() {
+    if (name_keyboard_panel != nullptr || Bluetooth_mode_cmd_busy.load()) return;
+    auto* mask = lv_obj_create(lv_screen_active());
+    name_keyboard_panel = mask;
+    Bluetooth_strip_container(mask);
+    lv_obj_set_size(mask, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_opa(mask, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(mask, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(mask, [](lv_event_t* e) {
+        if (lv_event_get_target(e) == lv_event_get_current_target(e)) CloseNameKeyboard();
+    }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(mask, [](lv_event_t*) {
+        name_keyboard_panel = nullptr;
+        name_input = name_hint = name_box = name_keyboard = nullptr;
+        edited_name[0] = pending_name[0] = '\0';
+    }, LV_EVENT_DELETE, nullptr);
+    auto* panel = lv_obj_create(mask);
+    Bluetooth_strip_container(panel);
+    lv_obj_set_size(panel, lv_pct(100), UiSx(260) + UiSy(180) + kSettingsContentPad * 2);
+    lv_obj_align(panel, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(panel, lv_color_black(), 0);
+    lv_obj_set_style_border_width(panel, kSettingsBorderW, 0);
+    lv_obj_set_style_pad_all(panel, kSettingsContentPad, 0);
+    lv_obj_set_style_pad_row(panel, UiSy(8), 0);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(panel, [](lv_event_t* e) {
+        if (lv_event_get_target(e) == lv_event_get_current_target(e)) CloseNameKeyboard();
+    }, LV_EVENT_CLICKED, nullptr);
+    name_hint = lv_label_create(panel);
+    lv_label_set_text(name_hint, Lang::Strings::BT_NAME_EDIT_HINT);
+    lv_obj_set_width(name_hint, lv_pct(100));
+    lv_label_set_long_mode(name_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(name_hint, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(name_hint, lv_color_black(), 0);
+    lv_obj_clear_flag(name_hint, LV_OBJ_FLAG_CLICKABLE);
+    name_box = lv_obj_create(panel);
+    Bluetooth_strip_container(name_box);
+    lv_obj_set_size(name_box, lv_pct(100), UiSy(64));
+    lv_obj_set_style_border_width(name_box, kSettingsBorderW, 0);
+    lv_obj_set_style_border_color(name_box, lv_color_black(), 0);
+    lv_obj_set_style_pad_hor(name_box, UiSx(10), 0);
+    lv_obj_set_flex_flow(name_box, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(name_box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_add_flag(name_box, LV_OBJ_FLAG_CLICKABLE);
+    name_input = lv_label_create(name_box);
+    lv_label_set_long_mode(name_input, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_font(name_input, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(name_input, lv_color_black(), 0);
+    lv_obj_clear_flag(name_input, LV_OBJ_FLAG_CLICKABLE);
+    static const lv_point_precise_t cursor_points[] = {
+        {0, 0}, {UiSx(8), 0}, {UiSx(4), 0}, {UiSx(4), UiSy(38)}, {0, UiSy(38)}, {UiSx(8), UiSy(38)}};
+    auto* cursor = lv_line_create(name_box);
+    lv_line_set_points(cursor, cursor_points, 6);
+    lv_obj_set_style_line_width(cursor, UiSx(2), 0);
+    lv_obj_set_style_line_color(cursor, lv_color_black(), 0);
+    lv_obj_clear_flag(cursor, LV_OBJ_FLAG_CLICKABLE);
+    auto* label = Bluetooth_State().name_label;
+    edited_name[0] = '\0';
+    if (label != nullptr && strcmp(lv_label_get_text(label), Lang::Strings::COMMON_UNKNOWN) != 0) {
+        snprintf(edited_name, sizeof(edited_name), "%s", lv_label_get_text(label));
+    }
+    name_keyboard = ScreenKeyboardCreate(panel, [](ScreenKeyboardEvent event, const char* text, void*) {
+        size_t length = strlen(edited_name);
+        switch (event) {
+            case ScreenKeyboardEvent::kInsert:
+                if (length + strlen(text) < sizeof(edited_name)) strcat(edited_name, text);
+                break;
+            case ScreenKeyboardEvent::kBackspace:
+                if (length > 0) {
+                    do { --length; } while (length > 0 && (static_cast<unsigned char>(edited_name[length]) & 0xC0) == 0x80);
+                    edited_name[length] = '\0';
+                }
+                break;
+            case ScreenKeyboardEvent::kClear: edited_name[0] = '\0'; break;
+            case ScreenKeyboardEvent::kConfirm: ShowNameConfirmation(); return;
+            case ScreenKeyboardEvent::kLayout: break;
+        }
+        RefreshNameInput();
+    });
+    if (name_keyboard == nullptr) { CloseNameKeyboard(); return; }
+    lv_obj_set_height(name_keyboard, 0);
+    lv_obj_set_flex_grow(name_keyboard, 1);
+    ScreenKeyboardReset(name_keyboard);
+    lv_obj_update_layout(panel);
+    RefreshNameInput();
+}
+
+lv_obj_t* hid_test_screen = nullptr; // HID 全屏测试页。
+lv_obj_t* hid_test_status = nullptr; // HID 测试页独立状态栏。
+bool hid_alt_held = false; // UI 线程记录尚未释放的 Alt。
+lv_obj_t* audio_devices_page = nullptr; // 全屏音频设备管理页。
+lv_obj_t* audio_devices_status = nullptr; // 管理页状态文案。
+
+void CloseAudioDevices() {
+    if (audio_devices_page == nullptr) return;
+    auto* panel = Bluetooth_State().mode2_panel;
+    if (panel != nullptr && Bluetooth_State().root != nullptr) {
+        lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_parent(panel, Bluetooth_State().root);
+        lv_obj_set_flex_grow(panel, 0);
+        lv_obj_set_height(panel, UiSy(280));
+    }
+    lv_obj_delete(audio_devices_page);
+}
+
+void OpenAudioDevices() {
+    auto* panel = Bluetooth_State().mode2_panel;
+    if (audio_devices_page != nullptr || panel == nullptr ||
+        Bluetooth_active_mode != BtMode::kMode2 || Bluetooth_mode_cmd_busy.load()) return;
+    auto* page = lv_obj_create(lv_screen_active());
+    audio_devices_page = page;
+    Bluetooth_strip_container(page);
+    lv_obj_set_size(page, LV_HOR_RES, LV_VER_RES - ScreenStatusBarHeight());
+    lv_obj_align(page, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(page, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(page, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(page, kSettingsContentPad, 0);
+    lv_obj_set_style_pad_row(page, kSettingsOptionGap, 0);
+    lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
+    lv_obj_add_event_cb(page, [](lv_event_t*) {
+        audio_devices_page = audio_devices_status = nullptr;
+    }, LV_EVENT_DELETE, nullptr);
+    auto* title = lv_label_create(page);
+    lv_label_set_text(title, Lang::Strings::BT_AUDIO_DEVICES);
+    lv_obj_set_width(title, lv_pct(100));
+    lv_obj_set_style_text_font(title, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(title, lv_color_black(), 0);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_parent(panel, page);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_height(panel, 0);
+    lv_obj_set_flex_grow(panel, 1);
+    audio_devices_status = lv_label_create(page);
+    lv_obj_set_size(audio_devices_status, lv_pct(100), UiSy(80));
+    lv_label_set_long_mode(audio_devices_status, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(audio_devices_status, Lang::Strings::BT_MODE2_SET);
+    lv_obj_set_style_text_font(audio_devices_status, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(audio_devices_status, lv_color_black(), 0);
+    lv_obj_clear_flag(audio_devices_status, LV_OBJ_FLAG_CLICKABLE);
+}
+
+bool ReleaseHidAlt() {
+    if (!hid_alt_held) return true;
+    if (!Bluetooth_send_hid_shortcut("ALT,UP")) return false;
+    hid_alt_held = false;
+    return true;
+}
+
+bool OnHidTestNavigationKey(const char* key) {
+    if (key == nullptr || strcmp(key, "vk_home") != 0) return false;
+    if (ReleaseHidAlt()) ScreenNavigateBack();
+    return true;
+}
+
+void OnHidAltEvent(lv_event_t* e) {
+    const auto code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED) {
+        if (!hid_alt_held && Bluetooth_screen_active) {
+            hid_alt_held = Bluetooth_send_hid_shortcut("ALT,DOWN");
+        }
+    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST || code == LV_EVENT_DELETE) {
+        ReleaseHidAlt();
+    }
+}
 
 void RestoreVersionButton() {
     if (version_query_timer != nullptr) {
@@ -50,21 +317,22 @@ void RestoreVersionButton() {
     }
     auto* button = Bluetooth_State().check_version_btn;
     if (button != nullptr) {
-        lv_label_set_text(lv_obj_get_child(button, 0), Lang::Strings::BT_CHECK_VERSION);
+        lv_label_set_text(Bluetooth_State().version_hint_label, Lang::Strings::BT_CHECK_VERSION);
         lv_obj_remove_state(button, LV_STATE_DISABLED);
     }
 }
 
 void QueryVersion() {
     auto* button = Bluetooth_State().check_version_btn;
-    if (!Bluetooth_screen_active || button == nullptr || version_query_timer != nullptr) return;
+    if (!Bluetooth_screen_active || button == nullptr || version_query_timer != nullptr ||
+        Bluetooth_mode_cmd_busy.load()) return;
     version_query_timer = lv_timer_create(
         [](lv_timer_t*) { RestoreVersionButton(); }, 5000, nullptr);
     if (version_query_timer == nullptr) {
         ESP_LOGE(TAG, "Cannot create version query timer");
         return;
     }
-    lv_label_set_text(lv_obj_get_child(button, 0), Lang::Strings::BT_CHECKING_VERSION);
+    lv_label_set_text(Bluetooth_State().version_hint_label, Lang::Strings::BT_CHECKING_VERSION);
     lv_obj_add_state(button, LV_STATE_DISABLED);
     if (!Bluetooth_query_version()) RestoreVersionButton();
 }
@@ -86,6 +354,18 @@ void Bluetooth_strip_container(lv_obj_t* obj) {
 }
 
 void Bluetooth_update_status_label(const char* text) {
+    if (audio_devices_status != nullptr) {
+        lv_label_set_text(audio_devices_status, text);
+        return;
+    }
+    if (name_hint != nullptr) {
+        lv_label_set_text(name_hint, text);
+        return;
+    }
+    if (hid_test_status != nullptr && lv_screen_active() == hid_test_screen) {
+        lv_label_set_text(hid_test_status, text);
+        return;
+    }
     if (Bluetooth_State().status_label == nullptr) {
         return;
     }
@@ -117,42 +397,74 @@ void Bluetooth_post_version(const char* version) {
         std::unique_ptr<AsyncStatusMsg> message(static_cast<AsyncStatusMsg*>(context));
         if (Bluetooth_screen_active && Bluetooth_State().version_label != nullptr) {
             RestoreVersionButton();
-            lv_label_set_text_fmt(Bluetooth_State().version_label,
-                                  Lang::Strings::BT_VERSION_FMT, message->text);
+            lv_label_set_text(Bluetooth_State().version_label, message->text);
+        }
+    }, message)) delete message;
+}
+
+void Bluetooth_post_name(const char* name) {
+    auto* message = new (std::nothrow) AsyncStatusMsg{};
+    if (message == nullptr) return;
+    snprintf(message->text, sizeof(message->text), "%s", name);
+    if (!ScreenLvAsync([](void* p) {
+        std::unique_ptr<AsyncStatusMsg> msg(static_cast<AsyncStatusMsg*>(p));
+        if (Bluetooth_screen_active && Bluetooth_State().name_label != nullptr) {
+            lv_label_set_text(Bluetooth_State().name_label, msg->text);
         }
     }, message)) delete message;
 }
 
 void Bluetooth_refresh_mode_buttons() {
-    for (int i = 0; i < 3; ++i) {
+    if (auto* label = Bluetooth_State().current_mode_label) {
+        const char* description = Lang::Strings::COMMON_UNKNOWN;
+        switch (Bluetooth_active_mode.load()) {
+            case BtMode::kMode1: description = Lang::Strings::BT_MODE1; break;
+            case BtMode::kMode2: description = Lang::Strings::BT_MODE2; break;
+            case BtMode::kMode3: description = Lang::Strings::BT_MODE3; break;
+            case BtMode::kMode5: description = Lang::Strings::BT_MODE5; break;
+            default: break;
+        }
+        lv_label_set_text(label, description);
+    }
+    if (auto* label = Bluetooth_State().mode_description_label) {
+        const char* description = Lang::Strings::COMMON_UNKNOWN;
+        switch (Bluetooth_active_mode.load()) {
+            case BtMode::kMode1: description = Lang::Strings::BT_MODE1_DESC; break;
+            case BtMode::kMode2: description = Lang::Strings::BT_MODE2_DESC; break;
+            case BtMode::kMode3: description = Lang::Strings::BT_MODE3_DESC; break;
+            case BtMode::kMode5: description = Lang::Strings::BT_MODE5_DESC; break;
+            default: break;
+        }
+        lv_label_set_text(label, description);
+        auto* area = lv_obj_get_parent(label);
+        ScreenFitLabel(label, lv_obj_get_content_width(area), lv_obj_get_content_height(area));
+        lv_obj_center(label);
+    }
+    if (Bluetooth_active_mode != BtMode::kMode5) ReleaseHidAlt();
+    auto* hid_panel = Bluetooth_State().hid_panel;
+    if (hid_panel != nullptr) {
+        if (Bluetooth_active_mode == BtMode::kMode5) {
+            lv_obj_clear_flag(hid_panel, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(hid_panel, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    for (int i = 0; i < kBluetoothModeCount; ++i) {
         if (Bluetooth_State().mode_btns[i] == nullptr) {
             continue;
         }
-        const bool active = (static_cast<int>(Bluetooth_active_mode.load()) == i + 1);
+        const bool active = (Bluetooth_active_mode.load() == kBluetoothModes[i]);
         SettingsStyleSelectable(Bluetooth_State().mode_btns[i], lv_obj_get_child(Bluetooth_State().mode_btns[i], 0), active);
     }
 }
 
 void Bluetooth_show_mode2_panel(bool show) {
-    if (Bluetooth_State().mode2_panel == nullptr) {
-        return;
+    auto* entry = Bluetooth_State().mode2_entry;
+    if (entry != nullptr) {
+        if (show) lv_obj_clear_flag(entry, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(entry, LV_OBJ_FLAG_HIDDEN);
     }
-    if (show) {
-        lv_obj_clear_flag(Bluetooth_State().mode2_panel, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(Bluetooth_State().mode2_panel, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-void Bluetooth_show_mode1_panel(bool show) {
-    if (Bluetooth_State().mode1_panel == nullptr) {
-        return;
-    }
-    if (show) {
-        lv_obj_clear_flag(Bluetooth_State().mode1_panel, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(Bluetooth_State().mode1_panel, LV_OBJ_FLAG_HIDDEN);
-    }
+    if (!show) CloseAudioDevices();
 }
 
 void Bluetooth_clear_device_list_ui() {
@@ -251,25 +563,27 @@ void Bluetooth_post_clear_list() {
 void Bluetooth_async_on_mode1_set(void* /*user_data*/) {
     Bluetooth_refresh_mode_buttons();
     Bluetooth_show_mode2_panel(false);
-    Bluetooth_show_mode1_panel(true);
+
 }
 
 void Bluetooth_async_on_mode2_set(void* /*user_data*/) {
     Bluetooth_refresh_mode_buttons();
-    Bluetooth_show_mode1_panel(false);
+
     Bluetooth_show_mode2_panel(true);
 }
 
 void Bluetooth_async_on_mode3_set(void* /*user_data*/) {
     Bluetooth_refresh_mode_buttons();
-    Bluetooth_show_mode1_panel(false);
+
     Bluetooth_show_mode2_panel(false);
 }
 
 void Bluetooth_on_mode_btn_clicked(lv_event_t* e) {
     const int idx =
         static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    Bluetooth_send_mode_command(static_cast<BtMode>(idx + 1));
+    if (idx < 0 || idx >= kBluetoothModeCount) return;
+    if (!ReleaseHidAlt()) return;
+    Bluetooth_send_mode_command(kBluetoothModes[idx]);
 }
 
 void Bluetooth_bt_reset_task(void* param) {
@@ -322,6 +636,7 @@ void Bluetooth_bt_reset_task(void* param) {
 }
 
 void Bluetooth_on_reset_bt_clicked(lv_event_t* /*e*/) {
+    if (!ReleaseHidAlt()) return;
     bool expected = false;
     if (!Bluetooth_mode_cmd_busy.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) return;
     auto* args = new (std::nothrow) ResetArgs{
@@ -374,6 +689,118 @@ void Bluetooth_on_music_mode_clicked(lv_event_t* /*e*/) {
     xTaskCreate(Bluetooth_music_mode_task, "bt_music_mode", 4096, nullptr, 5, nullptr);
 }
 
+namespace {
+lv_obj_t* CreateHidTestScreen() {
+    lv_obj_t* screen = lv_obj_create(nullptr);
+    hid_test_screen = screen;
+    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_font(screen, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(screen, lv_color_black(), 0);
+    const auto status_bar = ScreenCreateStatusBar(screen);
+
+    lv_obj_t* page = lv_obj_create(screen);
+    Bluetooth_strip_container(page);
+    lv_obj_set_size(page, LV_HOR_RES, LV_VER_RES - status_bar.height);
+    lv_obj_align(page, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_pad_all(page, kSettingsContentPad, 0);
+    lv_obj_set_style_pad_row(page, kSettingsOptionGap, 0);
+    lv_obj_set_flex_flow(page, LV_FLEX_FLOW_COLUMN);
+
+    for (const char* text : {Lang::Strings::BT_HID_TITLE, Lang::Strings::BT_HID_HINT}) {
+        lv_obj_t* label = lv_label_create(page);
+        lv_label_set_text(label, text);
+        lv_obj_set_width(label, lv_pct(100));
+        lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+        lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+        if (text == Lang::Strings::BT_HID_TITLE) lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    }
+
+    lv_obj_t* keys = lv_obj_create(page);
+    Bluetooth_strip_container(keys);
+    lv_obj_set_width(keys, lv_pct(100));
+    lv_obj_set_height(keys, 0);
+    lv_obj_set_flex_grow(keys, 1);
+    lv_obj_set_flex_flow(keys, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(keys, kSettingsOptionGap, 0);
+    lv_obj_add_flag(keys, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(keys, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_set_scroll_dir(keys, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(keys, LV_SCROLLBAR_MODE_AUTO);
+    const char* labels[] = {"A", "B", "1", Lang::Strings::BT_HID_ENTER,
+        Lang::Strings::BT_HID_SPACE, Lang::Strings::BT_HID_TAB, Lang::Strings::BT_HID_ESC,
+        Lang::Strings::BT_HID_BACKSPACE, Lang::Strings::BT_HID_DELETE,
+        Lang::Strings::BT_HID_LEFT, Lang::Strings::BT_HID_RIGHT, Lang::Strings::BT_HID_UP,
+        Lang::Strings::BT_HID_DOWN, "Ctrl+A", "Ctrl+C", "Ctrl+V", "Alt+Tab", "Win+D"};
+    static const char* const shortcuts[] = {"A", "B", "1", "ENTER", "SPACE", "TAB", "ESC",
+        "BACKSPACE", "DELETE", "LEFT", "RIGHT", "UP", "DOWN", "CTRL+A", "CTRL+C", "CTRL+V",
+        "ALT+TAB", "WIN+D"};
+    for (int i = 0; i < 18; i += 3) {
+        lv_obj_t* row = lv_obj_create(keys);
+        Bluetooth_strip_container(row);
+        lv_obj_set_width(row, lv_pct(100));
+        lv_obj_set_height(row, kSettingsOptionH);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(row, kSettingsOptionGap, 0);
+        for (int j = i; j < i + 3; ++j) {
+            lv_obj_t* button = Bluetooth_make_action_button(row, labels[j], [](lv_event_t* e) {
+                const char* shortcut = static_cast<const char*>(
+                    lv_obj_get_user_data(lv_event_get_target_obj(e)));
+                Bluetooth_send_hid_shortcut(shortcut);
+            });
+            lv_obj_set_user_data(button, const_cast<char*>(shortcuts[j]));
+            lv_obj_set_width(button, 0);
+            lv_obj_set_flex_grow(button, 1);
+            lv_obj_add_event_cb(button, ScreenFitButtonLabelOnSize, LV_EVENT_SIZE_CHANGED,
+                                lv_obj_get_child(button, 0));
+        }
+    }
+    lv_obj_t* alt_button = Bluetooth_make_action_button(page, Lang::Strings::BT_HID_HOLD_ALT,
+                                                       OnHidAltEvent);
+    lv_obj_set_width(alt_button, lv_pct(100));
+    for (auto code : {LV_EVENT_PRESSED, LV_EVENT_RELEASED, LV_EVENT_PRESS_LOST, LV_EVENT_DELETE}) {
+        lv_obj_add_event_cb(alt_button, OnHidAltEvent, code, nullptr);
+    }
+    lv_obj_t* release = Bluetooth_make_action_button(page, Lang::Strings::BT_HID_RELEASE,
+        [](lv_event_t*) {
+            if (Bluetooth_send_hid_shortcut("RELEASE")) hid_alt_held = false;
+        });
+    lv_obj_set_width(release, lv_pct(100));
+    hid_test_status = lv_label_create(page);
+    lv_obj_set_width(hid_test_status, lv_pct(100));
+    lv_obj_set_height(hid_test_status, UiSy(88));
+    lv_label_set_long_mode(hid_test_status, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(hid_test_status, Lang::Strings::BT_HID_READY);
+    lv_obj_clear_flag(hid_test_status, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_add_event_cb(screen, [](lv_event_t* e) {
+        const auto code = lv_event_get_code(e);
+        if (code == LV_EVENT_SCREEN_LOADED) {
+            Bluetooth_screen_active = true;
+            SimpleUart::getInstance().registerCallback(Bluetooth_on_uart_data);
+        } else if (code == LV_EVENT_SCREEN_UNLOADED) {
+            ReleaseHidAlt();
+            hid_test_status = nullptr;
+            auto* root = Bluetooth_State().root;
+            // 返回设置页时，新页已接管 UART，不能由旧测试页注销。
+            if (root == nullptr || lv_obj_get_screen(root) != lv_screen_active()) {
+                Bluetooth_screen_active = false;
+                SimpleUart::getInstance().registerCallback({});
+            }
+        } else if (code == LV_EVENT_DELETE) {
+            if (lv_event_get_target_obj(e) == hid_test_screen) hid_test_screen = nullptr;
+        }
+    }, LV_EVENT_ALL, nullptr);
+    ScreenSetIsHome(false);
+    VkKeyScreenDesc navigation{CreateHidTestScreen};
+    navigation.on_key = OnHidTestNavigationKey;
+    navigation.on_key_long_press = OnHidTestNavigationKey;
+    VkKey_AttachScreen(screen, "bluetooth_hid_test", navigation);
+    return screen;
+}
+} // namespace
+
 void BluetoothScreen::BuildInto(lv_obj_t* parent) {
     Bluetooth_conn_state = ConnState::kIdle;
     {
@@ -382,55 +809,75 @@ void BluetoothScreen::BuildInto(lv_obj_t* parent) {
         Bluetooth_devices.clear();
     }
     Bluetooth_State().root = parent;
+    lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(parent, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_style_pad_row(parent, UiSy(6), 0);
+    lv_obj_scroll_to_y(parent, 0, LV_ANIM_OFF);
 
-    lv_obj_t* title = lv_label_create(parent);
-    lv_label_set_text(title, Lang::Strings::BT_TITLE);
-    lv_obj_set_style_text_font(title, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(title, lv_color_black(), 0);
-    lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
-
-    auto add_divider = [parent]() {
-        lv_obj_t* divider = lv_obj_create(parent);
-        Bluetooth_strip_container(divider);
-        lv_obj_set_size(divider, lv_pct(100), kSettingsBorderW);
-        lv_obj_set_style_bg_color(divider, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
-        lv_obj_clear_flag(divider, LV_OBJ_FLAG_CLICKABLE);
+    auto info_row = [parent](const char* title, const char* value, const char* action,
+                             lv_event_cb_t callback, lv_obj_t** button) {
+        auto* row = lv_obj_create(parent);
+        Bluetooth_strip_container(row);
+        lv_obj_set_width(row, lv_pct(100));
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_set_style_min_height(row, kSettingsInfoRowH, 0);
+        lv_obj_set_style_pad_ver(row, UiSy(4), 0);
+        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_border_width(row, kSettingsBorderW, 0);
+        lv_obj_set_style_border_color(row, lv_color_black(), 0);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(row, kSettingsOptionGap, 0);
+        auto* text = lv_obj_create(row);
+        Bluetooth_strip_container(text);
+        lv_obj_set_width(text, 0);
+        lv_obj_set_height(text, LV_SIZE_CONTENT);
+        lv_obj_set_flex_grow(text, 1);
+        lv_obj_set_flex_flow(text, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_row(text, UiSy(4), 0);
+        lv_obj_t* value_label = nullptr;
+        for (const char* content : {title, value}) {
+            auto* label = lv_label_create(text);
+            lv_label_set_text(label, content);
+            lv_obj_set_width(label, lv_pct(100));
+            lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+            lv_obj_set_style_text_font(label, fontpack_lv_font_ui(), 0);
+            lv_obj_set_style_text_color(label, lv_color_black(), 0);
+            lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+            value_label = label;
+        }
+        if (action != nullptr) {
+            auto* hint = lv_label_create(text);
+            lv_label_set_text(hint, action);
+            lv_obj_set_width(hint, lv_pct(100));
+            lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+            lv_obj_set_style_text_font(hint, fontpack_lv_font_ui(), 0);
+            lv_obj_set_style_text_color(hint, lv_color_black(), 0);
+            lv_obj_clear_flag(hint, LV_OBJ_FLAG_CLICKABLE);
+            if (button != nullptr) {
+                *button = row;
+                Bluetooth_State().version_hint_label = hint;
+            }
+        }
+        lv_obj_clear_flag(text, LV_OBJ_FLAG_CLICKABLE);
+        if (callback != nullptr) {
+            lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            HapticAttachClick(row);
+            lv_obj_add_event_cb(row, callback, LV_EVENT_CLICKED, nullptr);
+        } else lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        return value_label;
     };
-
-    lv_obj_t* version = lv_label_create(parent);
-    Bluetooth_State().version_label = version;
-    lv_label_set_text_fmt(version, Lang::Strings::BT_VERSION_FMT, Lang::Strings::COMMON_UNKNOWN);
-    lv_obj_set_width(version, lv_pct(100));
-    lv_label_set_long_mode(version, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(version, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(version, lv_color_black(), 0);
-    lv_obj_clear_flag(version, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t* check_version = Bluetooth_make_action_button(
-        parent, Lang::Strings::BT_CHECK_VERSION,
-        [](lv_event_t* /*e*/) { QueryVersion(); });
-    Bluetooth_State().check_version_btn = check_version;
-    lv_obj_set_width(check_version, LV_SIZE_CONTENT);
-    add_divider();
-
-    lv_obj_t* reset_row = lv_obj_create(parent);
-    Bluetooth_strip_container(reset_row);
-    lv_obj_set_width(reset_row, lv_pct(100));
-    lv_obj_set_height(reset_row, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(reset_row, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(reset_row, kSettingsOptionGap, 0);
-
-    lv_obj_t* reset_hint = lv_label_create(reset_row);
-    lv_label_set_text(reset_hint, Lang::Strings::BT_RESET_HINT);
-    lv_obj_set_style_text_font(reset_hint, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(reset_hint, lv_color_black(), 0);
-    lv_obj_set_width(reset_hint, lv_pct(100));
-    lv_label_set_long_mode(reset_hint, LV_LABEL_LONG_WRAP);
-    lv_obj_clear_flag(reset_hint, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* reset = Bluetooth_make_action_button(reset_row, Lang::Strings::BT_RESET_BTN, Bluetooth_on_reset_bt_clicked);
-    lv_obj_set_width(reset, UiSx(120));
-    add_divider();
+    Bluetooth_State().name_label = info_row(Lang::Strings::BT_NAME_TITLE,
+        Lang::Strings::COMMON_UNKNOWN, nullptr, nullptr, nullptr);
+    lv_label_set_long_mode(Bluetooth_State().name_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_height(Bluetooth_State().name_label, fontpack_lv_font_ui()->line_height);
+    Bluetooth_State().version_label = info_row(Lang::Strings::BT_FW_TITLE,
+        Lang::Strings::COMMON_UNKNOWN, Lang::Strings::BT_CHECK_VERSION,
+        [](lv_event_t*) { QueryVersion(); }, &Bluetooth_State().check_version_btn);
+    info_row(Lang::Strings::BT_RESET_TITLE, Lang::Strings::BT_RESET_ACTION,
+        nullptr, Bluetooth_on_reset_bt_clicked, nullptr);
+    Bluetooth_State().current_mode_label = info_row(Lang::Strings::BT_CURRENT_MODE,
+        Lang::Strings::COMMON_UNKNOWN, nullptr, nullptr, nullptr);
 
     lv_obj_t* mode_title = lv_label_create(parent);
     lv_label_set_text(mode_title, Lang::Strings::BT_MODE_TITLE);
@@ -438,34 +885,42 @@ void BluetoothScreen::BuildInto(lv_obj_t* parent) {
     lv_obj_set_style_text_color(mode_title, lv_color_black(), 0);
     lv_obj_clear_flag(mode_title, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t* mode_row = lv_obj_create(parent);
-    Bluetooth_strip_container(mode_row);
-    lv_obj_set_width(mode_row, lv_pct(100));
-    lv_obj_set_height(mode_row, kSettingsOptionH);
-    lv_obj_set_flex_flow(mode_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(mode_row, kSettingsOptionGap, 0);
-
-    const char* mode_labels[] = {Lang::Strings::BT_MODE1, Lang::Strings::BT_MODE2, Lang::Strings::BT_MODE3};
-    for (int i = 0; i < 3; ++i) {
-        Bluetooth_State().mode_btns[i] = Bluetooth_make_mode_button(mode_row, mode_labels[i], i);
+    lv_obj_t* mode_grid = lv_obj_create(parent);
+    Bluetooth_strip_container(mode_grid);
+    lv_obj_set_width(mode_grid, lv_pct(100));
+    lv_obj_set_height(mode_grid, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(mode_grid, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(mode_grid, kSettingsOptionGap, 0);
+    const char* mode_labels[] = {Lang::Strings::BT_MODE1, Lang::Strings::BT_MODE2,
+                                Lang::Strings::BT_MODE3, Lang::Strings::BT_MODE5};
+    for (int i = 0; i < kBluetoothModeCount; i += 2) {
+        auto* row = lv_obj_create(mode_grid);
+        Bluetooth_strip_container(row);
+        lv_obj_set_size(row, lv_pct(100), kSettingsOptionH);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(row, kSettingsOptionGap, 0);
+        for (int j = i; j < i + 2 && j < kBluetoothModeCount; ++j) {
+            Bluetooth_State().mode_btns[j] = Bluetooth_make_mode_button(row, mode_labels[j], j);
+        }
     }
+    auto* description_area = lv_obj_create(parent);
+    Bluetooth_strip_container(description_area);
+    lv_obj_set_size(description_area, lv_pct(100), UiSy(72));
+    auto* description = lv_label_create(description_area);
+    Bluetooth_State().mode_description_label = description;
+    lv_obj_clear_flag(description, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(description_area, [](lv_event_t* e) {
+        auto* area = lv_event_get_target_obj(e);
+        auto* label = static_cast<lv_obj_t*>(lv_event_get_user_data(e));
+        ScreenFitLabel(label, lv_obj_get_content_width(area), lv_obj_get_content_height(area));
+        lv_obj_center(label);
+    }, LV_EVENT_SIZE_CHANGED, description);
 
-    lv_obj_t* m1_panel = lv_obj_create(parent);
-    Bluetooth_State().mode1_panel = m1_panel;
-    Bluetooth_strip_container(m1_panel);
-    lv_obj_set_width(m1_panel, lv_pct(100));
-    lv_obj_set_height(m1_panel, UiSy(80));
-    lv_obj_set_style_border_width(m1_panel, kSettingsBorderW, 0);
-    lv_obj_set_style_border_color(m1_panel, lv_color_black(), 0);
-    lv_obj_set_style_radius(m1_panel, kSettingsOptionRadius, 0);
-    lv_obj_add_flag(m1_panel, LV_OBJ_FLAG_HIDDEN);
-
-    lv_obj_t* m1_hint = lv_label_create(m1_panel);
-    lv_label_set_text(m1_hint, Lang::Strings::BT_MODE1_ACTIVE);
-    lv_obj_set_style_text_font(m1_hint, fontpack_lv_font_ui(), 0);
-    lv_obj_set_style_text_color(m1_hint, lv_color_black(), 0);
-    lv_obj_center(m1_hint);
-    lv_obj_clear_flag(m1_hint, LV_OBJ_FLAG_CLICKABLE);
+    auto* devices_entry = Bluetooth_make_action_button(parent, Lang::Strings::BT_AUDIO_DEVICES,
+        [](lv_event_t*) { OpenAudioDevices(); });
+    Bluetooth_State().mode2_entry = devices_entry;
+    lv_obj_set_width(devices_entry, lv_pct(100));
+    lv_obj_add_flag(devices_entry, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t* panel = lv_obj_create(parent);
     Bluetooth_State().mode2_panel = panel;
@@ -497,6 +952,12 @@ void BluetoothScreen::BuildInto(lv_obj_t* parent) {
     lv_obj_set_flex_align(list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    lv_obj_add_event_cb(panel, [](lv_event_t* e) {
+        auto* panel = lv_event_get_target_obj(e);
+        auto* list = static_cast<lv_obj_t*>(lv_event_get_user_data(e));
+        const auto available = lv_obj_get_content_height(panel) - 2 * kSettingsOptionH - UiSy(24);
+        lv_obj_set_height(list, available > 0 ? available : 1);
+    }, LV_EVENT_SIZE_CHANGED, list);
 
     lv_obj_t* btn_row = lv_obj_create(panel);
     Bluetooth_strip_container(btn_row);
@@ -519,9 +980,17 @@ void BluetoothScreen::BuildInto(lv_obj_t* parent) {
     lv_label_set_text(status, Lang::Strings::BT_SELECT_MODE);
     lv_obj_set_style_text_font(status, fontpack_lv_font_ui(), 0);
     lv_obj_set_style_text_color(status, lv_color_black(), 0);
-    lv_obj_set_width(status, lv_pct(100));
+    lv_obj_set_size(status, lv_pct(100), UiSy(60));
     lv_label_set_long_mode(status, LV_LABEL_LONG_WRAP);
     lv_obj_clear_flag(status, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t* hid_entry = Bluetooth_make_action_button(parent, Lang::Strings::BT_HID_TITLE,
+        [](lv_event_t*) {
+            if (Bluetooth_mode_cmd_busy.load(std::memory_order_acquire)) return;
+            ScreenNavigateTo(CreateHidTestScreen, SettingsScreen::CreateBluetooth);
+        });
+    Bluetooth_State().hid_panel = hid_entry;
+    lv_obj_set_width(hid_entry, lv_pct(100));
 
     // 开机 MetalioAudio 已下发模式1；UI 首次进入时对齐选中态
     if (Bluetooth_active_mode == BtMode::kNone) {
@@ -531,6 +1000,14 @@ void BluetoothScreen::BuildInto(lv_obj_t* parent) {
 }
 
 void BluetoothScreen::ResetUi() {
+    CloseAudioDevices();
+    if (auto* root = Bluetooth_State().root) {
+        lv_obj_add_flag(root, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollbar_mode(root, LV_SCROLLBAR_MODE_AUTO);
+        lv_obj_set_style_pad_row(root, kSettingsOptionGap, 0);
+    }
+    CloseNameKeyboard();
+    ReleaseHidAlt();
     RestoreVersionButton();
     Bluetooth_reset_ui_state();
 }
@@ -555,24 +1032,37 @@ void BluetoothScreen::ApplyDefaultMode() {
 void BluetoothScreen::OnActivated() {
     ESP_LOGI(TAG, "activate: bluetooth tab");
     Bluetooth_screen_active = true;
+    ReleaseHidAlt();
     {
         std::lock_guard<std::mutex> lock(Bluetooth_rx_mutex);
         Bluetooth_rx_buffer.clear();
     }
     auto& uart = SimpleUart::getInstance();
     if (Bluetooth_State().version_label != nullptr) {
-        lv_label_set_text_fmt(Bluetooth_State().version_label, Lang::Strings::BT_VERSION_FMT,
-                              Lang::Strings::COMMON_UNKNOWN);
+        lv_label_set_text(Bluetooth_State().version_label, Lang::Strings::COMMON_UNKNOWN);
     }
     uart.registerCallback(Bluetooth_on_uart_data);
     QueryVersion();
+    if (!Bluetooth_query_name()) Bluetooth_post_status(Lang::Strings::BT_NAME_FAILED);
 }
 
 void BluetoothScreen::OnDeactivated() {
     ESP_LOGI(TAG, "deactivate: bluetooth tab");
+    CloseAudioDevices();
+    CloseNameKeyboard();
+    ReleaseHidAlt();
     RestoreVersionButton();
     Bluetooth_release_page_audio_power();
+    // 设置旧页延迟删除时，HID 测试页已接管同一 UART 回调。
+    if (hid_test_screen != nullptr && lv_screen_active() == hid_test_screen) return;
     SimpleUart::getInstance().registerCallback(
         std::function<void(const std::vector<uint8_t>&)>());
     Bluetooth_screen_active = false;
+}
+
+bool BluetoothScreen::DismissOverlay() {
+    if (name_confirm_panel != nullptr) { CloseNameConfirmation(); return true; }
+    if (name_keyboard_panel != nullptr) { CloseNameKeyboard(); return true; }
+    if (audio_devices_page != nullptr) { CloseAudioDevices(); return true; }
+    return false;
 }

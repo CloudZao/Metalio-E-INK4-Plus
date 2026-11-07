@@ -30,11 +30,10 @@ struct CloudBookTask {
 
 using CloudDownloadProgressFn = void (*)(int percent, void* user);
 
-/** @brief 下载云书籍到本地（可附封面字节写旁路） */
+/** @brief 下载云书籍到本地（可附封面缓存路径写旁路） */
 bool DownloadCloudBook(const CloudBookTask& task, std::string& err_out,
                        CloudDownloadProgressFn on_progress = nullptr, void* progress_user = nullptr,
-                       DownloadGate* gate = nullptr, const uint8_t* cover_bytes = nullptr,
-                       size_t cover_len = 0, const char* save_path = nullptr, bool overwrite = false);
+                       DownloadGate* gate = nullptr, const char* cover_path = nullptr, const char* save_path = nullptr, bool overwrite = false);
 /** @brief 删除本地云书籍文件 */
 bool DeleteCloudBookLocal(const CloudBookTask& task, std::string& err_out);
 

@@ -2,15 +2,21 @@
 
 #include "settings.h"
 #include "api_endpoints.h"
+#include "sdkconfig.h"
 #include <atomic>
 
 namespace chat_cloud {
 enum class Provider { Baiwen = 0, Xiaozhi = 1, Yunxin = 2 };
 inline constexpr int kProviderCount = 3;
+#if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
+inline constexpr Provider kDefaultProvider = Provider::Yunxin;
+#else
+inline constexpr Provider kDefaultProvider = Provider::Baiwen;
+#endif
 
 namespace detail {
-inline std::atomic<Provider> saved{Provider::Baiwen};
-inline Provider active = Provider::Baiwen;
+inline std::atomic<Provider> saved{kDefaultProvider};
+inline Provider active = kDefaultProvider;
 inline std::atomic<bool> local_tts{true};
 }  // namespace detail
 
@@ -18,9 +24,9 @@ inline std::atomic<bool> local_tts{true};
 // NVS reads also disable Flash caches; never lazily load from a UI accessor.
 inline void InitializeFromNvs() {
     Settings settings("chat_cloud");
-    const int stored = settings.GetInt("provider");
+    const int stored = settings.GetInt("provider", static_cast<int>(kDefaultProvider));
     const auto provider = stored >= 0 && stored < kProviderCount
-        ? static_cast<Provider>(stored) : Provider::Baiwen;
+        ? static_cast<Provider>(stored) : kDefaultProvider;
     detail::active = provider;
     detail::saved.store(provider, std::memory_order_release);
     detail::local_tts.store(settings.GetBool(provider == Provider::Yunxin ? "yx_tts" : "xz_tts", true), std::memory_order_release);

@@ -4,8 +4,6 @@
 #include "standby_screen/standby_screen.h"
 #include "screen_common.h"
 #include "metalio_keys.h"
-#include "metalio_vibe.h"
-#include "config.h"
 #include "application.h"
 #include "sd_access.h"
 
@@ -221,9 +219,6 @@ bool DrainSdAndBootWork()
 
 int64_t StandbyUiRemainUsLocked()
 {
-    if (pwr::standby_to_shutdown_sec <= 0) {
-        return static_cast<int64_t>(pwr::kLightSleepSliceUs);
-    }
     const int64_t elapsed = pwr::standby_elapsed_us;
     int64_t total = elapsed;
     if (pwr::standby_awake_mark_us != 0) {
@@ -257,19 +252,9 @@ bool IsKeyWakeCause(esp_sleep_wakeup_cause_t cause)
 bool RunLightSleepSlice()
 {
     while (power_hw_standby_rails_park() != ESP_OK) {
-        ESP_LOGW(TAG, "standby rail cut failed; retry before motor");
+        ESP_LOGW(TAG, "standby rail cut failed; retry before sleep");
         if (DelayMsWithStandbyKeyPoll(500)) return true;
     }
-    const uint8_t intensity = MetalioVibe_GetIntensity();
-    // 每个切片均在 P14 断电后持续置高，避免软 PWM 提前拉低马达输出。
-    MetalioVibe_Set(false);
-    MetalioVibe_SetIntensity(3);
-    MetalioVibe_Set(true);
-    const bool key_done = DelayMsWithStandbyKeyPoll(POWER_DISCHARGE_MOTOR_PULSE_MS);
-    MetalioVibe_Set(false);
-    MetalioVibe_SetIntensity(intensity);
-    if (key_done) return true;
-
     xSemaphoreTake(pwr::mu, portMAX_DELAY);
     const int64_t remain_us = StandbyUiRemainUsLocked();
     xSemaphoreGive(pwr::mu);
@@ -493,9 +478,6 @@ void ResetStandbyElapsedLocked()
 
 bool StandbyUiLongEnoughLocked()
 {
-    if (standby_to_shutdown_sec <= 0) {
-        return false;
-    }
     int64_t elapsed = standby_elapsed_us;
     if (standby_awake_mark_us != 0) {
         elapsed += esp_timer_get_time() - standby_awake_mark_us;

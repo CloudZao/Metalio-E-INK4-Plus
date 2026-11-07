@@ -25,6 +25,7 @@ typedef struct {
 /**
  * @brief 按参数从 src 派生表写进 dst_data（容量 ≥ src->phases）
  * @return 新相数；参数不合法返回 0
+ * @note 源表与目标缓冲不得重叠
  */
 int my_waveform_trim(const EpdWaveformPhases* src, const my_waveform_trim_t* trim,
                      uint8_t (*dst_data)[16][4]);

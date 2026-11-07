@@ -1,6 +1,5 @@
-"""压缩中英文文件传输页面并内嵌标识图片，仅使用 Python 标准库。"""
+"""压缩中英文文件传输页面，标识图片由设备共享提供，仅使用 Python 标准库。"""
 
-import base64
 import json
 import re
 import zlib
@@ -18,14 +17,8 @@ def pack(source: Path, output: Path, translations: Path | None = None) -> None:
         visible_source = re.sub(r"(?m)^\s*//.*$", "", page)
         if re.search(r"[\u3400-\u9fff]", visible_source):
             raise ValueError("Untranslated Chinese text in English file manager page")
-    logo = base64.b64encode((source.parent / "cloudzao-logo.png").read_bytes()).decode("ascii")
-    before, after = page.split('src="cloudzao-logo.png"', 1)
-    image = 'src="data:image/png;base64,' + logo + '"'
-    # 图片与页面分别结束 DEFLATE 块，避免大段 base64 干扰页面的压缩编码表。
-    compressor = zlib.compressobj(9, zlib.DEFLATED, 31)
-    packed = compressor.compress(before.encode("utf-8")) + compressor.flush(zlib.Z_BLOCK)
-    packed += compressor.compress(image.encode("ascii")) + compressor.flush(zlib.Z_BLOCK)
-    packed += compressor.compress(after.encode("utf-8")) + compressor.flush()
+    page = page.replace('src="cloudzao-logo.png"', 'src="/cloudzao-logo.png"', 1)
+    packed = zlib.compress(page.encode("utf-8"), 9, wbits=31)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(packed)
 

@@ -7,6 +7,7 @@
 #include <lvgl.h>
 
 #include "cloud_screen/push/push_resources_library.h"
+#include "reader/http_download_file.h"
 
 /** @brief 云页标题字体 */
 const lv_font_t* Cloud_UiFont();
@@ -64,10 +65,8 @@ bool ScreenAlive();
 bool OpStillValid(uint32_t op_gen);
 /** @brief 同步是否忙碌 */
 bool SyncBusy();
-/** @brief 释放 UI 但保留等网任务 */
-void ReleaseUiKeepNet();
-/** @brief 把 URL 下载到内存缓冲 */
-bool Cloud_DownloadUrlToBuffer(const char* url, std::vector<uint8_t>& buf, size_t max_bytes);
+/** @brief 分块下载封面到共享临时文件 */
+std::shared_ptr<reader::HttpTempFile> Cloud_DownloadCover(const char* url);
 /** @brief 列表总页数 */
 int PageCount();
 /** @brief 钳制页码 */

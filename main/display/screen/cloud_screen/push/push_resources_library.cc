@@ -54,7 +54,7 @@ bool DownloadFont(const CloudPushResource& item, std::string& err_out,
 
     if (!DownloadHttpToFile(item.download_url.c_str(), tmp_path.c_str(),
                             item.sha256.empty() ? nullptr : item.sha256.c_str(), item.file_size,
-                            kMaxFontDownloadBytes, on_progress, progress_user, err_out, gate)) {
+                            on_progress, progress_user, err_out, gate)) {
         return false;
     }
     if (gate != nullptr && gate->IsCancelled()) {
@@ -73,12 +73,12 @@ bool DownloadFont(const CloudPushResource& item, std::string& err_out,
 
 bool DownloadPushResource(const CloudPushResource& item, std::string& err_out,
                           CloudDownloadProgressFn on_progress, void* progress_user,
-                          DownloadGate* gate, const uint8_t* cover_bytes, size_t cover_len,
+                          DownloadGate* gate, const char* cover_path,
                           const char* save_path, bool overwrite) {
     err_out.clear();
     if (item.type == PushResourceType::kBook) {
         return DownloadCloudBook(ToBookTask(item), err_out, on_progress, progress_user, gate,
-                                 cover_bytes, cover_len, save_path, overwrite);
+                                 cover_path, save_path, overwrite);
     }
     if (item.type == PushResourceType::kBadge) {
         return DownloadCloudWallpaper(ToWallpaperTask(item), err_out, on_progress, progress_user,

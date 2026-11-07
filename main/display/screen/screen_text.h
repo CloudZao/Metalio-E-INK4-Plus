@@ -1,9 +1,28 @@
 #pragma once
 
 #include "fontpack_lvgl.h"
+#include "reader/text_encoding.h"
 
 #include <algorithm>
+#include <cstring>
 #include <lvgl.h>
+
+/** @brief 检查字体及其回退链是否包含文本所需字形 */
+static inline bool ScreenFontHasText(const lv_font_t* font, const char* text) {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(text);
+    size_t remaining = std::strlen(text);
+    while (remaining > 0) {
+        uint32_t cp = 0;
+        const size_t consumed = reader::Utf8Next(bytes, remaining, &cp);
+        if (consumed == 0) return false;
+        bytes += consumed;
+        remaining -= consumed;
+        if (cp == '\n' || cp == '\r') continue;
+        lv_font_glyph_dsc_t glyph{};
+        if (!lv_font_get_glyph_dsc(font, &glyph, cp, 0) || glyph.is_placeholder) return false;
+    }
+    return true;
+}
 
 /** @brief 按可用宽高选择字库字号并完整换行显示文案 */
 static inline void ScreenFitLabel(lv_obj_t* label, int32_t width, int32_t height,
@@ -16,7 +35,8 @@ static inline void ScreenFitLabel(lv_obj_t* label, int32_t width, int32_t height
     for (const int size : {0, 25, 18}) {
         if (size != 0) {
             const auto* smaller = fontpack_lv_font_get(size, 2);
-            if (smaller == nullptr || smaller->line_height >= font->line_height) continue;
+            if (smaller == nullptr || smaller->line_height >= font->line_height ||
+                !ScreenFontHasText(smaller, lv_label_get_text(label))) continue;
             font = smaller;
         }
         lv_point_t extent;

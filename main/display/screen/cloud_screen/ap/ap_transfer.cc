@@ -163,6 +163,8 @@ UploadState UploadSnapshot() {
     return result;
 }
 
+extern const uint8_t kLogoStart[] asm("_binary_cloudzao_logo_png_start");
+extern const uint8_t kLogoEnd[] asm("_binary_cloudzao_logo_png_end");
 extern const uint8_t kPageStart[] asm("_binary_ap_fileman_html_gz_start");
 extern const uint8_t kPageEnd[] asm("_binary_ap_fileman_html_gz_end");
 extern const uint8_t kPageEnStart[] asm("_binary_ap_fileman_en_html_gz_start");
@@ -319,6 +321,12 @@ esp_err_t SendText(httpd_req_t* req, const char* status, const char* msg) {
     const esp_err_t err = httpd_resp_sendstr(req, msg);
     // 错误时关闭连接，避免未消费的上传体被当作下一条请求。
     return status != nullptr && status[0] >= '4' ? ESP_FAIL : err;
+}
+
+esp_err_t HandleLogo(httpd_req_t* req) {
+    httpd_resp_set_type(req, "image/png");
+    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=86400");
+    return httpd_resp_send(req, reinterpret_cast<const char*>(kLogoStart), kLogoEnd - kLogoStart);
 }
 
 esp_err_t HandlePage(httpd_req_t* req) {
@@ -1110,7 +1118,7 @@ bool StartHttp() {
     if (!s_upload_worker.Start("ap_upload") || !s_file_worker.Start("ap_files")) return false;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 10;
+    config.max_uri_handlers = 11;
     config.max_open_sockets = ApRequestWorker::kMaxClients;
     config.open_fn = OpenClient;
     config.close_fn = CloseClient;
@@ -1130,6 +1138,7 @@ bool StartHttp() {
         return false;
     }
     static const RequestRoute routes[] = {
+        {"/cloudzao-logo.png", HTTP_GET, HandleLogo},
         {"/", HTTP_GET, HandlePage}, {"/files", HTTP_GET, HandlePage},
         {"/api/files", HTTP_GET, HandleFileList}, {"/api/storage", HTTP_GET, HandleStorage},
         {"/download", HTTP_GET, HandleDownload},

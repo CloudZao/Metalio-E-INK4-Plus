@@ -180,22 +180,6 @@ bool SaveBookCoverSidecarFromL8(const char* book_path, const RasterImage& l8) {
     return true;
 }
 
-bool SaveBookCoverSidecarFromBytes(const char* book_path, const uint8_t* data, size_t len) {
-    if (book_path == nullptr || book_path[0] == '\0' || data == nullptr || len == 0) {
-        return false;
-    }
-    if (!IsUnderBooksDir(book_path)) {
-        ESP_LOGW(TAG, "sidecar skip: path outside books dir %s", book_path);
-        return false;
-    }
-    char sidecar[SD_FILE_PATH_CAPACITY];
-    if (!EncodeCoverBytesToSidecar(book_path, data, len, sidecar, sizeof(sidecar))) {
-        return false;
-    }
-    ESP_LOGI(TAG, "sidecar ok from bytes %s (%u in)", sidecar, static_cast<unsigned>(len));
-    return true;
-}
-
 bool SaveBookCoverSidecar(const char* book_path) {
     if (book_path == nullptr || book_path[0] == '\0') {
         return false;

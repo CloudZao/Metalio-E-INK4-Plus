@@ -2,6 +2,7 @@
  * @brief S31 低功耗硬件原子（对齐 light_test 入睡序列）
  */
 #include "power_hw.h"
+#include "ble_page_turner.h"
 #include "s31_sleep/s31_sleep.h"
 
 #include "application.h"
@@ -182,7 +183,6 @@ static esp_err_t CutStandbyRails(void) {
     if (!s_standby_rails_prepared) {
         Frontlight::GetInstance().ForceAllLow();
         if (auto* cell = CellularBoard()) cell->PreparePowerOff();
-        MetalioAudio_OnPowerOff();
         // 写失败也可能已改变部分输出，首次尝试前即登记恢复责任。
         s_standby_rails_prepared = true;
     }
@@ -194,7 +194,6 @@ static esp_err_t RestoreStandbyRails(void) {
     const esp_err_t err = epd_board_metalio_eink4_plus_sleep_restore_rails();
     if (err == ESP_OK) {
         s_standby_rails_prepared = false;
-        MetalioAudio_OnPowerRestored();
         if (auto* cell = CellularBoard()) cell->OnPowerRestored();
     }
     Frontlight::GetInstance().ForceAllLow();
@@ -274,7 +273,7 @@ esp_err_t power_hw_main_rail_set(bool on) {
         return ESP_OK;
     }
     if (on) power_hw_cellular_resume();
-    ESP_LOGD(TAG, "main_rail_set(%d) policy only; physical P14 follows light sleep", on ? 1 : 0);
+    ESP_LOGD(TAG, "main_rail_set(%d) policy only", on ? 1 : 0);
     return ESP_OK;
 }
 
@@ -430,6 +429,7 @@ esp_err_t power_hw_light_sleep_once(uint64_t max_sleep_us) {
         Application::GetInstance().IsBootWorkActive() || StandbyScreen::HasWakeRequest()) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (!BlePageTurner::PrepareSleep()) return ESP_ERR_INVALID_STATE;
     sd_access::Transition transition;
     if (!transition) return ESP_ERR_TIMEOUT;
     unsigned applied = s_standby_rails_prepared ? kLsTps | kLsBus | kLsRails : 0;

@@ -9,6 +9,8 @@
 #include "assets/lang_config.h"
 #include "board.h"
 #include "application.h"
+#include "sd_paths.h"
+#include "sd_access.h"
 
 #include <cerrno>
 #include <sys/stat.h>
@@ -16,6 +18,11 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <mutex>
+#include <new>
+#include <dirent.h>
+#include <fcntl.h>
+#include <esp_random.h>
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -64,10 +71,74 @@ void ReportProgress(HttpDownloadProgressFn on_progress, void* progress_user, uin
 
 }  // namespace
 
+HttpTempFile::~HttpTempFile() {
+    sd_access::Transaction transaction;
+    if (transaction && !path.empty() && unlink(path.c_str()) != 0 && errno != ENOENT) {
+        ESP_LOGW(TAG, "HTTP cache cleanup failed");
+    }
+}
+
+static std::shared_ptr<HttpTempFile> CreateHttpTempFile(std::string& err_out) try {
+    err_out.clear();
+    sd_access::Transaction transaction;
+    if (!transaction || !SdEnsureDir(SD_PATH_TEMP) || !SdEnsureDir(SD_PATH_TEMP "/http")) {
+        err_out = Lang::Strings::BOOK_WRITE_FAIL;
+        return {};
+    }
+    static std::mutex cache_mutex;
+    static bool cleaned = false;
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    if (!cleaned) {
+        DIR* directory = opendir(SD_PATH_TEMP "/http");
+        if (!directory) { err_out = Lang::Strings::BOOK_WRITE_FAIL; return {}; }
+        while (const dirent* entry = readdir(directory)) {
+            const char* name = entry->d_name;
+            if (std::strlen(name) != 17 || std::strncmp(name, "http-", 5) || std::strcmp(name + 13, ".tmp")) continue;
+            bool owned = true;
+            for (int i = 5; i < 13; ++i)
+                if (!((name[i] >= '0' && name[i] <= '9') || (name[i] >= 'a' && name[i] <= 'f'))) owned = false;
+            if (owned) {
+                char path[SD_FILE_PATH_CAPACITY];
+                std::snprintf(path, sizeof(path), SD_PATH_TEMP "/http/%.17s", name);
+                unlink(path);
+            }
+        }
+        closedir(directory);
+        cleaned = true;
+    }
+    auto cache = std::make_shared<HttpTempFile>();
+    cache->path.reserve(SD_FILE_PATH_CAPACITY);
+    for (unsigned attempt = 0; attempt < 8; ++attempt) {
+        char path[SD_FILE_PATH_CAPACITY];
+        std::snprintf(path, sizeof(path), SD_PATH_TEMP "/http/http-%08lx.tmp", static_cast<unsigned long>(esp_random()));
+        const int fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0600);
+        if (fd < 0) { if (errno == EEXIST) continue; break; }
+        cache->path = path;
+        if (close(fd) == 0) return cache;
+        break;
+    }
+    err_out = Lang::Strings::BOOK_WRITE_FAIL;
+    return {};
+} catch (const std::bad_alloc&) {
+    err_out = Lang::Strings::BOOK_OUT_OF_MEMORY;
+    return {};
+}
+
+std::shared_ptr<HttpTempFile> DownloadHttpToCache(const char* url, std::string& err_out,
+    DownloadGate* gate, HttpDownloadCancelledFn cancelled, void* context) {
+    sd_access::Transaction transaction;
+    if (!transaction) { err_out = Lang::Strings::BOOK_WRITE_FAIL; return {}; }
+    auto cache = CreateHttpTempFile(err_out);
+    if (!cache || !DownloadHttpToFile(url, cache->path.c_str(), nullptr, 0,
+                                     nullptr, nullptr, err_out, gate, cancelled, context)) return {};
+    return cache;
+}
+
 bool DownloadHttpToFile(const char* url, const char* tmp_path, const char* expected_sha256,
-                        uint64_t expected_total, size_t max_bytes,
+                        uint64_t expected_total,
                         HttpDownloadProgressFn on_progress, void* progress_user,
-                        std::string& err_out, DownloadGate* gate) {
+                        std::string& err_out, DownloadGate* gate,
+                        HttpDownloadCancelledFn cancelled, void* context) {
     err_out.clear();
     if (url == nullptr || url[0] == '\0' || tmp_path == nullptr || tmp_path[0] == '\0') {
         err_out = Lang::Strings::BOOK_BAD_ARG;
@@ -185,7 +256,7 @@ bool DownloadHttpToFile(const char* url, const char* tmp_path, const char* expec
     }
     uint8_t* buf = heap_buf.get();
 
-    size_t total = 0;
+    uint64_t total = 0;
     size_t buffered = 0;
     int last_percent = -1;
     bool ok = true;
@@ -205,7 +276,7 @@ bool DownloadHttpToFile(const char* url, const char* tmp_path, const char* expec
     };
 
     while (ok) {
-        if (gate != nullptr && gate->IsCancelled()) {
+        if ((gate != nullptr && gate->IsCancelled()) || (cancelled && cancelled(context))) {
             ok = false;
             err_out = Lang::Strings::BOOK_CANCELLED;
             break;
@@ -222,11 +293,6 @@ bool DownloadHttpToFile(const char* url, const char* tmp_path, const char* expec
             break;
         }
         const size_t got = static_cast<size_t>(n);
-        if (total + got > max_bytes) {
-            ok = false;
-            err_out = Lang::Strings::BOOK_FILE_TOO_LARGE;
-            break;
-        }
         total += got;
         buffered += got;
         if (buffered == buf_cap && !write_buffer()) {
@@ -297,7 +363,7 @@ bool DownloadHttpToFile(const char* url, const char* tmp_path, const char* expec
         ESP_LOGW(TAG, "sha256 mismatch expect=%.16s... got=%.16s... (metadata only)", expected_sha256, hex);
     }
 
-    ESP_LOGI(TAG, "downloaded %u bytes integrity=%s (psram io %u)", static_cast<unsigned>(total),
+    ESP_LOGI(TAG, "downloaded %llu bytes integrity=%s (psram io %u)", static_cast<unsigned long long>(total),
              check_hash && hash_matches ? "sha256" : "length", static_cast<unsigned>(buf_cap));
     if (on_progress != nullptr) {
         on_progress(100, progress_user);

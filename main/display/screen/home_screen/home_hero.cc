@@ -10,6 +10,7 @@
 
 #include "assets/lang_config.h"
 #include "fontpack_lvgl.h"
+#include "home_icon_source.h"
 
 HomeHeroUiState& HomeHero_State() {
     static HomeHeroUiState s;
@@ -172,8 +173,11 @@ void HomeHero_FillWeatherWidgets(const StandbyClassicWeatherView& snap) {
         if (snap.icon_code[0] != '\0') {
             char path[48];
             std::snprintf(path, sizeof(path), "A:ic_s_weather_%s.spng", snap.icon_code);
-            lv_image_set_src(HomeHero_State().weather_icon, path);
-            lv_obj_remove_flag(HomeHero_State().weather_icon, LV_OBJ_FLAG_HIDDEN);
+            if (HomeIconSetFullSource(HomeHero_State().weather_icon, path)) {
+                lv_obj_remove_flag(HomeHero_State().weather_icon, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(HomeHero_State().weather_icon, LV_OBJ_FLAG_HIDDEN);
+            }
         } else {
             lv_obj_add_flag(HomeHero_State().weather_icon, LV_OBJ_FLAG_HIDDEN);
         }

@@ -20,7 +20,6 @@
 namespace reader {
 
 static constexpr const char* TAG = "WpCloud";
-static constexpr size_t kMaxWallpaperDownloadBytes = 512 * 1024;
 
 static std::string SanitizeFilename(std::string file) {
     if (!file.empty()) {
@@ -248,7 +247,7 @@ bool DownloadCloudWallpaper(const CloudWallpaperTask& task, std::string& err_out
 
     if (!DownloadHttpToFile(task.download_url.c_str(), tmp_path.c_str(),
                             task.sha256.empty() ? nullptr : task.sha256.c_str(), task.file_size,
-                            kMaxWallpaperDownloadBytes, on_progress, progress_user, err_out, gate)) {
+                            on_progress, progress_user, err_out, gate)) {
         return false;
     }
     if (gate != nullptr && gate->IsCancelled()) {

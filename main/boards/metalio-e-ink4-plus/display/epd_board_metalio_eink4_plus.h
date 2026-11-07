@@ -59,13 +59,13 @@ esp_err_t epd_board_metalio_eink4_plus_bt_power_reset(void);
 void epd_board_metalio_eink4_plus_ana_sw_set(bool high);
 
 /**
- * @brief 入睡关轨：P5 摄像屏电 → P14 VOUT（最后关）
+ * @brief 入睡时关闭 P5 摄像屏电，保留 P14 共享供电
  * @return 成功返回 ESP_OK；失败时可能已部分关轨，调用方须恢复
  */
 esp_err_t epd_board_metalio_eink4_plus_sleep_cut_rails(void);
 
 /**
- * @brief 退出待机或绘制关机画面前分阶段恢复 P14 → P5
+ * @brief 退出待机或绘制关机画面前恢复 P5，保留 P14 状态
  * @return 成功返回 ESP_OK，失败返回对应错误
  */
 esp_err_t epd_board_metalio_eink4_plus_sleep_restore_rails(void);

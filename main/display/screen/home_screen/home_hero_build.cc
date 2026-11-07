@@ -5,6 +5,7 @@
 
 #include "assets/lang_config.h"
 #include "fontpack_lvgl.h"
+#include "home_icon_source.h"
 
 void HomeHero_OnSlashGapDraw(lv_event_t* e) {
     if (lv_event_get_code(e) != LV_EVENT_DRAW_MAIN_END) {
@@ -94,7 +95,7 @@ void HomeHero_BuildClassicUi(lv_obj_t* parent, lv_coord_t y_offset) {
     lv_obj_clear_flag(date_row, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* cal_icon = lv_image_create(date_row);
-    lv_image_set_src(cal_icon, "A:ic_s_standby_calendar.spng");
+    lv_image_set_src(cal_icon, HomeIconSource("A:ic_s_standby_calendar.spng"));
     lv_obj_set_size(cal_icon, kCalendarIconW, kCalendarIconH);
     lv_image_set_inner_align(cal_icon, LV_IMAGE_ALIGN_CONTAIN);
     lv_obj_clear_flag(cal_icon, LV_OBJ_FLAG_CLICKABLE);

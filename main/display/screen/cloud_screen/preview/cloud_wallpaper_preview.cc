@@ -180,9 +180,9 @@ void WallpaperPreviewLoadTask(void* arg) {
                 delete img;
                 img = nullptr;
                 std::snprintf(msg->err, sizeof(msg->err), "%s", Lang::Strings::CLOUD_WAIT_DOWNLOAD);
-            } else if (!work->cached_bytes.empty()) {
-                // 列表已缓存 coverImageUrl 字节：按详情尺寸解码，不再 HTTP
-                ok = reader::DecodeImageToL8(work->cached_bytes.data(), work->cached_bytes.size(),
+            } else if (work->cached_file) {
+                // 列表缓存由任务共享持有，按详情尺寸从文件解码。
+                ok = reader::DecodeImageFileToL8(work->cached_file->path.c_str(),
                                              kPreviewMaxW, kPreviewMaxH, *img) &&
                      !img->empty();
                 if (!ok) {
@@ -195,10 +195,10 @@ void WallpaperPreviewLoadTask(void* arg) {
                                                      *img) &&
                          !img->empty();
                 } else if (work->download_url[0] != '\0') {
-                    std::vector<uint8_t> bytes;
-                    if (Cloud_DownloadUrlToBuffer(work->download_url, bytes, kPreviewMaxDownloadBytes) &&
+                    auto cache = Cloud_DownloadCover(work->download_url);
+                    if (cache &&
                         Cloud_State().preview.epoch == work->epoch) {
-                        ok = reader::DecodeImageToL8(bytes.data(), bytes.size(), kPreviewMaxW,
+                        ok = reader::DecodeImageFileToL8(cache->path.c_str(), kPreviewMaxW,
                                                      kPreviewMaxH, *img) &&
                              !img->empty();
                     } else {
@@ -248,17 +248,16 @@ void ScheduleLoadWallpaperPreview(int index) {
     // 预览只用 coverImageUrl（列表缓存或 HTTP）；已落盘壁纸可走本地文件；绝不拉完整 downloadUrl
     const bool is_badge = item.type == reader::PushResourceType::kBadge;
     work->use_local = is_badge && item.IsDownloaded() &&
-                      (index >= static_cast<int>(st.data.cover_bytes.size()) ||
-                       st.data.cover_bytes[static_cast<size_t>(index)].empty()) &&
+                      (index >= static_cast<int>(st.data.cover_cache.size()) ||
+                       !st.data.cover_cache[static_cast<size_t>(index)]) &&
                       item.CoverThumbUrl().empty();
     if (work->use_local) {
         std::snprintf(work->local_path, sizeof(work->local_path), "%s", item.LocalPath().c_str());
     }
-    if (index < static_cast<int>(st.data.cover_bytes.size()) &&
-        !st.data.cover_bytes[static_cast<size_t>(index)].empty()) {
-        work->cached_bytes = st.data.cover_bytes[static_cast<size_t>(index)];
-        ESP_LOGI(TAG, "preview cover from list cache idx=%d bytes=%u", index,
-                 static_cast<unsigned>(work->cached_bytes.size()));
+    if (index < static_cast<int>(st.data.cover_cache.size()) &&
+        st.data.cover_cache[static_cast<size_t>(index)]) {
+        work->cached_file = st.data.cover_cache[static_cast<size_t>(index)];
+        ESP_LOGI(TAG, "preview cover from file cache idx=%d", index);
     } else if (!work->use_local) {
         const std::string& url = item.CoverThumbUrl();
         if (url.empty()) {

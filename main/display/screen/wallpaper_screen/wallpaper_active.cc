@@ -305,16 +305,8 @@ static bool TryResolveSlotPath(WallpaperActiveSlot slot, char* out_path, size_t 
     }
     out_path[0] = '\0';
 
-    std::string name;
-    const char* cached = s_names[static_cast<size_t>(slot)];
-    if (s_cache_ready.load(std::memory_order_acquire) && cached[0] != '\0' &&
-        IsSafeWallpaperBasename(cached)) {
-        name = cached;
-    } else {
-        Settings settings(kNvsNs, false);
-        name = ReadSlotNameFromNvs(settings, slot, nullptr);
-        // 解析路径：不在这里 erase（瞬时失败不应丢配置）；仅 hydrate 清脏
-    }
+    // 解码任务使用 PSRAM 栈，不能回读可能关闭缓存的 NVS；SD 未就绪时也保留已灌入的选择。
+    const std::string name = s_names[static_cast<size_t>(slot)];
     if (name.empty() || !IsSafeWallpaperBasename(name.c_str())) {
         return false;
     }

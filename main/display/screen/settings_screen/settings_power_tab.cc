@@ -30,23 +30,6 @@ constexpr MhzOption kMhzOptions[] = {
 };
 constexpr int kMhzCount = sizeof(kMhzOptions) / sizeof(kMhzOptions[0]);
 
-constexpr SecOption kIdleStandbyOptions[] = {
-    {3 * 60},
-    {10 * 60},
-    {30 * 60},
-};
-constexpr int kIdleStandbyCount = sizeof(kIdleStandbyOptions) / sizeof(kIdleStandbyOptions[0]);
-
-constexpr SecOption kShutdownOptions[] = {
-    {3 * 60},
-    {10 * 60},
-    {30 * 60},
-    {3 * 60 * 60},
-    {6 * 60 * 60},
-    {0}, // 永不自动关机
-};
-constexpr int kShutdownCount = sizeof(kShutdownOptions) / sizeof(kShutdownOptions[0]);
-
 constexpr SecOption kNetGraceOptions[] = {
     {30},
     {60},
@@ -65,26 +48,14 @@ const char* SecOptionTitle(int sec) {
             return Lang::Strings::SETTINGS_POWER_60_SEC;
         case 120:
             return Lang::Strings::SETTINGS_POWER_120_SEC;
-        case 3 * 60:
-            return Lang::Strings::SETTINGS_POWER_3_MIN;
-        case 10 * 60:
-            return Lang::Strings::SETTINGS_POWER_10_MIN;
-        case 30 * 60:
-            return Lang::Strings::SETTINGS_POWER_30_MIN;
-        case 3 * 60 * 60:
-            return Lang::Strings::SETTINGS_POWER_3_HOUR;
-        case 6 * 60 * 60:
-            return Lang::Strings::SETTINGS_POWER_6_HOUR;
         default:
-            return Lang::Strings::SETTINGS_POWER_3_MIN;
+            return Lang::Strings::SETTINGS_POWER_30_SEC;
     }
 }
 
 struct PowerUi {
     lv_obj_t* mhz_btns[kMhzCount] = {};
-    lv_obj_t* idle_btns[kIdleStandbyCount] = {};
     lv_obj_t* grace_btns[kNetGraceCount] = {};
-    lv_obj_t* off_btns[kShutdownCount] = {};
 };
 
 PowerUi s_ui;
@@ -92,9 +63,7 @@ PowerUi s_ui;
 void RefreshOptions() {
     auto& pp = PowerPolicy::GetInstance();
     const int mhz = pp.GetIdleCpuMhz();
-    const int idle_s = pp.GetUserIdleToStandbySec();
     const int grace_s = pp.GetNetGraceSec();
-    const int off_s = pp.GetStandbyToShutdownSec();
 
     for (int i = 0; i < kMhzCount; ++i) {
         if (s_ui.mhz_btns[i] != nullptr) {
@@ -102,22 +71,10 @@ void RefreshOptions() {
                                     kMhzOptions[i].mhz == mhz);
         }
     }
-    for (int i = 0; i < kIdleStandbyCount; ++i) {
-        if (s_ui.idle_btns[i] != nullptr) {
-            SettingsStyleSelectable(s_ui.idle_btns[i], lv_obj_get_child(s_ui.idle_btns[i], 0),
-                                    kIdleStandbyOptions[i].sec == idle_s);
-        }
-    }
     for (int i = 0; i < kNetGraceCount; ++i) {
         if (s_ui.grace_btns[i] != nullptr) {
             SettingsStyleSelectable(s_ui.grace_btns[i], lv_obj_get_child(s_ui.grace_btns[i], 0),
                                     kNetGraceOptions[i].sec == grace_s);
-        }
-    }
-    for (int i = 0; i < kShutdownCount; ++i) {
-        if (s_ui.off_btns[i] != nullptr) {
-            SettingsStyleSelectable(s_ui.off_btns[i], lv_obj_get_child(s_ui.off_btns[i], 0),
-                                    kShutdownOptions[i].sec == off_s);
         }
     }
 }
@@ -131,30 +88,12 @@ void OnMhzClicked(lv_event_t* e) {
     RefreshOptions();
 }
 
-void OnIdleStandbyClicked(lv_event_t* e) {
-    const int sec = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if (PowerPolicy::GetInstance().GetUserIdleToStandbySec() == sec) {
-        return;
-    }
-    PowerPolicy::GetInstance().SetUserIdleToStandbySec(sec);
-    RefreshOptions();
-}
-
 void OnNetGraceClicked(lv_event_t* e) {
     const int sec = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
     if (PowerPolicy::GetInstance().GetNetGraceSec() == sec) {
         return;
     }
     PowerPolicy::GetInstance().SetNetGraceSec(sec);
-    RefreshOptions();
-}
-
-void OnShutdownClicked(lv_event_t* e) {
-    const int sec = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if (PowerPolicy::GetInstance().GetStandbyToShutdownSec() == sec) {
-        return;
-    }
-    PowerPolicy::GetInstance().SetStandbyToShutdownSec(sec);
     RefreshOptions();
 }
 
@@ -258,34 +197,11 @@ void SettingsPowerTab_Build(lv_obj_t* page) {
 
     AddSectionTitle(page, Lang::Strings::SETTINGS_POWER_STANDBY_TITLE);
     AddSectionHint(page, Lang::Strings::SETTINGS_POWER_STANDBY_HINT);
-    {
-        lv_obj_t* row = CreateOptionRow(page);
-        for (int i = 0; i < kIdleStandbyCount; ++i) {
-            s_ui.idle_btns[i] =
-                CreateCompactOption(row, SecOptionTitle(kIdleStandbyOptions[i].sec), OnIdleStandbyClicked,
-                                    static_cast<intptr_t>(kIdleStandbyOptions[i].sec));
-        }
-    }
 
     AddSectionDivider(page);
 
     AddSectionTitle(page, Lang::Strings::SETTINGS_POWER_OFF_TITLE);
     AddSectionHint(page, Lang::Strings::SETTINGS_POWER_OFF_HINT);
-    {
-        // 两行各三档：3/10/30 分，3 时 / 6 时 / 永不
-        for (int row_i = 0; row_i < 2; ++row_i) {
-            lv_obj_t* row = CreateOptionRow(page);
-            for (int col = 0; col < 3; ++col) {
-                const int i = row_i * 3 + col;
-                if (i >= kShutdownCount) {
-                    break;
-                }
-                s_ui.off_btns[i] =
-                    CreateCompactOption(row, SecOptionTitle(kShutdownOptions[i].sec), OnShutdownClicked,
-                                        static_cast<intptr_t>(kShutdownOptions[i].sec));
-            }
-        }
-    }
 
     RefreshOptions();
 }

@@ -106,18 +106,6 @@ public:
     void SetIdleCpuMhz(int mhz);
 
     /**
-     * @brief 无操作多久进入浅睡待机（秒）
-     * @return 180 / 600 / 1800
-     */
-    int GetUserIdleToStandbySec() const;
-
-    /**
-     * @brief 设置无操作进浅睡待机时长并写入 NVS
-     * @param sec 仅接受 180 / 600 / 1800，其它值归一为默认 180
-     */
-    void SetUserIdleToStandbySec(int sec);
-
-    /**
      * @brief 无保网需求后仍保持联网的时长（秒）
      * @return 0（永不因空闲断网）/ 30 / 60 / 120
      */
@@ -133,18 +121,6 @@ public:
      * @brief 电源键短按进待机：跳过断网暂留
      */
     void PreparePowerKeyStandby();
-
-    /**
-     * @brief 待机浅睡累计多久自动关机（秒）
-     * @return 0（永不）/ 180 / 600 / 1800 / 10800 / 21600
-     */
-    int GetStandbyToShutdownSec() const;
-
-    /**
-     * @brief 设置浅睡累计关机时长并写入 NVS
-     * @param sec 仅接受 0 / 180 / 600 / 1800 / 10800 / 21600，其它值归一为默认 1800；0=永不关机（浅睡仍按 60s 切片定时醒）
-     */
-    void SetStandbyToShutdownSec(int sec);
 
 private:
     PowerPolicy() = default;

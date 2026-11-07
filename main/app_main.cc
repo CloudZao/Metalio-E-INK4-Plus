@@ -5,6 +5,8 @@
 #include "application.h"
 #include "epd_board_metalio_eink4_plus.h"
 #include "power_hw.h"
+#include "ble_page_turner.h"
+#include "pager_key_handler.h"
 
 #include <esp_event.h>
 #include <esp_log.h>
@@ -26,6 +28,7 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(ret);
 
     ESP_LOGI(TAG, "Metalio-E-Ink4-Plus bring-up");
+    BlePageTurner::Init(PagerKey_Receive);
     Application::GetInstance().Start();
 
     // 运行期由消息调度与显示任务接管；返回后 SDK 回收启动任务的栈。

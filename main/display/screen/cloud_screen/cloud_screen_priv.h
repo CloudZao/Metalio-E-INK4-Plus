@@ -16,6 +16,7 @@
 
 #include "cloud_screen/push/push_resources_library.h"
 #include "reader/download_gate.h"
+#include "reader/http_download_file.h"
 #include "reader/reader_types.h"
 #include "screen_common.h"
 #include "power_policy.h"
@@ -35,14 +36,12 @@ constexpr lv_coord_t kThumbH = UiSy(64);
 constexpr lv_coord_t kThumbGap = UiSx(10);
 constexpr int kThumbDecodeW = UiSx(48);
 constexpr int kThumbDecodeH = UiSy(64);
-constexpr size_t kThumbMaxDownloadBytes = 512 * 1024;
 constexpr lv_coord_t kRowPad = UiSx(10);
 constexpr lv_coord_t kRowBorderW = UiSx(2);
 constexpr lv_coord_t kRowRadius = UiSx(8);
 constexpr lv_coord_t kActionH = UiSy(56);
 constexpr int kPreviewMaxW = UiSx(240);
 constexpr int kPreviewMaxH = UiSy(400);
-constexpr size_t kPreviewMaxDownloadBytes = 2 * 1024 * 1024;
 constexpr uint32_t kCloudFetchStack = 8 * 1024;
 constexpr uint32_t kWallpaperPreviewStack = 10 * 1024;
 constexpr uint32_t kCoverThumbStack = 8 * 1024;
@@ -161,7 +160,7 @@ struct UiState {
         std::vector<uint8_t> selected;  // 与 items 等长；1=多选选中
         std::vector<std::string> batch_save_ids;  // 批量保存队列（taskId）
         std::vector<std::unique_ptr<reader::RasterImage>> thumbs;
-        std::vector<std::vector<uint8_t>> cover_bytes;  // 与 items 等长：coverImageUrl 原始字节
+        std::vector<std::shared_ptr<reader::HttpTempFile>> cover_cache; // 与 items 等长的磁盘封面缓存
         uint32_t thumb_epoch = 0;
         int mode = kCloudModeAp;  // CloudXferMode
         int filter_tab = 0;        // APP 推送：0全部 1壁纸 2书籍 3字体
@@ -170,7 +169,7 @@ struct UiState {
         bool loading = false;
         bool waiting_net = false;
         bool fetch_done = false;
-        bool covers_loading = false;  // 预览图全入 PSRAM 前不渲染列表行
+        bool covers_loading = false; // 本批封面缓存与缩略图就绪后渲染列表行
         bool multi = false;
         bool batch_busy = false;
         bool delete_busy = false;  // 多选 DELETE push-resources 进行中
@@ -229,7 +228,7 @@ struct CloudDownloadWork {
     reader::CloudPushResource item;
     std::string save_path; // 用户确认后的落盘路径
     bool overwrite = false; // 用户明确授权覆盖
-    std::vector<uint8_t> cover_bytes;  // 列表已缓存的 coverImageUrl，供旁路免再 HTTP
+    std::shared_ptr<reader::HttpTempFile> cover_cache; // 与列表共享封面缓存
 };
 
 struct CloudDownloadDoneMsg {
@@ -274,7 +273,7 @@ struct WallpaperPreviewWork {
     char local_path[SD_FILE_PATH_CAPACITY] = {};
     char download_url[768] = {};
     bool use_local = false;
-    std::vector<uint8_t> cached_bytes;  // 非空则本地按详情尺寸解码，不再 HTTP
+    std::shared_ptr<reader::HttpTempFile> cached_file; // 持有至预览解码完成
 };
 
 struct WallpaperPreviewResultMsg {
@@ -294,7 +293,7 @@ struct CoverThumbOneMsg {
     uint32_t epoch = 0;
     int index = -1;
     reader::RasterImage* img = nullptr;
-    std::vector<uint8_t> bytes;  // 原始封面字节，与小图一并入库
+    std::shared_ptr<reader::HttpTempFile> cache; // 原始封面缓存，与小图一并交接
     bool done = false;  // 本批最后一项（或失败收尾）后清 busy
 };
 
@@ -310,7 +309,6 @@ extern lv_timer_t* s_status_clear_timer;
 extern DownloadGate s_dl_gate;
 extern DownloadGate s_sync_gate;
 extern int64_t s_last_user_sync_us;
-extern std::atomic<bool> s_ui_net_held;
 extern std::atomic<bool> s_thumb_busy;
 extern std::atomic<bool> s_thumb_abort;
 extern std::atomic<bool> s_dl_owns_http;

@@ -79,14 +79,8 @@ void PreparePage(void* data) {
             result.ok = !cancelled.load();
             if (warmed && result.ok && page && !result.cursor->IsPageImagesMode() && reader::PageIsTextOnly(*page) &&
                 work->font && work->width > 40 && work->height > 40) {
-                lv_coord_t width = 0;
-                for (const auto& item : page->items) {
-                    if (item.kind != reader::ContentKind::kText || item.text.empty()) continue;
-                    lv_point_t size{};
-                    lv_text_get_size(&size, item.text.c_str(), work->font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-                    width = std::max<lv_coord_t>(width, size.x + (item.para_indent ? reader::ParaIndentPadPx(work->font) : 0));
-                }
-                result.column_width = !work->vertical && width > 40 && width < work->width ? width : work->width;
+                result.column_width = work->vertical ? work->width
+                    : reader::PageTextColumnWidth(*page, work->font, work->width);
                 const bool raster_ok = work->vertical
                     ? reader::RasterPageVerticalTextToL8(*page, work->font, result.cursor->LineSpacingPercent(), result.cursor->ParaGap(),
                         result.column_width, work->height, work->underline, result.raster, work->antialias, work->rtl)

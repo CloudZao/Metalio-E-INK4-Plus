@@ -184,9 +184,11 @@ void RenderPage() {
     const bool page_images = ui.session->IsPageImagesMode();
     const lv_coord_t max_w = ui.session->ViewportWidth();
     const lv_coord_t content_h = ui.session->ViewportHeight();
+    const lv_coord_t col_w = page_images ? max_w
+        : reader::PageTextColumnWidth(*page, BookFont(), max_w);
     lv_obj_t* col = lv_obj_create(ui.content);
     lv_obj_remove_style_all(col);
-    lv_obj_set_size(col, max_w, page_images ? content_h : LV_SIZE_CONTENT);
+    lv_obj_set_size(col, col_w, page_images ? content_h : LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(col, 0, 0);
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -204,7 +206,7 @@ void RenderPage() {
             if (item.text.empty()) {
                 continue;
             }
-            reader::CreatePageTextLabel(col, item, max_w, book_font, line_layout, row_index,
+            reader::CreatePageTextLabel(col, item, col_w, book_font, line_layout, row_index,
                                        reader::ReaderParagraphGap(ui.session->ParaGap(), previous_title));
             previous_title = item.chapter_title;
         } else {

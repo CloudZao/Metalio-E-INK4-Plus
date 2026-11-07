@@ -23,9 +23,7 @@ static const char* TAG = "PowerPolicy";
 
 constexpr const char* kPowerNvsNs = "power";
 constexpr const char* kIdleMhzNvsKey = "idle_mhz";
-constexpr const char* kIdleToStandbyNvsKey = "idle_stb_s";
 constexpr const char* kNetGraceNvsKey = "net_grace_s";
-constexpr const char* kStandbyToOffNvsKey = "stb_off_s";
 constexpr int kIdleMhzDefault = 320;
 
 namespace pwr {
@@ -46,9 +44,7 @@ bool restore_provisioning_ui_pending = false;
 bool touch_asleep = false;
 int idle_cpu_mhz = kIdleMhzDefault;
 int queued_cpu_mhz = 0;
-int idle_to_standby_sec = kIdleToStandbySecDefault;
 int net_grace_sec = kNetGraceSecDefault;
-int standby_to_shutdown_sec = kStandbyToShutdownSecDefault;
 int64_t last_user_activity_us = 0;
 int64_t standby_elapsed_us = 0;
 int64_t standby_awake_mark_us = 0;
@@ -319,24 +315,6 @@ int NormalizeIdleMhz(int mhz)
     return kIdleMhzDefault;
 }
 
-int NormalizeIdleToStandbySec(int sec)
-{
-    if (sec == 3 * 60 || sec == 10 * 60 || sec == 30 * 60) {
-        return sec;
-    }
-    return pwr::kIdleToStandbySecDefault;
-}
-
-int NormalizeStandbyToShutdownSec(int sec)
-{
-    // 0=永不；非法 / 旧 NVS（含 30s、1h 等）归一为默认
-    if (sec == 0 || sec == 3 * 60 || sec == 10 * 60 || sec == 30 * 60 ||
-        sec == 3 * 60 * 60 || sec == 6 * 60 * 60) {
-        return sec;
-    }
-    return pwr::kStandbyToShutdownSecDefault;
-}
-
 int NormalizeNetGraceSec(int sec)
 {
     if (sec == 0 || sec == 30 || sec == 60 || sec == 120) {
@@ -349,13 +327,9 @@ void LoadPowerPrefsFromNvs()
 {
     Settings settings(kPowerNvsNs, false);
     pwr::idle_cpu_mhz = NormalizeIdleMhz(settings.GetInt(kIdleMhzNvsKey, kIdleMhzDefault));
-    pwr::idle_to_standby_sec =
-        NormalizeIdleToStandbySec(settings.GetInt(kIdleToStandbyNvsKey, pwr::kIdleToStandbySecDefault));
     pwr::net_grace_sec =
         NormalizeNetGraceSec(settings.GetInt(kNetGraceNvsKey, pwr::kNetGraceSecDefault));
-    pwr::standby_to_shutdown_sec = NormalizeStandbyToShutdownSec(
-        settings.GetInt(kStandbyToOffNvsKey, pwr::kStandbyToShutdownSecDefault));
-    ESP_LOGI(TAG, "nvs load idle_mhz=%d idle_stb_s=%d net_grace_s=%d stb_off_s=%d", pwr::idle_cpu_mhz,
+    ESP_LOGI(TAG, "power config idle_mhz=%d idle_stb_s=%d net_grace_s=%d stb_off_s=%d", pwr::idle_cpu_mhz,
              pwr::idle_to_standby_sec, pwr::net_grace_sec, pwr::standby_to_shutdown_sec);
 }
 
@@ -366,15 +340,6 @@ void PersistIdleMhzTask(void* arg)
     Settings settings(kPowerNvsNs, true);
     settings.SetInt(kIdleMhzNvsKey, mhz);
     ESP_LOGI(TAG, "nvs save idle_mhz=%d", mhz);
-    vTaskDelete(nullptr);
-}
-
-void PersistIdleToStandbyTask(void* arg)
-{
-    const int sec = static_cast<int>(reinterpret_cast<intptr_t>(arg));
-    Settings settings(kPowerNvsNs, true);
-    settings.SetInt(kIdleToStandbyNvsKey, sec);
-    ESP_LOGI(TAG, "nvs save idle_stb_s=%d", sec);
     vTaskDelete(nullptr);
 }
 
@@ -396,15 +361,6 @@ void PersistNetGraceTask(void* /*arg*/)
             break;
         }
     }
-    vTaskDelete(nullptr);
-}
-
-void PersistStandbyToOffTask(void* arg)
-{
-    const int sec = static_cast<int>(reinterpret_cast<intptr_t>(arg));
-    Settings settings(kPowerNvsNs, true);
-    settings.SetInt(kStandbyToOffNvsKey, sec);
-    ESP_LOGI(TAG, "nvs save stb_off_s=%d", sec);
     vTaskDelete(nullptr);
 }
 
@@ -454,8 +410,7 @@ void FlushForegroundNetworkAsync()
 
 void SelfCheckThresholdsOnce()
 {
-    if (pwr::standby_to_shutdown_sec > 0 &&
-        pwr::StandbyToShutdownUs() < pwr::UserIdleToStandbyUs()) {
+    if (pwr::StandbyToShutdownUs() < pwr::UserIdleToStandbyUs()) {
         ESP_LOGE(TAG, "self-check: shutdown threshold must not be below idle-to-standby");
     }
 }
@@ -934,16 +889,6 @@ int PowerPolicy::GetIdleCpuMhz() const
     return pwr::idle_cpu_mhz;
 }
 
-int PowerPolicy::GetUserIdleToStandbySec() const
-{
-    return pwr::idle_to_standby_sec;
-}
-
-int PowerPolicy::GetStandbyToShutdownSec() const
-{
-    return pwr::standby_to_shutdown_sec;
-}
-
 int PowerPolicy::GetNetGraceSec() const
 {
     if (pwr::mu == nullptr) {
@@ -982,29 +927,6 @@ void PowerPolicy::SetIdleCpuMhz(int mhz)
     }
 }
 
-void PowerPolicy::SetUserIdleToStandbySec(int sec)
-{
-    sec = NormalizeIdleToStandbySec(sec);
-    if (pwr::mu == nullptr) {
-        if (pwr::idle_to_standby_sec == sec) {
-            return;
-        }
-        pwr::idle_to_standby_sec = sec;
-    } else {
-        xSemaphoreTake(pwr::mu, portMAX_DELAY);
-        if (pwr::idle_to_standby_sec == sec) {
-            xSemaphoreGive(pwr::mu);
-            return;
-        }
-        pwr::idle_to_standby_sec = sec;
-        xSemaphoreGive(pwr::mu);
-    }
-    if (xTaskCreate(PersistIdleToStandbyTask, "idle_stb_nvs", 4096,
-                    reinterpret_cast<void*>(static_cast<intptr_t>(sec)), 5, nullptr) != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate(idle_stb_nvs) failed");
-    }
-}
-
 void PowerPolicy::SetNetGraceSec(int sec)
 {
     sec = NormalizeNetGraceSec(sec);
@@ -1029,28 +951,5 @@ void PowerPolicy::SetNetGraceSec(int sec)
             s_net_grace_writer_running.store(false);
             ESP_LOGE(TAG, "xTaskCreate(net_grace_nvs) failed");
         }
-    }
-}
-
-void PowerPolicy::SetStandbyToShutdownSec(int sec)
-{
-    sec = NormalizeStandbyToShutdownSec(sec);
-    if (pwr::mu == nullptr) {
-        if (pwr::standby_to_shutdown_sec == sec) {
-            return;
-        }
-        pwr::standby_to_shutdown_sec = sec;
-    } else {
-        xSemaphoreTake(pwr::mu, portMAX_DELAY);
-        if (pwr::standby_to_shutdown_sec == sec) {
-            xSemaphoreGive(pwr::mu);
-            return;
-        }
-        pwr::standby_to_shutdown_sec = sec;
-        xSemaphoreGive(pwr::mu);
-    }
-    if (xTaskCreate(PersistStandbyToOffTask, "stb_off_nvs", 4096,
-                    reinterpret_cast<void*>(static_cast<intptr_t>(sec)), 5, nullptr) != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate(stb_off_nvs) failed");
     }
 }

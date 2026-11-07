@@ -332,12 +332,8 @@ esp_err_t epd_board_metalio_eink4_plus_sleep_cut_rails(void) {
     output_lock();
     s_outputs[CFG_PORT_CTRL].desired &= (uint8_t)~CFG_PIN_CAM_SCR;
     esp_err_t err = s_ioexp_ok ? output_write_locked(CFG_PORT_CTRL) : ESP_ERR_INVALID_STATE;
-    if (err == ESP_OK) {
-        s_outputs[CFG_PORT_INT].desired &= (uint8_t)~CFG_PIN_BT_PA_PWR;
-        err = output_write_locked(CFG_PORT_INT);
-    }
     output_unlock();
-    if (err == ESP_OK) ESP_LOGI(TAG, "sleep cut P5 then P14");
+    if (err == ESP_OK) ESP_LOGI(TAG, "sleep cut P5");
     return err;
 }
 
@@ -347,24 +343,12 @@ esp_err_t epd_board_metalio_eink4_plus_sleep_restore_rails(void) {
         output_unlock();
         return ESP_ERR_INVALID_STATE;
     }
-    s_outputs[CFG_PORT_INT].desired |= CFG_PIN_BT_PA_PWR;
-    esp_err_t err = s_ioexp_ok ? output_write_locked(CFG_PORT_INT) : ESP_ERR_INVALID_STATE;
-    output_unlock();
-    if (err != ESP_OK) return err;
-
-    // 分开两路上电负载，等待期间允许其他共享端口输出更新。
-    vTaskDelay(pdMS_TO_TICKS(POWER_RAIL_SETTLE_MS));
-    output_lock();
-    if (s_bt_reset_active || !(s_outputs[CFG_PORT_INT].desired & CFG_PIN_BT_PA_PWR)) {
-        output_unlock();
-        return ESP_ERR_INVALID_STATE;
-    }
     s_outputs[CFG_PORT_CTRL].desired |= CFG_PIN_CAM_SCR;
-    err = output_write_locked(CFG_PORT_CTRL);
+    esp_err_t err = s_ioexp_ok ? output_write_locked(CFG_PORT_CTRL) : ESP_ERR_INVALID_STATE;
     output_unlock();
     if (err == ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(POWER_RAIL_SETTLE_MS));
-        ESP_LOGI(TAG, "sleep restore P14 then P5");
+        ESP_LOGI(TAG, "sleep restore P5");
     }
     return err;
 }

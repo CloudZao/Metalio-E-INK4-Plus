@@ -9,6 +9,10 @@ public:
     static lv_obj_t* Create();
     /** @brief 创建设置→网络子页入口 */
     static lv_obj_t* CreateNetwork();
+    /** @brief 创建设置→翻页器子页入口 */
+    static lv_obj_t* CreatePager();
+    /** @brief 创建设置→蓝牙子页入口 */
+    static lv_obj_t* CreateBluetooth();
     /** @brief 创建设置→测试子页入口 */
     static lv_obj_t* CreateTest();
     /** @brief 切换语言后重建设置页文案与布局 */

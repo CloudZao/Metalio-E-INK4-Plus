@@ -66,6 +66,7 @@ Product data lives under SD `metalio/e-ink/`. Cloud APIs use **ink-screen** push
 - **Fonts**: UI fontpack on Flash `font_data`; reader `.ef` fonts on SD or via Transfer
 - **Text layout**: Line spacing presets express relative density. Font size and the content area determine each line's top and bottom space. Paragraph gaps can be set independently and are saved automatically. Backgrounds and underlines change drawing only, preserving pagination. The reading area meets a fixed footer with centered information. Paragraphs retain first-line indentation; extra paragraph gaps, headings, images, and chapter endings may reduce the line count. See [reader layout](docs/ui-scheduling.md).
 - **Text direction**: Reading settings fit on one page without scrolling. Vertical columns can run left to right (default) or right to left; the fixed extra inset moves to the corresponding starting side. Underlines stay on each column's right. The choice is saved; horizontal text and image pages are unchanged.
+- **BLE page turner**: Supports `Free 2`, `Free3-R`, `Smart 1-E`, `HBTR002-X` and `HBTR003-X`. See [behavior and protocol details](docs/ui-scheduling.md) and the [BLE module directory](main/boards/common/bluetooth/).
 - **Toolchain**: `tools/ebook/` converts PDF/EPUB/MOBI/TXT to device `.ebook` (with Web preview)
 
 ### 2.3 Local multimodal features
@@ -357,8 +358,11 @@ After startup, `app_main` returns so the SDK can reclaim its stack. At runtime, 
 - **idle**: Baiwen and similar pages declare network needs via `PowerNeed` / audio session
 - **listening / speaking**: streaming ASR / TTS
 - **OTA**: dual slots `ota_0` / `ota_1`; fullscreen `OtaUpgradeScreen`
+  Network OTA erases the inactive target slot before opening the download connection; image validation must succeed before the boot slot is switched.
 
 SD card upgrade: copy the application firmware `Metalio-E-Ink4-Plus.bin` for this device to the SD card root (do not use the full `merged-binary.bin` image). Insert the card, restart the device, and confirm the upgrade when prompted. Wait for completion and the automatic restart. Keep the device powered and the card inserted throughout the upgrade. Wi-Fi is not required.
+
+Touch firmware: startup checks the FT6336U version and updates versions below `0x10`; equal or newer versions are skipped. Keep power connected during the update. See [touch firmware documentation](main/boards/metalio-e-ink4-plus/display/firmware/README.md) for panel compatibility, configuration and recovery limits.
 
 ### 9.3 Board init order
 
@@ -417,7 +421,7 @@ Cloud hosts and HTTP paths live in `main/cloudzao_endpoints.c` / `main/cloudzao_
 
 Primary voice transport remains **WebSocket / MQTT+UDP**. Device tools can be exposed via **MCP**.
 
-The camera tool `self.camera.take_photo` accepts a required `question` string. In Baiwen AI, ask the assistant to look at or identify something to request a photo. The GC2145 captures a 640×480 color JPEG and sends it with the question to the vision service supplied by the server in MCP `initialize.params.capabilities.vision.url`; `vision.token` is an optional Bearer credential. The vision endpoint must accept multipart fields `question` and `file` (`camera.jpg`, `image/jpeg`) and return the recognition result in an HTTP 200 response. The tool returns that result to the assistant. Without a vision URL, calls fail with a configuration error. This endpoint is separate from `api::VisionUploadUrl()`; configuring cloud file upload alone does not enable MCP vision. Capture and hardware JPEG encoding share the factory test's hardware lock and release camera and display resources before HTTP upload; a busy camera or capture failure returns an error. The factory test keeps its local grayscale preview.
+The camera tool `self.camera.take_photo` accepts a required `question` string. Hardware is probed when the camera instance is first requested; the photo tool is registered only if detection succeeds. The result is cached until restart, so restart the device after reconnecting a camera. In Baiwen AI, ask the assistant to look at or identify something to request a photo. The GC2145 captures a 640×480 color JPEG and sends it with the question to the vision service supplied by the server in MCP `initialize.params.capabilities.vision.url`; `vision.token` is an optional Bearer credential. The vision endpoint must accept multipart fields `question` and `file` (`camera.jpg`, `image/jpeg`) and return the recognition result in an HTTP 200 response. The tool returns that result to the assistant. Without a vision URL, calls fail with a configuration error. This endpoint is separate from `api::VisionUploadUrl()`; configuring cloud file upload alone does not enable MCP vision. Capture and hardware JPEG encoding share the factory test's hardware lock and release camera and display resources before HTTP upload; a busy camera or capture failure returns an error. The factory test keeps its local grayscale preview.
 
 ---
 
@@ -501,7 +505,15 @@ If an overlay cannot be read, the current screen is retained. If the base-frame 
 - Transfer modes: APP push / AP transfer / Wi-Fi transfer / USB transfer. WIFI transfer stays within the Transfer screen and splits nearby networks into saved and unsaved lists, each sorted by signal strength. After connecting, devices on the same Wi-Fi can open the displayed local URL or scan its QR code to manage files. Leaving the page closes the service; use a trusted network without client isolation. APP push filters: All / Wallpaper / Books / Fonts; **Refresh** retrieves pending files.
 - Save directories: BOOK->`books`, BADGE->`wallpaper`, FONT->`fonts`
 - APP push uses the active Wi-Fi or 4G connection. AP and Wi-Fi transfer require Wi-Fi mode; in 4G mode, the page asks users to switch to Wi-Fi.
+
+APP 推送、AP 传输和 Wi-Fi 传输页面打开期间持续保网，并暂停无操作自动待机；APP 推送不区分浏览、刷新、预览或下载状态。切到 USB 传输或退出传输页面后释放页面保网需求，恢复系统电源策略。
+
+APP push, AP transfer and Wi-Fi transfer keep networking active and suspend automatic idle standby while their page is open. APP push applies the same policy when browsing, refreshing, previewing or downloading. Switching to USB transfer or leaving Transfer releases the page requirement and restores the system power policy.
 - APP push supports replacing, skipping, or keeping both files when names conflict. The status bar displays the clock.
+
+APP 推送的书籍、字体和壁纸采用固定缓冲分块写入 SD，不设应用层文件大小上限，实际受存储空间及文件系统约束。封面和预览图使用共享 SD 临时缓存，按显示尺寸从文件解码；最后一个使用者释放后删除缓存，首次创建缓存时清理上次运行的遗留文件。推送列表逐条解析，不保留完整响应及整棵 JSON 树。图片仍受格式及解码内存预算约束，临时预览需要可用的 SD 卡。
+
+APP push writes books, fonts and wallpapers to SD in fixed-size chunks without an application-level file-size cap; available storage and filesystem limits still apply. Covers and previews share temporary SD files and decode at display size. Cache files are deleted after their last user releases them; the first cache creation removes files left by the previous run. The push list is parsed one item at a time without retaining the full response or JSON tree. Image format and decoding memory budgets still apply, and temporary previews require an available SD card.
 
 ### 11.6 Settings
 
@@ -554,17 +566,22 @@ Product root: `/sdcard/metalio/e-ink/` (`sd_paths.h`)
 
 ### 12.1 Bluetooth audio three modes
 
+See the [BH1098 Bluetooth audio protocol](docs/bh1098-audio-protocol.md) for operating modes, control commands, responses and timing.
+
 ESP32-S31 sends AT commands over **UART1** (115200, GPIO 39/38). Settings -> Bluetooth embeds `BluetoothScreen`. This is **not** the ESP Classic Bluetooth stack.
 
-Bluetooth settings has three sections: firmware version, Bluetooth reset, and mode selection. Opening the page sends `AT+GVER=1` and reads the firmware version from a reply such as `AT+GVER=V1.03`; `Unknown` is shown until a version is received. Click Check version to refresh it manually. The button shows Checking and stays disabled until a valid version arrives or the five-second wait ends.
+Bluetooth settings lists the Bluetooth name, firmware version, reset action, and current mode. The Bluetooth name is read-only; renaming is not exposed in the interface. Opening the page queries both name and firmware version. Tap to refresh queries `AT+GVER=1` from the firmware row; the row stays disabled until a valid version arrives or the five-second wait ends. Tap to reset Bluetooth chip runs directly from its row. Mode buttons are arranged in two columns and switch directly when tapped. A fixed-height area below shows only the selected mode description. The Bluetooth settings pane does not scroll. In Bluetooth transmit mode, Bluetooth device manager opens a full-screen view for scanning, connecting, and selecting music or call audio. The top status bar remains visible; there is no upper-left back button. Short or long Home returns to Bluetooth settings first.
 
 | Mode | AT sequence (each ends with `\r\n`) | Meaning | How to enter |
 |:---:|:---|:---|:---|
-| **1** | `AT+RX=2` -> (~700 ms) -> `AT+MODE=1` | Baiwen conversation (boot default) | Auto at boot; Settings |
-| **2** | `AT+TX=1` -> -> `AT+MODE=2` | TX / pair; talk via BT headset | Settings -> Bluetooth -> mode 2 |
-| **3** | `AT+RX=1` -> -> `AT+MODE=3` | Music sink (device as speaker) | Settings |
+| **1** | `AT+RX=2` -> (~700 ms) -> `AT+MODE=1` | Local audio: built-in microphone and speaker (boot default) | Auto at boot; Settings |
+| **2** | `AT+TX=1` -> -> `AT+MODE=2` | Bluetooth transmit: play audio through a Bluetooth speaker or headset | Settings -> Bluetooth -> mode 2 |
+| **3** | `AT+RX=1` -> -> `AT+MODE=3` | Bluetooth receive: receive audio from phones or other devices | Settings |
+| **5** | `AT+MODE=5` | Bluetooth keyboard & voice: send keystrokes and voice (requires module firmware support for mode 5) | Settings -> Bluetooth -> mode 5; pair on PC and select the Bluetooth microphone |
 
 > Mode 2 conversation requires a headset **with mic**. Boot applies mode 1 after `MetalioAudio_Init`.
+
+Mode 5 provides an HID shortcut test entry at the bottom of Bluetooth settings. It opens a full-screen page with a centered title and no upper-left back button; short or long Home returns to Bluetooth settings first, releasing held keys before leaving. The page provides character keys, Enter, Space, Tab, Esc, Backspace, Delete, arrow keys, Ctrl+A/C/V, Alt+Tab, Win+D, Hold Alt, and Release all. Pair and connect the module as an HID device on the PC, open a blank text field, then use Settings -> Bluetooth -> mode 5 -> HID shortcut test. Return brings you back to Bluetooth settings. Buttons send `AT+SHORTCUT=<key>\r`; each click includes key release. `OK` means the module accepted the request, not that the PC executed it. `DISCONNECTED` means HID is not enabled or no HID host is connected. Hold Alt sends `AT+SHORTCUT=ALT,DOWN\r` while pressed and `AT+SHORTCUT=ALT,UP\r` on release or touch cancellation. Leaving the page or switching modes also releases Alt. Release all sends `AT+SHORTCUT=RELEASE\r`. Custom key editing is not provided.
 
 ---
 

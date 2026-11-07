@@ -8,6 +8,10 @@ ESP32-S31 LCD output uses only the data phase. Each DMA row carries active pixel
 
 If a standby or shutdown wallpaper is still decoding after one second, a loading notice appears at the top of the existing frame. Faster decodes display the wallpaper directly. Loading preserves the current orientation and pixels outside the notice. Standby wallpapers draw directly into the panel framebuffer while retaining the underlying page's orientation and dimensions. LVGL rendering pauses after parking and resumes after page resources are restored. The frame is saved before showing a notice and restored directly if decoding fails. Reader fonts remain available until standby content is ready. Before wake redraws the page, the physical target framebuffer is filled with white so fullscreen wallpaper pixels cannot remain outside the normal UI bounds.
 
+待机、关机和阅读背景解码只从内存缓存解析壁纸选择，不在使用 PSRAM 栈的解码任务中读取 NVS。启动时先灌入选择；SD 尚未就绪时保留该选择，路径暂不可用则沿用各入口的失败回退。
+
+Standby, shutdown, and reading-background decoders resolve wallpaper selections from the in-memory cache without reading NVS from tasks with PSRAM stacks. Startup hydrates the selections first. A selection is retained while SD is unavailable; an unavailable path uses the existing fallback for that entry point.
+
 开机首页准备完成后，先对全白帧执行一次完整 48 相 GC16 全刷，再推白显现首页。全刷清理阶段不绘制首页；保留边框在此次全刷中只推白，成功后恢复不驱动边框。刷新失败仍执行原有清屏恢复，后续时钟、电量和网络状态更新沿用普通刷新策略。
 
 Once the home screen is ready, startup first performs one complete 48-phase GC16 refresh to white, then reveals the home screen with a wipe. The home screen is not drawn during cleaning. The reserved border receives only whitening pulses during the full refresh and remains undriven after success. Refresh failures retain the existing clear-and-recover path. Later clock, battery and network updates use the ordinary refresh policy.
@@ -47,7 +51,11 @@ Preparation converts and analyzes I1 / L8 pixels without selecting refresh polic
 
 默认 I1 软件渲染。`epd_content_policy` 按可见内容的角色申请 L8：书架底座、书籍封面、书内插图、壁纸缩略图/详情预览、照片、开启抗锯齿的正文、助手内容图片。未登记的 UI、应用/操作/天气图标、书签装饰插画保持黑白，与 PNG/L8 等源格式无关。纯黑白旧缓存不会单独触发 L8。对象隐藏/删除、父级裁剪、同页不透明遮罩和 top/sys 遮罩参与模式判断；显示切换在刷新开始、布局完成后执行，重新绑定同一绘制缓冲并使页面重绘。模式策略集中在 `GrayRole()`；可用 `FastMonochrome` 在任意列表/阅读入口容器上强制整个子树走黑白，而不改动原图、缓存或详情预览。
 
-灰阶场景中，普通 UI 在 native blend 前进行源侧黑白转换，内容图片保留亮度；已合成图层交由 LVGL 继续处理透明混合，flush 不按业务对象补画。原有封面右侧透明裁剪保留。关机/待机壁纸和屏幕测试保留独立输出路径。绘制缓冲至少容纳 I1 全屏及 L8 最大逻辑宽度 × 64 行，I1/L8 与横竖屏共用同一 PSRAM 分配，无全屏覆盖度旁路缓冲。
+灰阶场景中，普通 UI 在 native blend 前进行源侧黑白转换，内容图片采用统一的显示色调；已合成图层交由 LVGL 继续处理透明混合，flush 不按业务对象补画。原有封面右侧透明裁剪保留。关机/待机壁纸和屏幕测试保留独立输出路径。绘制缓冲至少容纳 I1 全屏及 L8 最大逻辑宽度 × 64 行，I1/L8 与横竖屏共用同一 PSRAM 分配，无全屏覆盖度旁路缓冲。
+
+图片显示色调在 L8 主图层和 ARGB8888 圆角中间图层中采用相同处理，仅在图片绘入时应用；后续图层合成保留透明度，不重复压暗。原图和缓存像素保持不变。
+
+Image tone mapping is applied when an image is drawn into either the L8 main layer or an ARGB8888 rounded-corner layer. Subsequent layer composition preserves transparency without darkening the image again. Source images and cached pixels remain unchanged.
 
 图片解码和 ZIP 流式解码保留原始亮度。新生成的封面旁路/壁纸另存结果/助手图片缓存使用 A2L8（8 字节头 + 原生 L8），原始传输文件直接保留。旧 A2I1 继续读取，不重建迁移；已丢失的灰度不恢复。壁纸覆盖保存保留原路径及启用记录，内容按 magic 识别，另存为采用 `.a2l8`。新缓存有独立大小上限；后台图片只有绑定到可见对象时才影响显示模式。
 
@@ -63,7 +71,13 @@ Ordinary differential updates retain DU black-to-black reinforcement. For change
 
 When a visible settings card closes during text reading, the next submission drives every pure-black target with the selected waveform's white-to-black black-driving sequence, including text outside the former card area. This applies with text antialiasing enabled or disabled. The request merges into the closing frame without an extra full-screen whitening pass, scan phases or framebuffer allocation. Unchanged white and gray pixels remain undriven; other changed pixels update normally. Recovery and scheduled full GC cleaning take precedence. Hiding an already hidden card does not repeat the request. Equal black-driving pulses do not equalize grayscale history; ghosting and regional tone differences require panel verification.
 
-首页图标使用 LVGL 解码器接口，保留 SPNG 的 16 行分块边界。`tools/generate_home_icon_pixels.py` 是正式构建依赖：CMake 从首页 PNG 生成 Flash 中的只读 BGRA。彩色或不匹配的资源继续走原路径，解码会话元数据在 PSRAM 按需分配并在关闭时释放，没有整图 RAM 缓存。
+快速波形初始化分两遍处理灰阶转换：先测量最长裁剪序列，再逐组重算并输出。工作区只保存一组转换，初始化完成后不保留整张中间序列表；波形参数与输出动作保持不变。
+
+Fast waveform initialization processes gray transitions in two passes: it measures the longest trimmed sequence, then recomputes and writes each transition. Working storage holds one transition at a time, and no full intermediate sequence table remains after initialization. Waveform parameters and output actions are unchanged.
+
+首页图标使用 LVGL 解码器接口，保留 SPNG 的 16 行分块边界。`tools/generate_home_icon_pixels.py` 从首页 PNG 生成独立分块的 zlib 无损数据，保留 ARGB8888 或 A8 像素；ARGB8888 解码会话在 PSRAM 按需分配一个 16 行缓冲；A8 图标使用临时整图缓冲，保持原生缩放边界。两者都在关闭会话时释放，不保留图像缓存。未收录资源继续使用原路径。中英文默认关机图通过 `tools/compress_binary.py` 保存原始长度和 zlib 数据，使用时临时解压并释放；原图、完整字库与双 OTA 分区布局保留。
+
+Home icons use the LVGL decoder interface and retain SPNG’s 16-row tile boundaries. `tools/generate_home_icon_pixels.py` packs the source PNGs into independent lossless zlib tiles, preserving ARGB8888 or A8 pixels. ARGB8888 sessions allocate a 16-row buffer in PSRAM; A8 icons use a temporary full-image buffer to preserve native scaling boundaries. Both free their buffers on close without retaining an image cache. Other resources retain their original paths. Both built-in shutdown images are packed by `tools/compress_binary.py` as their original length followed by zlib data, with temporary decode storage freed after use. The artwork, complete font pack and dual OTA partition layout are preserved.
 
 ### 黑色深度（黑色强度）
 
@@ -122,3 +136,7 @@ SD 卡数据读写发生错误时显示顶部短提示，同一次启动仅提�
 ### 阅读触摸分区
 
 自定义触摸分区时，必须保留至少一个“菜单”区域。尝试替换最后一个菜单区域时，配置保持不变，并显示短提示；需要调整菜单位置时，应先在其他分区设置“菜单”。加载到无菜单区域或格式无效的历史配置时，使用默认分区。
+
+书签装饰和快捷面板图标复用内嵌无损图像解码器，保留 A8/AL88 像素及原始尺寸。绘制会话按需分配 PSRAM 图像缓冲，关闭时释放，不保留解压缓存。文件传输的中英文页面分别以 gzip 存储，通过设备的 `/cloudzao-logo.png` 路径共用一份标识图片，无需外网或 SD 卡。
+
+Bookmark decorations and quick-panel icons reuse the embedded lossless image decoder, preserving A8/AL88 pixels and original dimensions. Drawing sessions allocate image buffers in PSRAM on demand and release them on close without retaining decoded caches. The Chinese and English file-transfer pages are stored separately as gzip data and share one logo served by the device at `/cloudzao-logo.png`, without internet access or an SD card.

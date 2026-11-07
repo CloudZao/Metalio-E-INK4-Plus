@@ -6,6 +6,9 @@
 #include "screen_common.h"
 #include "settings_about_tab.h"
 #include "settings_bluetooth_tab.h"
+#include "bluetooth_screen/bluetooth_screen.h"
+#include "settings_pager_tab.h"
+#include "screen_text.h"
 #include "settings_common.h"
 #include "settings_conversation_tab.h"
 #include "settings_frontlight_tab.h"
@@ -37,6 +40,7 @@ enum class SettingsTab : int {
     kFrontlight = 5,
     kConversation = 6,
     kBluetooth = 7,
+    kPager = 12, // BLE 翻页器
     kTest = 8,
     kLog = 9,
     kCharging = 11, // 充电电流配置
@@ -73,6 +77,7 @@ static const char* TabNameConversation() {
 static const char* TabNameBluetooth() {
     return Lang::Strings::SETTINGS_TAB_BLUETOOTH;
 }
+static const char* TabNamePager() { return Lang::Strings::SETTINGS_PAGER; }
 static const char* TabNameTest() {
     return Lang::Strings::SETTINGS_TAB_TEST;
 }
@@ -91,6 +96,7 @@ static constexpr SettingsTabEntry kTabs[] = {
     {SettingsTab::kFrontlight, TabNameFrontlight},
     {SettingsTab::kConversation, TabNameConversation},
     {SettingsTab::kBluetooth, TabNameBluetooth},
+    {SettingsTab::kPager, TabNamePager},
     {SettingsTab::kTest, TabNameTest},
     {SettingsTab::kLog, TabNameLog},
     {SettingsTab::kAbout, TabNameAbout},
@@ -119,6 +125,8 @@ static int TabIndexOf(SettingsTab id) {
 }
 
 static ScreenFactory FactoryForTab(SettingsTab id) {
+    if (id == SettingsTab::kPager) return SettingsScreen::CreatePager;
+    if (id == SettingsTab::kBluetooth) return SettingsScreen::CreateBluetooth;
     if (id == SettingsTab::kTest) {
         return SettingsScreen::CreateTest;
     }
@@ -153,6 +161,9 @@ static void ResetTab(SettingsTab id) {
             break;
         case SettingsTab::kBluetooth:
             SettingsBluetoothTab_Reset();
+            break;
+        case SettingsTab::kPager:
+            SettingsPagerTab_Reset();
             break;
         case SettingsTab::kTest:
             break;
@@ -197,6 +208,9 @@ static void BuildTab(SettingsTab id) {
             break;
         case SettingsTab::kBluetooth:
             SettingsBluetoothTab_Build(page);
+            break;
+        case SettingsTab::kPager:
+            SettingsPagerTab_Build(page);
             break;
         case SettingsTab::kTest:
             SettingsTestTab_Build(page);
@@ -284,6 +298,7 @@ static lv_obj_t* CreateTabButton(lv_obj_t* parent, const SettingsTabEntry& entry
     lv_obj_center(lbl);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
 
+    lv_obj_add_event_cb(btn, ScreenFitButtonLabelOnSize, LV_EVENT_SIZE_CHANGED, lbl);
     SettingsStyleSelectable(btn, lbl, false);
     return btn;
 }
@@ -298,8 +313,12 @@ static void OnScreenDeleted(lv_event_t* e) {
     s_settings_scr = nullptr;
 }
 
-static bool OnSettingsKey(const char* key) { return SettingsLogUpload_OnVkKey(key); }
+static bool OnSettingsKey(const char* key) {
+    if (key && strcmp(key, "vk_home") == 0 && BluetoothScreen::DismissOverlay()) return true;
+    return SettingsLogUpload_OnVkKey(key);
+}
 static bool OnSettingsLongKey(const char* key) {
+    if (key && strcmp(key, "vk_home") == 0 && BluetoothScreen::DismissOverlay()) return true;
     if (!SettingsLogUpload_IsActive()) return false;
     SettingsLogUpload_Teardown();
     if (key && std::strcmp(key, "vk_home") == 0) ScreenRequestHome();
@@ -311,6 +330,7 @@ static lv_obj_t* CreateInternal() {
 
     lv_obj_t* scr = lv_obj_create(nullptr);
     s_settings_scr = scr;
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_text_font(scr, fontpack_lv_font_ui(), 0);
@@ -338,13 +358,14 @@ static lv_obj_t* CreateInternal() {
     lv_obj_set_style_bg_opa(tab_col, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(tab_col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(tab_col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(tab_col, kSettingsTabGap, 0);
+    const lv_coord_t available = body_h - kSettingsBodyPad * 2;
+    const lv_coord_t tab_gap = std::min<lv_coord_t>(kSettingsTabGap, available / (kTabCount * 6));
+    lv_obj_set_style_pad_row(tab_col, tab_gap, 0);
     lv_obj_clear_flag(tab_col, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(tab_col, LV_OBJ_FLAG_CLICKABLE);
 
-    const lv_coord_t available = body_h - kSettingsBodyPad * 2;
     const lv_coord_t tab_height = std::min<lv_coord_t>(
-        kSettingsTabH, (available - kSettingsTabGap * (kTabCount - 1)) / kTabCount);
+        kSettingsTabH, (available - tab_gap * (kTabCount - 1)) / kTabCount);
     for (int i = 0; i < kTabCount; ++i) {
         s_ui.tab_btns[i] = CreateTabButton(tab_col, kTabs[i], i);
         lv_obj_set_height(s_ui.tab_btns[i], tab_height);
@@ -355,6 +376,7 @@ static lv_obj_t* CreateInternal() {
     lv_obj_set_size(split, kSettingsSplitLineW, body_h - kSettingsBodyPad * 2);
     lv_obj_set_style_bg_color(split, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(split, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(split, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(split, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* content = lv_obj_create(body);
@@ -397,6 +419,15 @@ lv_obj_t* SettingsScreen::CreateNetwork() {
     return CreateInternal();
 }
 
+lv_obj_t* SettingsScreen::CreatePager() {
+    s_pending_tab = SettingsTab::kPager;
+    return CreateInternal();
+}
+
+lv_obj_t* SettingsScreen::CreateBluetooth() {
+    s_pending_tab = SettingsTab::kBluetooth;
+    return CreateInternal();
+}
 lv_obj_t* SettingsScreen::CreateTest() {
     s_pending_tab = SettingsTab::kTest;
     return CreateInternal();

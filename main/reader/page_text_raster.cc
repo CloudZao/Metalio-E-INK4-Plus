@@ -123,18 +123,19 @@ void DrawUnderline(RasterImage& img, int x0, int x1, int y, int mode) {
     }
 }
 
-lv_coord_t MeasureTextW(const lv_font_t* font, const char* utf8) {
+lv_coord_t MeasureTextW(const lv_font_t* font, const char* utf8, int letter_space = 0) {
     if (font == nullptr || utf8 == nullptr) {
         return 0;
     }
     lv_point_t sz = {};
-    lv_text_get_size(&sz, utf8, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_text_get_size(&sz, utf8, font, letter_space, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     return static_cast<lv_coord_t>(sz.x);
 }
 
 bool DrawUtf8Line(RasterImage& img, const lv_font_t* font, int x, int line_top, const char* utf8,
                   bool faux_bold, int* out_end_x, bool vertical = false, bool antialias = false,
-                  int* out_ink_bottom = nullptr) {
+                  int* out_ink_bottom = nullptr, int letter_space = 0,
+                  int justify_extra = 0, int justify_gaps = 0) {
     if (font == nullptr || utf8 == nullptr) {
         return false;
     }
@@ -151,6 +152,8 @@ bool DrawUtf8Line(RasterImage& img, const lv_font_t* font, int x, int line_top, 
     int pen_x = x;
     int ink_bottom = -1;
 
+    int glyph_index = 0;
+    const TextLineSpacing spacing{letter_space, justify_extra, justify_gaps};
     while (left > 0) {
         uint32_t cp = 0;
         const size_t n = Utf8Next(p, left, &cp);
@@ -164,10 +167,12 @@ bool DrawUtf8Line(RasterImage& img, const lv_font_t* font, int x, int line_top, 
             continue;
         }
 
+        if (glyph_index > 0) pen_x += spacing.Offset(glyph_index) - spacing.Offset(glyph_index - 1);
+        ++glyph_index;
         const uint32_t glyph_cp = vertical ? VerticalGlyph(cp) : cp;
         lv_font_glyph_dsc_t gdsc;
         if (!lv_font_get_glyph_dsc(font, &gdsc, glyph_cp, 0)) {
-            pen_x += vertical ? VerticalAdvance(cp, font->line_height)
+            pen_x += vertical ? VerticalAdvance(cp, font->line_height, 1)
                               : std::max(1, static_cast<int>(font->line_height / 3));
             continue;
         }
@@ -225,7 +230,7 @@ bool DrawUtf8Line(RasterImage& img, const lv_font_t* font, int x, int line_top, 
                 font->release_glyph(font, &gdsc);
             }
         }
-        pen_x += vertical ? VerticalAdvance(cp, font->line_height) : static_cast<int>(gdsc.adv_w);
+        pen_x += vertical ? VerticalAdvance(cp, font->line_height, std::max(1, static_cast<int>(gdsc.adv_w))) : static_cast<int>(gdsc.adv_w);
     }
     if (out_end_x != nullptr) {
         *out_end_x = pen_x;
@@ -314,13 +319,14 @@ bool RasterPageTextToL8(const Page& page, const lv_font_t* font, int spacing_per
             while (p != nullptr && *p != '\0') {
                 const char* nl = std::strchr(p, '\n');
                 std::string line = nl ? std::string(p, static_cast<size_t>(nl - p)) : std::string(p);
-                const lv_coord_t tw = MeasureTextW(font, line.c_str());
+                const int letter_space = TextLineLetterSpace(font, line, page_w);
+                const lv_coord_t tw = MeasureTextW(font, line.c_str(), letter_space);
                 text_x = tw < page_w ? static_cast<lv_coord_t>((page_w - tw) / 2) : 0;
                 if (row >= layout.count || y + layout.CellHeight(row) > page_h) return false;
                 const int line_y = y + layout.TextOffset(row);
                 int ink_bottom = -1;
                 if (!DrawUtf8Line(out, font, text_x, line_y, line.c_str(), true,
-                                  &end_x, false, antialias, &ink_bottom)) {
+                                  &end_x, false, antialias, &ink_bottom, letter_space)) {
                     out.Reset();
                     return false;
                 }
@@ -335,8 +341,11 @@ bool RasterPageTextToL8(const Page& page, const lv_font_t* font, int spacing_per
             previous_title = true;
             continue;
         }
+        const int available = page_w - (item.para_indent && !item.chapter_title ? indent_px : 0);
+        const auto spacing = MakeTextLineSpacing(font, item.text, available, item.justify && !item.chapter_title);
+        const int letter_space = spacing.letter_space;
         if (item.chapter_title) {
-            const lv_coord_t tw = MeasureTextW(font, txt);
+            const lv_coord_t tw = MeasureTextW(font, txt, letter_space);
             text_x = tw < page_w ? static_cast<lv_coord_t>((page_w - tw) / 2) : 0;
         } else if (item.para_indent) {
             text_x = indent_px;
@@ -345,7 +354,7 @@ bool RasterPageTextToL8(const Page& page, const lv_font_t* font, int spacing_per
         int end_x = text_x;
         int ink_bottom = -1;
         const int line_y = y + layout.TextOffset(row);
-        if (!DrawUtf8Line(out, font, text_x, line_y, txt, item.chapter_title, &end_x, false, antialias, &ink_bottom)) {
+        if (!DrawUtf8Line(out, font, text_x, line_y, txt, item.chapter_title, &end_x, false, antialias, &ink_bottom, letter_space, spacing.extra, spacing.gaps)) {
             out.Reset();
             return false;
         }
@@ -387,11 +396,14 @@ bool RasterPageVerticalTextToL8(const Page& page, const lv_font_t* font, int spa
         const int column_x = (right_to_left ? page_w - x - layout.CellHeight(row) : x) + layout.TextOffset(row);
         const int top = item.para_indent && !item.chapter_title
             ? std::min(2 * cell, std::max(0, page_h - cell)) : 0;
-        if (!DrawUtf8Line(out, font, column_x, top, item.text.c_str(), item.chapter_title, nullptr, true, antialias)) {
+        const auto spacing = MakeTextLineSpacing(font, item.text, page_h - top,
+            item.justify && !item.chapter_title, true);
+        if (!DrawUtf8Line(out, font, column_x, top, item.text.c_str(), item.chapter_title, nullptr, true, antialias,
+                          nullptr, 0, spacing.extra, spacing.gaps)) {
             out.Reset(); return false;
         }
         if (rule_mode > 0) {
-            const int rule_x = column_x + cell;
+            const int rule_x = column_x + cell + kReaderUnderlineGap + (item.chapter_title ? 1 : 0);
             for (int y = 0; y < page_h; ++y) {
                 if (rule_mode != 2 || y % 10 < 6) PlotInk(out, rule_x, y);
             }

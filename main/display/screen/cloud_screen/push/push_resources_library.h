@@ -49,7 +49,7 @@ bool FetchPushResources(std::vector<CloudPushResource>& out, std::string& err_ou
 bool DownloadPushResource(const CloudPushResource& item, std::string& err_out,
                           CloudDownloadProgressFn on_progress = nullptr,
                           void* progress_user = nullptr, DownloadGate* gate = nullptr,
-                          const uint8_t* cover_bytes = nullptr, size_t cover_len = 0,
+                          const char* cover_path = nullptr,
                           const char* save_path = nullptr, bool overwrite = false);
 /** @brief DELETE push-resources（下载回执/用户删除共用） */
 bool DeletePushResourceRemote(const CloudPushResource& item, std::string& err_out);

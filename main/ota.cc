@@ -367,7 +367,18 @@ bool Ota::Upgrade(const std::string& firmware_url) {
         return false;
     }
 
-    ESP_LOGI(TAG, "Writing to partition %s at offset 0x%lx", update_partition->label, update_partition->address);
+    // 下载前擦除整个非运行分区，避免预擦除与 UART 网络接收并发。
+    const int64_t erase_started_us = esp_timer_get_time();
+    ESP_LOGI(TAG, "Preparing OTA partition %s before HTTP connection", update_partition->label);
+    const esp_err_t begin_err = WithOtaFlashAccess([&]() {
+        return esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &update_handle);
+    });
+    if (begin_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to prepare OTA partition: %s", esp_err_to_name(begin_err));
+        return false;
+    }
+    ESP_LOGI(TAG, "OTA partition ready, erase elapsed_ms=%lld",
+             static_cast<long long>((esp_timer_get_time() - erase_started_us) / 1000));
     bool image_header_checked = false;
 
     auto network = Board::GetInstance().GetNetwork();
@@ -452,14 +463,6 @@ bool Ota::Upgrade(const std::string& firmware_url) {
                    sizeof(esp_image_segment_header_t), sizeof(new_app_info));
             if (header.magic != ESP_IMAGE_HEADER_MAGIC || new_app_info.magic_word != ESP_APP_DESC_MAGIC_WORD) {
                 ESP_LOGE(TAG, "Invalid firmware image header");
-                return false;
-            }
-            // SDK 按固件长度预擦除：对齐区域使用 64 KiB 块，尾部按扇区处理。
-            const auto begin_err = WithOtaFlashAccess([&]() {
-                return esp_ota_begin(update_partition, content_length, &update_handle);
-            });
-            if (begin_err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to begin OTA: %s", esp_err_to_name(begin_err));
                 return false;
             }
             image_header_checked = true;

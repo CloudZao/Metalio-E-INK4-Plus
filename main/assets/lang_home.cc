@@ -476,6 +476,49 @@
     X(SETTINGS_TAB_CONVERSATION, "对话", "Talk")                                                               \
     X(SETTINGS_TAB_STORAGE, "存储", "Storage")                                                                 \
     X(SETTINGS_TAB_BLUETOOTH, "蓝牙", "Bluetooth")                                                             \
+    X(SETTINGS_PAGER, "翻页器", "Page turner") \
+    X(PAGER_SCANNING_SHORT, "正在扫描附近设备…", "Scanning nearby devices…") \
+    X(PAGER_SAVING, "正在保存…", "Saving…") \
+    X(PAGER_AUTO, "自动连接翻页器", "Auto-connect page turner") \
+    X(PAGER_ENABLED, "启用中", "Enabled") \
+    X(PAGER_AUTO_HINT, "开机及退出待机后自动寻找附近翻页器；无可用连接将自动关闭。", "Find nearby page turners at startup and after standby. Turns off if no connection is available.") \
+    X(PAGER_AUTO_TIMEOUT, "无可用连接，自动连接已关闭。", "No available connection. Auto-connect is off.") \
+    X(PAGER_CURRENT, "当前连接", "Current connection") \
+    X(PAGER_NO_CURRENT, "尚未连接翻页器", "No page turner connected") \
+    X(PAGER_NEARBY, "附近可用", "Nearby") \
+    X(PAGER_AWAY, "不在附近", "Not nearby") \
+    X(PAGER_CONNECTED_TAG, "已连接", "Connected") \
+    X(PAGER_CONNECTING_TAG, "连接中", "Connecting") \
+    X(PAGER_FAILED_TAG, "连接失败", "Failed") \
+    X(PAGER_NOT_NEARBY, "设备未在附近，请刷新后再试", "Device not nearby. Refresh and try again.") \
+    X(PAGER_SAVED_FMT, "已保存设备（%d）", "Saved devices (%d)") \
+    X(PAGER_UNSAVED_FMT, "附近未保存（%d）", "Nearby, not saved (%d)") \
+    X(PAGER_NO_UNSAVED, "附近没有未保存的翻页器", "No new page turners nearby") \
+    X(PAGER_RESCAN, "刷新", "Refresh") \
+    X(PAGER_LEARNING_FMT, "正在设置：%s", "Setting up: %s") \
+    X(SETTINGS_PAGER_MANAGE, "设备管理", "Devices") \
+    X(SETTINGS_PAGER_CUSTOMIZE, "按键自定义", "Button mapping") \
+    X(SETTINGS_PAGER_NO_SAVED, "尚无已保存设备，点击附近翻页器连接后将自动保存。", "No saved devices. Connect a nearby page turner to save it.") \
+    X(SETTINGS_PAGER_CONNECT, "连接", "Connect") \
+    X(SETTINGS_PAGER_FORGET, "忘记设备", "Forget device") \
+    X(SETTINGS_PAGER_FORGET_HINT, "忘记后将清除该设备的配对信息和按键设置。", "Forgetting this device removes its pairing information and button mappings.") \
+    X(SETTINGS_PAGER_PREVIOUS, "上一页", "Previous page") \
+    X(SETTINGS_PAGER_NEXT, "下一页", "Next page") \
+    X(SETTINGS_PAGER_NEED_CONNECTION, "请先在设备管理中连接翻页器", "Connect a page turner in Devices first.") \
+    X(SETTINGS_PAGER_BINDING, "%s%s按键 %c", "%s%sButton %c") \
+    X(SETTINGS_PAGER_UNSET, "未设置", "Not set") \
+    X(SETTINGS_PAGER_PAGE_HINT, "默认 A 上一页、B 下一页\n无需学习即可使用。", "Defaults: A previous, B next.\nLearning is optional.") \
+    X(SETTINGS_PAGER_PRESS, "请短按一次目标按键", "Tap the button you want to use.") \
+    X(SETTINGS_PAGER_RELEARN, "重新学习", "Learn again") \
+    X(SETTINGS_PAGER_CLEAR, "清除绑定", "Clear mapping") \
+    X(SETTINGS_PAGER_SAVE, "保存", "Save") \
+    X(SETTINGS_PAGER_SAVE_ERROR, "操作失败，请重试", "Operation failed. Try again.") \
+    X(SETTINGS_PAGER_LEARNED, "已识别：按键 %c\n用于：%s%s", "Detected: button %c\nAction: %s%s") \
+    X(SETTINGS_PAGER_REPLACE_HINT, "\n此按键原有的翻页绑定将被替换。", "\nThis replaces the other page-turn mapping for this button.") \
+    X(SETTINGS_PAGER_TIMEOUT, "未识别到按键，请重新学习", "No button detected. Try learning again.") \
+    X(SETTINGS_PAGER_DISCONNECT, "断开连接", "Disconnect") \
+    X(SETTINGS_PAGER_STARTING, "正在启用蓝牙…", "Starting Bluetooth…") \
+    X(SETTINGS_PAGER_EMPTY, "未找到翻页器，请开启后重新扫描", "No page turner found. Turn it on and scan again.") \
     X(SETTINGS_TAB_TEST, "测试", "Test")                                                                       \
     X(SETTINGS_TAB_ABOUT, "关于", "About")                                                                     \
     X(SETTINGS_THEME_TITLE, "首页主题", "Home theme")                                                          \
@@ -514,11 +557,6 @@
     X(SETTINGS_HAPTIC_CURRENT_WEAK, "当前：弱", "Current: Weak") \
     X(SETTINGS_HAPTIC_CURRENT_MEDIUM, "当前：中", "Current: Medium") \
     X(SETTINGS_HAPTIC_CURRENT_STRONG, "当前：强", "Current: Strong") \
-    X(SETTINGS_POWER_3_MIN, "3 分", "3 min")                                                                   \
-    X(SETTINGS_POWER_10_MIN, "10 分", "10 min")                                                                \
-    X(SETTINGS_POWER_30_MIN, "30 分", "30 min")                                                                \
-    X(SETTINGS_POWER_3_HOUR, "3 时", "3 h")                                                                    \
-    X(SETTINGS_POWER_6_HOUR, "6 时", "6 h")                                                                    \
     X(SETTINGS_POWER_30_SEC, "30 秒", "30 s")                                                                  \
     X(SETTINGS_POWER_60_SEC, "60 秒", "60 s")                                                                  \
     X(SETTINGS_POWER_120_SEC, "120 秒", "120 s")                                                               \
@@ -527,10 +565,10 @@
     X(SETTINGS_POWER_IDLE_MHZ_HINT, "无操作空闲时的 CPU 频率", "CPU clock when idle")                            \
     X(SETTINGS_POWER_NET_GRACE_TITLE, "保网时长（默认 30 秒）", "Keep-alive (def 30 s)")                        \
     X(SETTINGS_POWER_NET_GRACE_HINT, "无保网需求后仍联网的时长；待机仍断网", "Time online after last need; standby disconnects") \
-    X(SETTINGS_POWER_STANDBY_TITLE, "浅睡待机（默认 3 分钟）", "Light sleep (def 3 min)")                       \
-    X(SETTINGS_POWER_STANDBY_HINT, "无操作多久进入浅睡待机", "Idle time before light sleep")                     \
+    X(SETTINGS_POWER_STANDBY_TITLE, "浅睡待机（默认 5 分钟）", "Light sleep (def 5 min)")                       \
+    X(SETTINGS_POWER_STANDBY_HINT, "无操作 5 分钟后进入浅睡待机", "Enters light sleep after 5 minutes of inactivity")                     \
     X(SETTINGS_POWER_OFF_TITLE, "自动关机（默认 30 分钟）", "Auto power-off (def 30 min)")                      \
-    X(SETTINGS_POWER_OFF_HINT, "浅睡累计多久自动关机", "Light-sleep time before power-off")                      \
+    X(SETTINGS_POWER_OFF_HINT, "待机累计 30 分钟后自动关机", "Powers off after 30 minutes in standby")                      \
     X(SETTINGS_CONV_TITLE, "语音播报", "Voice playback")                                                       \
     X(SETTINGS_CONV_HINT, "控制百问AI是否播报语音\n关闭后仅显示文字", "Whether Ask AI speaks aloud\nOff = text only") \
     X(SETTINGS_CONV_TTS_ON, "开启 TTS", "TTS on")                                                              \
@@ -573,13 +611,56 @@
     X(BT_TITLE, "蓝牙", "Bluetooth")                                                                           \
     X(BT_RESET_HINT, "点击以复位蓝牙", "Tap to reset Bluetooth")                                              \
     X(BT_VERSION_FMT, "蓝牙版本号：%s", "Bluetooth version: %s")                                              \
-    X(BT_CHECK_VERSION, "检测版本", "Check version") \
+    X(BT_CHECK_VERSION, "点击刷新", "Tap to refresh") \
     X(BT_CHECKING_VERSION, "检测中", "Checking") \
     X(BT_MODE_TITLE, "模式切换", "Mode selection")                                                           \
+    X(BT_NAME_TITLE, "蓝牙名称", "Bluetooth name") \
+    X(BT_EDIT_NAME, "点击修改名称", "Tap to edit name") \
+    X(BT_FW_TITLE, "蓝牙固件版本", "Bluetooth firmware") \
+    X(BT_RESET_TITLE, "蓝牙复位", "Bluetooth reset") \
+    X(BT_RESET_DETAIL, "复位后恢复当前模式", "Restore current mode after reset") \
+    X(BT_RESET_ACTION, "点击复位蓝牙芯片", "Tap to reset Bluetooth chip") \
+    X(BT_CURRENT_MODE, "当前模式", "Current mode") \
+    X(BT_CURRENT_MODE_FMT, "模式 %u · %s", "Mode %u · %s") \
+    X(BT_MODE1_DESC, "使用本机麦克风和扬声器", "Use the built-in microphone and speaker") \
+    X(BT_MODE2_DESC, "连接蓝牙音箱或耳机播放声音", "Play audio through a Bluetooth speaker or headset") \
+    X(BT_MODE3_DESC, "接收手机等设备播放的声音", "Receive audio played by a phone or other device") \
+    X(BT_MODE5_DESC, "向连接设备发送按键和语音", "Send keystrokes and voice to the connected device") \
+    X(BT_NAME_EDIT_HINT, "输入新名称，点击勾选键后确认修改。", "Enter a new name, then tap the checkmark to review the change.") \
+    X(BT_NAME_CONFIRM_FMT, "是否将蓝牙名称修改为“%s”？\n模块将重启约 700 ms，当前连接会中断。", "Change Bluetooth name to “%s”?\nThe module will restart (~700 ms) and disconnect.") \
+    X(BT_NAME_CONFIRM, "确认修改", "Confirm change") \
+    X(BT_NAME_RESTARTING, "名称已发送，蓝牙正在重启", "Name sent; Bluetooth restarting") \
+    X(BT_NAME_FAILED, "名称操作失败，请重试", "Name operation failed; try again") \
+    X(BT_NAME_INVALID, "名称需为 1～63 字节，不能含控制字符", "Use 1–63 bytes without control characters") \
     X(BT_RESET_BTN, "复位蓝牙", "Reset BT")                                                                    \
-    X(BT_MODE1, "模式1", "Mode 1")                                                                             \
-    X(BT_MODE2, "模式2", "Mode 2")                                                                             \
-    X(BT_MODE3, "模式3", "Mode 3")                                                                             \
+    X(BT_MODE1, "本机音频", "Local audio")                                                                             \
+    X(BT_MODE2, "蓝牙发送", "Bluetooth transmit")                                                                             \
+    X(BT_MODE3, "蓝牙接收", "Bluetooth receive")                                                                             \
+    X(BT_MODE5, "蓝牙键盘与语音", "Bluetooth keyboard & voice") \
+    X(BT_MODE5_SET, "模式5：请在电脑配对并选择蓝牙麦克风", "Mode 5: pair on PC and select Bluetooth mic") \
+    X(BT_SWITCH_MODE5, "切换模式5...", "Switching to mode 5...") \
+    X(BT_HID_TITLE, "HID 快捷键测试", "HID shortcut test") \
+    X(BT_AUDIO_DEVICES, "蓝牙设备管理", "Bluetooth device manager") \
+    X(BT_HID_HINT, "先在电脑配对 HID，再打开空白文本框测试。单击按钮发送一次按键，按住 Alt 可测试长按。", "Pair HID on your PC, then test in a blank text field. Click buttons send one keystroke; hold Alt to test a held key.") \
+    X(BT_HID_ENTER, "回车", "Enter") \
+    X(BT_HID_LEFT, "左方向键", "Left") \
+    X(BT_HID_RIGHT, "右方向键", "Right") \
+    X(BT_HID_RELEASE, "释放全部", "Release all") \
+    X(BT_HID_HOLD_ALT, "按住 Alt", "Hold Alt") \
+    X(BT_HID_SPACE, "空格", "Space") \
+    X(BT_HID_TAB, "制表键", "Tab") \
+    X(BT_HID_ESC, "退出键", "Esc") \
+    X(BT_HID_BACKSPACE, "退格", "Backspace") \
+    X(BT_HID_DELETE, "删除", "Delete") \
+    X(BT_HID_UP, "上方向键", "Up") \
+    X(BT_HID_DOWN, "下方向键", "Down") \
+    X(BT_HID_READY, "请在电脑确认按键效果", "Check keystrokes on your PC") \
+    X(BT_HID_WAITING, "已发送，等待蓝牙模块响应", "Sent; waiting for Bluetooth response") \
+    X(BT_HID_SUBMITTED, "已提交按键请求，请在电脑确认效果", "Key request submitted; check the PC") \
+    X(BT_HID_INVALID, "快捷键参数错误", "Invalid shortcut parameters") \
+    X(BT_HID_DISCONNECTED, "HID 未连接，请先在电脑配对并连接", "HID disconnected; pair and connect on PC") \
+    X(BT_HID_SEND_FAILED, "快捷键发送失败，请重试", "Could not send shortcut; try again") \
+    X(BT_HID_NEED_MODE5, "请先切换到模式5", "Switch to mode 5 first") \
     X(BT_SELECT_MODE, "请选择蓝牙模式", "Select a Bluetooth mode")                                              \
     X(BT_MODE1_ACTIVE, "模式1 已激活\n(AT+RX=2 / AT+MODE=1)", "Mode 1 active\n(AT+RX=2 / AT+MODE=1)")             \
     X(BT_SCAN_BTN, "扫描设备", "Scan")                                                                         \

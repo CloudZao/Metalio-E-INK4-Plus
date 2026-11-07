@@ -37,8 +37,7 @@ Show standby overlay, pause applications, block ordinary new SD access
 → Drain SD operations and handles, unmount and park SD
 → Wait for boot work, network/audio work, and hardware requests
 → Park the standby frame, wait for physical refresh, turn off frontlight
-→ Sleep the panel and bus, then remove P5 and P14 power in board order
-→ Drive the motor output high for 0.5 seconds, then low; restore its previous intensity
+→ Sleep the panel and bus, remove P5 power, preserve P14
 → Run the light-sleep hardware sequence
 ```
 
@@ -76,21 +75,22 @@ POWER and wake requests remain polled during these waits. SD cleanup and standby
 
 A failed refresh keeps the device awake and is retried before light sleep. See [display documentation](../../../display/README.md) for cleaning and waveform details. Physical refresh and Flash log writes are mutually excluded. The frame must be parked before the display supply and bus are parked.
 
-When light sleep is enabled, the standby frame is parked first. Initial parking sleeps the panel and bus, stops the cellular driver, notifies audio of power removal, and removes P5/P14 in board order. Subsequent timer wakes retain that parked state. Each slice confirms rail shutdown before the motor action. Only a successful rail shutdown is followed by a continuous high motor output for 0.5 seconds, then a low output and restoration of the previous driver intensity. Rail failures keep the motor off and are retried. This action is independent of the UI haptic setting and runs before every sleep slice, including re-entry after each timer wake. Exit requests and the POWER key remain polled during the wait. Leaving standby drives the output low early and restores peripheral power and the display bus; otherwise light sleep follows the 0.5-second wait.
+With light sleep enabled, initial parking sleeps the panel and bus, stops the cellular driver, and removes P5 power after the standby frame completes. Timer wakes retain that state. Standby entry and exit preserve P14 shared power without motor discharge or audio power-off/restoration notifications. Each slice confirms P5 shutdown, retrying failures while checking exit requests. Standby exit restores P5 and the display bus.
 
 ## Entering light sleep: hardware order
 
-Before every attempt, `power_hw_light_sleep_once()` checks that SD admission is closed and drained, boot work is finished, and no standby-exit request exists, then holds the SD transition guard. The current `kLightSleepHw` enables all four groups: SD, TPS, display bus, and peripheral rails. Before every slice, TPS sleep, bus parking, and rail removal complete before the motor action. The hardware sleep function reuses that state; when no earlier parking occurred, it follows the order below.
+Before every attempt, `power_hw_light_sleep_once()` checks that SD admission is closed and drained, boot work is finished, and no standby-exit request exists, then holds the SD transition guard. The current `kLightSleepHw` enables all four groups: SD, TPS, display bus, and peripheral rails. TPS sleep, bus parking, and rail removal complete before each slice. The hardware sleep function reuses that state; when no earlier parking occurred, it follows the order below.
 
 1. **Confirm SD parking.** `power_hw_sd_park()` is idempotent and does not unmount an already parked card again.
 2. **Sleep the panel PMIC.** The board sequence puts TPS65185 into SLEEP, then holds the display bus low.
 3. **Release shared interrupts.** `MetalioAccel_ReleaseIntLine()` stops reading-orientation tracking and deinitializes or silences accelerometer interrupts so shared INT is not held low.
 4. **Stop key sampling and set safe levels.** `MetalioKeys_MaskForSleep()` stops side-key scanning before changing IO-expander ports. Pending POWER clicks and standby-exit requests are checked again.
 5. **Arm wake sources.** Restores the POWER channel as an input, lets it settle, and reads the port to acknowledge interrupts left by the direction change. It confirms that POWER is released and shared INT is idle-high before arming MCU EXT1 low-level wake and the slice timer. A stuck INT or failed configuration aborts the attempt.
-6. **Remove shared peripheral power.** Forces frontlight outputs low again. In cellular mode, stops the modem and its UART/UHCI/network tasks first. `MetalioAudio_OnPowerOff()` invalidates audio-mode readiness. `sleep_cut_rails()` then removes camera/display power followed by the shared cellular/Bluetooth/PA supply.
+6. **Remove display peripheral power.** Forces frontlight outputs low again. In cellular mode, stops the modem and its UART/UHCI/network tasks. `sleep_cut_rails()` removes P5 camera/display power and preserves P14 shared power.
 7. **Latch the bus and sleep.** Holds display-bus sleep levels, records the RTC phase, and calls `esp_light_sleep_start()` through `s31_sleep::LightSleep()`.
 
-Each slice is at most 60 seconds and is shortened near the automatic power-off deadline. Selecting Never for automatic power-off still retains periodic timer wakes.
+Each slice is at most 60 seconds and is shortened near the automatic power-off deadline. Automatic power-off occurs after 30 minutes of accumulated standby time.
+
 
 ## Standby pin and level configuration
 
@@ -112,8 +112,8 @@ The following maps the active definitions in `config.h` to operations in `power_
 | Touch INT | GPIO5 | Retains its input/pull-up and interrupt configuration while sampling is paused. It is not armed as a light-sleep wake source. | Sampling resumes on standby exit; no controller deep-sleep command or reset pulse is implied. |
 | BOOT | GPIO61 | This path adds no direction, level, or hold change and does not arm it for light-sleep wake. | Long presses can be processed only while standby is awake and polling. It cannot wake the current light sleep. |
 | Audio I²S | BCLK = GPIO42; WS = GPIO43; DOUT = GPIO44; DIN = GPIO45 | The last audio consumer releases I²S channels and DMA. There is no separate all-low or GPIO-hold configuration for this group; the shared rail controls chip power. | The I²S driver recreates channels after audio-mode readiness and a service request. Rail restoration alone does not restore channels. |
-| Bluetooth audio UART | TX = GPIO39; RX = GPIO38 | `MetalioAudio_OnPowerOff()` invalidates mode readiness without reconfiguring these pins. P14 removes chip power. | Audio demand reconfirms mode after P14 restoration. Retained UART configuration does not mean the chip remains powered. |
-| Cellular UART / handshake | TX = GPIO58; RX = GPIO59; MRDY = GPIO60; SRDY = GPIO3 | Before P14 removal, stops modem/UHCI, disables SRDY interrupt/GPIO wake, restores MRDY sleep-select, and calls `gpio_reset_pin()` on all four pins. It does not drive the group low or add holds. GPIO reset defaults depend on the SDK. | The cellular recovery worker recreates UART/handshake/networking on user exit, not on timer wakes. The global variant has no active cellular board and skips this handling. |
+| Bluetooth audio UART | TX = GPIO39; RX = GPIO38 | Preserves pin configuration and P14 power without a power-off notification. | Controlled by subsequent audio demand. |
+| Cellular UART / handshake | TX = GPIO58; RX = GPIO59; MRDY = GPIO60; SRDY = GPIO3 | During standby parking, retains P14 power and stops modem/UHCI, disables SRDY interrupt/GPIO wake, restores MRDY sleep-select, and calls `gpio_reset_pin()` on all four pins. It does not drive the group low or add holds. GPIO reset defaults depend on the SDK. | The cellular recovery worker recreates UART/handshake/networking on user exit, not on timer wakes. The global variant has no active cellular board and skips this handling. |
 | Analog switch | ANA_SW = GPIO36 | The current sleep sequence makes no additional change; previous routing remains. It is not an implemented standby power-removal action. | Retains routing until the relevant feature changes it. |
 
 Implementation: [SD/CNNT](../../metalio-e-ink4-plus/periph/metalio_sd.cc), [shared I²C](../../metalio-e-ink4-plus/bus/metalio_i2c1.c), [frontlight](../../metalio-e-ink4-plus/periph/frontlight.cc), [I²S release](../audio/bt_audio_codec.cc), and [cellular pin cleanup](../board/uart_eth_modem.cc).
@@ -129,20 +129,20 @@ Direction changes have three stages; keys do not simply remain inputs throughout
 | Expander pin | Signal / normal state | Before and during sleep | Wake restoration |
 |---|---|---|---|
 | P00 / P01 / P02 | TPS VCOM_CTRL / PWRUP / WAKEUP, outputs | VCOM_CTRL/PWRUP go to 0 first, followed by WAKEUP; all remain 0 during sleep. | Output directions return without driving all high. The display driver powers TPS as required for refresh. |
-| P03 | Motor enable, output | Driven high for 0.5 seconds, then low before every sleep slice; masking preserves the software latch. | Remains low until normal vibration control drives it again. |
-| P04 | PA_EN, output | Power/audio policy requests PA-off. Masking preserves that policy latch; P14 subsequently removes shared power. | Follows audio needs and state; PA is not unconditionally enabled with P14. |
-| P05 | Camera/display power, output | Set to 0 before the motor starts for every slice, as the first `sleep_cut_rails()` stage. | Set to 1 after P14 returns. |
+| P03 | Motor enable, output | No standby discharge pulse; masking preserves the software latch. | Controlled by ordinary haptics. |
+| P04 | PA_EN, output | Power/audio policy requests PA-off. Masking preserves that policy latch; P14 retains shared power. | Follows audio needs and state; PA is not unconditionally enabled with P14. |
+| P05 | Camera/display power, output | `sleep_cut_rails()` sets it to 0 before each slice. | `sleep_restore_rails()` sets it to 1 and waits for settling before restoring the bus. |
 | P06 | Unassigned, normally input | Output 0 after masking. | Restored to input. |
 | P07 | TPS PWR_GOOD, normally input | Changed to output 0 after TPS enters SLEEP. It is not read as an operating-voltage indicator while asleep. | Restored to input for subsequent display-power handling. |
 | P10 / P11 | Volume+ / volume−, normally inputs | Changed to output 1 at idle key level; not retained as wake inputs. | Inputs restored, then sampling baselines rebuilt after settling to avoid false keys. |
 | P12 | Shared touch/cellular/camera RST, output | Preserves its latch, normally 1 after power-up. Standby does not actively pull it low or pulse reset. | Preserves its latch. Paused touch sampling does not mean this pin removed power. |
 | P13 | Power-off pulse, output | Forced 0; no power-off pulses are sent. | Remains 0. Only hardware power-off generates configured pulses. |
-| P14 | Shared cellular/Bluetooth/PA power, output | Set to 0 after P05 is off and before the motor starts for every slice. Dependent drivers must finish first. | `sleep_restore_rails()` sets it to 1 before P05. This means supply restoration only. |
+| P14 | Shared cellular/Bluetooth/PA power, output | Preserves the supply latch without removing power. | Preserves its state without a power cycle. |
 | P15 | Unassigned, normally input | Output 0 after masking. | Restored to input. |
 | P16 | RTC_INT, normally input | Output 0 after masking, not retained as an external RTC-interrupt wake input for this sleep. | Restored to input. Slice wake uses the MCU timer wake source. |
 | P17 | POWER, normally input | Initially output 1 during masking, then input again. A press pulls it low and TCA INT pulls GPIO2 low. | Level is latched before direction restoration; a released short press still retains POWER-wake semantics. |
 
-Current TPS timing: when the three controls are not already all low, P00/P01 are lowered, followed 50 ms later by P02, then a 120 ms wait. If already all low, only the final 120 ms wait is added. Shared rails turn off in order **P05 → P14** and return in order **P14 → P05**.
+Current TPS timing: when the three controls are not already all low, P00/P01 are lowered, followed 50 ms later by P02, then a 120 ms wait. If already all low, only the final 120 ms wait is added. Standby switches only **P05** and preserves **P14**.
 
 The complete POWER wake path is **P17 input low → TCA INT low → MCU GPIO2 EXT1 ANY_LOW**. RTC P16, touch GPIO5, BOOT GPIO61, and cellular SRDY GPIO3 are not part of this final external key-wake configuration. The historical macro `EPD_TPS_IO_INT` sharing P17's linear index must not be interpreted as a separate TPS interrupt pin.
 
@@ -170,7 +170,7 @@ EXT1 comes from a shared interrupt line. It is handled as POWER only when a pres
 
 The standby worker finishes an exit request through the same restoration path even if it arrives before SD draining or display parking completes:
 
-1. Restores peripheral supplies and the display bus first, retrying on failure. Board restoration enables P14, waits for settling, enables P5, then waits again before restoring the bus; the board configuration owns the delay. Successful restoration notifies audio and cellular drivers that power is present while keeping the frontlight off; it does not imply service readiness. Then calls `power_hw_sd_restore()` to attempt SD restoration, requests asynchronous cellular recovery for the active network board, clears the consumed POWER click, and posts `FinishWake()` to the priority UI queue. This caller does not gate exit on the SD restoration result: exit continues after a mount failure, while application access remains constrained by actual mount state. An application-loop network wait does not discard the exit request.
+1. Restores peripheral supplies and the display bus first, retrying on failure. Board restoration enables P5 directly, waits for `POWER_RAIL_SETTLE_MS`, then restores the bus. P14 retains its state. Successful restoration updates cellular recovery state while keeping the frontlight off; it does not imply service readiness. Then calls `power_hw_sd_restore()` to attempt SD restoration, requests asynchronous cellular recovery for the active network board, clears the consumed POWER click, and posts `FinishWake()` to the priority UI queue. This caller does not gate exit on the SD restoration result: exit continues after a mount failure, while application access remains constrained by actual mount state. An application-loop network wait does not discard the exit request.
 2. `StandbyScreen::Dismiss()` unfreezes display submissions and prepares saved frontlight brightness. `sd_access::Resume()` reopens ordinary SD admission and resumes SD logging, then the standby variant, timers, and overlay are removed. The display task renders the underlying page after the exit callback finishes restoring its resources.
 3. `OnStandbyOverlayDismissed()` clears requests and accumulated standby time, records user activity, and reevaluates the mode. New needs drive network restoration; returning to Home does not guarantee immediate reconnection. The saved manual Wi-Fi-off setting has priority.
 4. A retained assistant or WorkBuddy page reacquires foreground networking and resumes session/authorization checks. It does not automatically record or resend accepted requests. Old worker results cannot touch invalid controls or overwrite a newer session.
@@ -199,14 +199,14 @@ The standby worker finishes an exit request through the same restoration path ev
 
 `PeripheralReset` suppresses PA. While `UiKeepNet` is held, the policy leaves PA unchanged. `ForegroundNetwork` is a soft hold: it does not refresh user inactivity, affect PA, or prevent automatic standby. Active recording, OTA/downloads, and hard states such as Connecting/Listening/Speaking/Upgrading block automatic standby. `UsbVirtualDisk` and `StandbyInhibit` only block inactivity standby; they do not independently force networking or PA. Releasing hard, USB, or inhibit needs refreshes inactivity to avoid immediate standby.
 
-Settings → Power exposes the following defaults for devices without saved preferences. Changes are persisted asynchronously by internal-RAM-stack tasks in NVS namespace `power`.
+Settings → Power shows inactivity standby fixed at 5 minutes and automatic power-off fixed at 30 minutes of accumulated standby time, without selectors. Previously saved timeout values are ignored. Idle CPU frequency and network grace remain selectable and are persisted asynchronously by internal-RAM-stack tasks in NVS namespace `power`.
 
 | Setting | NVS key | Choices | Default |
 |---|---|---|---|
 | Idle CPU frequency | `idle_mhz` | 160 / 240 / 320 MHz | 320 MHz |
-| Inactivity to standby | `idle_stb_s` | 180 / 600 / 1800 seconds | 180 seconds |
+| Inactivity to standby | Not stored | Fixed at 300 seconds; no selector | 300 seconds |
 | Network grace | `net_grace_s` | 0 / 30 / 60 / 120 seconds; 0 means never disconnect for inactivity | 30 seconds |
-| Accumulated standby to power-off | `stb_off_s` | 0 / 180 / 600 / 1800 / 10800 / 21600 seconds; 0 disables automatic power-off | 1800 seconds |
+| Accumulated standby to power-off | Not stored | Fixed at 1800 seconds; no selector | 1800 seconds |
 
 - The default idle frequency is 320 MHz, not an automatic low-frequency setting. Only `AppIdle` uses it; other modes request `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ`. Fixed-frequency control requires `CONFIG_PM_ENABLE`. This layer disables SDK automatic light sleep and lets the standby task invoke sleep explicitly. `PowerHwCpuFreqHold` can retain operating frequency during critical work.
 - Ordinary Idle network grace and standby timing run in parallel from the last user activity. Provisioning/activation has separate evaluation and considers grace after its inactivity threshold. Soft network holds keep networking available without overriding automatic standby.

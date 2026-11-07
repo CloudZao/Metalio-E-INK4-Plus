@@ -207,10 +207,8 @@ void CloudDownloadWorker(void* /*arg*/) {
         std::snprintf(msg->key, sizeof(msg->key), "%s", work->item.task_id.c_str());
         msg->ok = reader::DownloadPushResource(work->item, err, OnDownloadProgress, nullptr,
                                                &s_dl_gate,
-                                               work->cover_bytes.empty()
-                                                   ? nullptr
-                                                   : work->cover_bytes.data(),
-                                               work->cover_bytes.size(), work->save_path.c_str(),
+                                               work->cover_cache ? work->cover_cache->path.c_str() : nullptr,
+                                               work->save_path.c_str(),
                                                work->overwrite);
         msg->cancelled = s_dl_gate.IsCancelled() || err == Lang::Strings::CLOUD_CANCELLED;
         if (msg->cancelled) {
@@ -311,9 +309,9 @@ void StartResourceDownload(int index, CloudSaveChoice choice) {
     work->overwrite = choice == CloudSaveChoice::kReplace;
     work->op_gen = st.xfer.op_generation;
     work->item = st.data.items[static_cast<size_t>(index)];
-    if (index < static_cast<int>(st.data.cover_bytes.size()) &&
-        !st.data.cover_bytes[static_cast<size_t>(index)].empty()) {
-        work->cover_bytes = st.data.cover_bytes[static_cast<size_t>(index)];
+    if (index < static_cast<int>(st.data.cover_cache.size()) &&
+        st.data.cover_cache[static_cast<size_t>(index)]) {
+        work->cover_cache = st.data.cover_cache[static_cast<size_t>(index)];
     }
 
     s_dl_gate.Reset();

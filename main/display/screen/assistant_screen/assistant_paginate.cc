@@ -10,6 +10,37 @@
 #include <esp_log.h>
 
 namespace {
+bool HasVisibleText(std::string_view text) {
+    for (size_t i = 0; i < text.size();) {
+        uint32_t cp = 0;
+        const size_t n = reader::Utf8Next(reinterpret_cast<const uint8_t*>(text.data()) + i, text.size() - i, &cp);
+        if (!n) break;
+        if (cp > 0x20 && cp != 0xA0 && cp != 0x3000) return true;
+        i += n;
+    }
+    return false;
+}
+
+bool HasPageContent(const FlowList& page) {
+    for (const auto& item : page) {
+        switch (item.kind) {
+            case FlowKind::MsgGap: case FlowKind::Spacer: case FlowKind::Divider:
+            case FlowKind::CardBegin: case FlowKind::CardEnd:
+                break;
+            case FlowKind::Text: case FlowKind::Math:
+            case FlowKind::Header: case FlowKind::ListItem: case FlowKind::Badge: case FlowKind::Status:
+                if (HasVisibleText(item.text) || HasVisibleText(item.text2)) return true;
+                break;
+            case FlowKind::RichText:
+                for (const auto& span : item.spans) if (HasVisibleText(span.text)) return true;
+                break;
+            default:
+                return true;
+        }
+    }
+    return false;
+}
+
 struct YunxinPaginationCache {
     bool valid = false;
     size_t flow_index = 0;
@@ -79,6 +110,8 @@ void WrapTextToLines(std::string_view text, const lv_font_t* font, lv_coord_t le
     if (!line.empty() || lines.empty()) {
         lines.push_back(std::move(line));
     }
+    // 保留正文内部空行，但末尾空白不应独占续页。
+    while (!lines.empty() && !HasVisibleText(lines.back())) lines.pop_back();
 }
 
 ChatString JoinLines(const ChatVector<ChatString>& lines, size_t begin, size_t end) {
@@ -217,7 +250,9 @@ void NotePageContent(size_t fi) {
 }
 
 void CommitPage(FlowList& cur) {
-    if (cur.empty()) {
+    if (!HasPageContent(cur)) {
+        cur.clear();
+        Assistant_State().layout.open_page_flow_begin = static_cast<size_t>(-1);
         return;
     }
     const size_t begin =

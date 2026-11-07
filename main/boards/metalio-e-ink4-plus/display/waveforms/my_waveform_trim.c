@@ -20,8 +20,8 @@ static inline void lut_set(uint8_t (*data)[16][4], int f, int to, int from, int 
 }
 
 typedef struct {
-    uint8_t seq[MAX_PHASES];
-    int len;
+    uint8_t seq[MAX_PHASES]; // 单组灰阶转换的驱动动作
+    int len; // 有效动作数量
 } trimmed_seq_t;
 
 static int run_length(const uint8_t* seq, int start, int end, int value) {
@@ -86,34 +86,32 @@ int my_waveform_trim(const EpdWaveformPhases* src, const my_waveform_trim_t* tri
     }
 
     const uint8_t(*data)[16][4] = (const uint8_t(*)[16][4])src->luts;
-    static trimmed_seq_t seqs[16][16];
     int longest = 0;
+    int phases = 0;
 
-    for (int to = 0; to < 16; to++) {
-        for (int from = 0; from < 16; from++) {
-            uint8_t seq[MAX_PHASES];
-            for (int f = 0; f < src->phases; f++) {
-                seq[f] = (uint8_t)lut_get(data, f, to, from);
-            }
-            trim_one(seq, src->phases, to, trim, &seqs[to][from]);
-            if (seqs[to][from].len > longest) {
-                longest = seqs[to][from].len;
-            }
+    // 先测量最长序列，再逐组重算并输出，避免初始化工作表长期占用内部 RAM。
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass == 1) {
+            phases = longest + trim->hold;
+            if (phases > src->phases) return 0;
+            memset(dst_data, 0, (size_t)phases * 16 * 4);
         }
-    }
-
-    const int phases = longest + trim->hold;
-    if (phases > src->phases) {
-        return 0;
-    }
-
-    memset(dst_data, 0, (size_t)phases * 16 * 4);
-    for (int to = 0; to < 16; to++) {
-        for (int from = 0; from < 16; from++) {
-            const trimmed_seq_t* t = &seqs[to][from];
-            const int start = longest - t->len;
-            for (int i = 0; i < t->len; i++) {
-                lut_set(dst_data, start + i, to, from, t->seq[i]);
+        for (int to = 0; to < 16; to++) {
+            for (int from = 0; from < 16; from++) {
+                uint8_t seq[MAX_PHASES];
+                trimmed_seq_t trimmed;
+                for (int f = 0; f < src->phases; f++) {
+                    seq[f] = (uint8_t)lut_get(data, f, to, from);
+                }
+                trim_one(seq, src->phases, to, trim, &trimmed);
+                if (pass == 0) {
+                    if (trimmed.len > longest) longest = trimmed.len;
+                } else {
+                    const int start = longest - trimmed.len;
+                    for (int i = 0; i < trimmed.len; i++) {
+                        lut_set(dst_data, start + i, to, from, trimmed.seq[i]);
+                    }
+                }
             }
         }
     }

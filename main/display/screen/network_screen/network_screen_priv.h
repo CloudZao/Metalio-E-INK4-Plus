@@ -91,29 +91,6 @@ struct UiWidgets {
     lv_obj_t* status_msg = nullptr;
 };
 
-enum class KbMode : uint8_t { kEn = 0, kSym = 1, kMore = 2 }; // 英文、数字符号、扩展符号
-constexpr int kKbCols = 10; // 每行键位上限
-constexpr int kKbRows = 4; // 固定四行
-constexpr int kKbKeysCap = kKbCols * kKbRows; // 键位容量
-constexpr lv_coord_t kKbGap = UiSx(7); // 按键间距
-
-enum class KbAction : uint8_t {
-    kChar = 0, // 输入字符
-    kBackspace, // 删除末尾字符
-    kShift, // 切换大小写
-    kModeEn, // 切换英文
-    kModeSym, // 切换数字与常用符号
-    kModeMore, // 切换扩展符号
-    kConfirm, // 确认密码并连接
-    kSpace, // 输入空格
-    kEmpty, // 不创建按键
-};
-
-struct KbKeyDesc {
-    const char* label = nullptr;  // 显示
-    KbAction action = KbAction::kChar; // 按键动作
-};
-
 struct NearbyClickCtx {
     char ssid[kMaxSsidLen + 1] = {};
     int authmode = 0;
@@ -167,9 +144,6 @@ struct NetworkUiState {
     std::string retry_ssid; // 连接失败后允许重新输入已保存网络的密码
     std::string pending_ssid;
     wifi_auth_mode_t pending_authmode = WIFI_AUTH_OPEN;
-    KbMode kb_mode = KbMode::kEn;
-    bool kb_upper = false;
-    lv_obj_t* kb_keys[kKbKeysCap] = {};
     char password[kMaxPasswordLen + 1] = {};
     esp_netif_t* netif = nullptr;
     esp_event_handler_instance_t wifi_evt_inst = nullptr;
@@ -207,8 +181,6 @@ void Network_StyleTabBtn(lv_obj_t* btn, bool selected);
 void Network_StyleScanBtn(bool enabled);
 /** @brief 网络屏 UI 字体 */
 const lv_font_t* Network_UiFont();
-/** @brief 键盘用系统字库 30@2，失败回退 UI 默认字 */
-const lv_font_t* Network_KbFont();
 /** @brief 网络屏是否仍存活 */
 bool Network_ScreenAlive();
 /** @brief WiFi 认证模式文案 */

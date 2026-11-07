@@ -6,13 +6,11 @@
 void Bluetooth_async_on_mode3_set(void* user_data);
 /** @brief 投递清空设备列表 */
 void Bluetooth_post_clear_list();
-/** @brief 显示/隐藏模式 1 面板 */
-void Bluetooth_show_mode1_panel(bool show);
 /** @brief 点击通话模式 */
 void Bluetooth_on_call_mode_clicked(lv_event_t* e);
 /** @brief LV 异步：模式 1 设置完成 */
 void Bluetooth_async_on_mode1_set(void* user_data);
-/** @brief 显示/隐藏模式 2 面板 */
+/** @brief 显示模式 2 设备管理入口，隐藏时收起管理页 */
 void Bluetooth_show_mode2_panel(bool show);
 /** @brief 刷新模式按钮选中态 */
 void Bluetooth_refresh_mode_buttons();
@@ -28,7 +26,6 @@ void Bluetooth_async_on_mode2_set(void* user_data);
 void Bluetooth_bt_reset_task(void* param);
 /** @brief 去掉容器多余样式 */
 void Bluetooth_strip_container(lv_obj_t* obj);
-/** @brief LV 异步：复位完成后刷新 */
 /** @brief 更新状态标签文案 */
 void Bluetooth_update_status_label(const char* text);
 /** @brief LV 异步：更新状态标签 */

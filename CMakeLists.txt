@@ -2,7 +2,7 @@
 # https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html
 cmake_minimum_required(VERSION 3.16)
 
-set(PROJECT_VER "2.0.74")
+set(PROJECT_VER "2.0.77")
 
 add_compile_options(-Wno-missing-field-initializers)
 

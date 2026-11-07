@@ -418,3 +418,5 @@ bool VkKey_OnPressUp(const char* key_name) {
     }
     return false;
 }
+
+uint32_t VkKey_InputEpoch() { return s_screen_epoch.load(std::memory_order_acquire); }

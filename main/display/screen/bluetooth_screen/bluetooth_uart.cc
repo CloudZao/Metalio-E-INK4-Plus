@@ -3,11 +3,13 @@
 #include "bluetooth_screen_priv.h"
 #include "bluetooth_screen_ui.h"
 #include "assets/lang_config.h"
+#include "assets/lang_bluetooth.h"
 #include "fontpack_lvgl.h"
 #include "haptic_feedback.h"
 #include "power_policy.h"
 #include "settings_common.h"
 #include "screen_common.h"
+#include "screen_text.h"
 #include "simple_uart.hpp"
 
 #include <atomic>
@@ -102,6 +104,97 @@ bool Bluetooth_query_version() {
     return true;
 }
 
+bool Bluetooth_send_hid_shortcut(const char* shortcut) {
+    const bool releasing = strcmp(shortcut, "ALT,UP") == 0 || strcmp(shortcut, "RELEASE") == 0;
+    // 释放指令不得被模式切换或复位的忙标记拦截。
+    if (!releasing) {
+        if (Bluetooth_mode_cmd_busy.load(std::memory_order_acquire)) return false;
+        if (Bluetooth_active_mode != BtMode::kMode5) {
+            Bluetooth_post_status(Lang::Strings::BT_HID_NEED_MODE5);
+            return false;
+        }
+    }
+    auto& uart = SimpleUart::getInstance();
+    if (!uart.isInitialized()) {
+        Bluetooth_post_status(Lang::Strings::BT_UART_NOT_INIT);
+        return false;
+    }
+    // 仅由固定按钮传入键名及按下、释放动作。
+    const std::string command = std::string("AT+SHORTCUT=") + shortcut + "\r";
+    Bluetooth_post_status(Lang::Strings::BT_HID_WAITING);
+    if (!uart.sendString(command)) {
+        Bluetooth_post_status(Lang::Strings::BT_HID_SEND_FAILED);
+        ESP_LOGW(TAG, "HID shortcut TX failed");
+        return false;
+    }
+    return true;
+}
+
+bool Bluetooth_query_name() {
+    auto& uart = SimpleUart::getInstance();
+    return uart.isInitialized() && uart.sendString("AT+GLBN=1\r\n");
+}
+
+namespace {
+struct RenameArgs {
+    char name[64]; // 待设置名称，包含结束符。
+    BtMode mode; // 模块重启后恢复的模式。
+};
+
+void RenameTask(void* param) {
+    auto* args = static_cast<RenameArgs*>(param);
+    PowerPolicy::GetInstance().Acquire(PowerNeed::StandbyInhibit);
+    auto& uart = SimpleUart::getInstance();
+    if (uart.sendString(std::string("AT+SLBN=") + args->name + "\r\n")) {
+        Bluetooth_post_status(Lang::Strings::BT_NAME_RESTARTING);
+        vTaskDelay(pdMS_TO_TICKS(700));
+        Bluetooth_apply_mode_commands(args->mode);
+        if (!Bluetooth_query_name()) Bluetooth_post_status(Lang::Strings::BT_NAME_FAILED);
+    } else {
+        Bluetooth_post_status(Lang::Strings::BT_NAME_FAILED);
+    }
+    PowerPolicy::GetInstance().Release(PowerNeed::StandbyInhibit);
+    delete args;
+    Bluetooth_mode_cmd_busy.store(false, std::memory_order_release);
+    vTaskDelete(nullptr);
+}
+} // namespace
+
+bool Bluetooth_is_valid_name(const char* name) {
+    const size_t length = strlen(name);
+    if (length == 0 || length > 63) return false;
+    for (size_t i = 0; i < length; ++i) {
+        const auto c = static_cast<unsigned char>(name[i]);
+        if (c < 0x20 || c == 0x7f) return false;
+    }
+    return true;
+}
+
+bool Bluetooth_rename(const char* name) {
+    if (!Bluetooth_is_valid_name(name)) {
+        Bluetooth_post_status(Lang::Strings::BT_NAME_INVALID);
+        return false;
+    }
+    if (!SimpleUart::getInstance().isInitialized()) {
+        Bluetooth_post_status(Lang::Strings::BT_UART_NOT_INIT);
+        return false;
+    }
+    bool expected = false;
+    if (!Bluetooth_mode_cmd_busy.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) return false;
+    auto* args = new (std::nothrow) RenameArgs{};
+    if (args != nullptr) {
+        snprintf(args->name, sizeof(args->name), "%s", name);
+        args->mode = Bluetooth_active_mode.load();
+    }
+    if (args == nullptr || xTaskCreate(RenameTask, "bt_rename", 4096, args, 5, nullptr) != pdPASS) {
+        delete args;
+        Bluetooth_mode_cmd_busy.store(false, std::memory_order_release);
+        Bluetooth_post_status(Lang::Strings::BT_NAME_FAILED);
+        return false;
+    }
+    return true;
+}
+
 void Bluetooth_handle_response_line(const std::string& raw_line) {
     std::string line = raw_line;
     Bluetooth_trim_line(line);
@@ -110,6 +203,30 @@ void Bluetooth_handle_response_line(const std::string& raw_line) {
     }
 
     ESP_LOGI(TAG, "RX: %s", line.c_str());
+
+    if (line == "AT+SHORTCUT=OK") {
+        Bluetooth_post_status(Lang::Strings::BT_HID_SUBMITTED);
+        return;
+    }
+    if (line == "AT+SHORTCUT=ERR") {
+        Bluetooth_post_status(Lang::Strings::BT_HID_INVALID);
+        return;
+    }
+    if (line == "AT+SHORTCUT=DISCONNECTED") {
+        Bluetooth_post_status(Lang::Strings::BT_HID_DISCONNECTED);
+        return;
+    }
+
+    constexpr const char* kNamePrefix = "AT+LOCAL_NAME=";
+    if (line.rfind(kNamePrefix, 0) == 0) {
+        const std::string name = line.substr(strlen(kNamePrefix));
+        // 改名响应可能回显整个设置命令；重启后的查询结果才是名称。
+        if (!name.empty() && name.size() <= 63 && name.rfind("AT+SLBN=", 0) != 0 &&
+            name.find_first_of("\r\n") == std::string::npos) {
+            Bluetooth_post_name(name.c_str());
+        }
+        return;
+    }
 
     constexpr const char* kVersionPrefix = "AT+GVER=";
     if (line.rfind(kVersionPrefix, 0) == 0) {
@@ -142,6 +259,14 @@ void Bluetooth_handle_response_line(const std::string& raw_line) {
         Bluetooth_conn_state = ConnState::kIdle;
         Bluetooth_post_status(Lang::Strings::BT_MODE3_SET);
         ScreenLvAsync(Bluetooth_async_on_mode3_set);
+        return;
+    }
+
+    if (line.find("SET MODE 5") != std::string::npos) {
+        Bluetooth_active_mode = BtMode::kMode5;
+        Bluetooth_conn_state = ConnState::kIdle;
+        Bluetooth_post_status(Lang::Strings::BT_MODE5_SET);
+        ScreenLvAsync([](void*) { Bluetooth_restore_mode_ui(); });
         return;
     }
 
@@ -266,6 +391,14 @@ void Bluetooth_apply_mode_commands(BtMode mode) {
             uart.sendString("AT+MODE=3\r\n");
             ESP_LOGI(TAG, "TX: AT+MODE=3");
             break;
+        case BtMode::kMode5:
+            Bluetooth_post_status(Lang::Strings::BT_SWITCH_MODE5);
+            if (!uart.sendString("AT+MODE=5\r\n")) {
+                ESP_LOGE(TAG, "TX failed: AT+MODE=5");
+            } else {
+                ESP_LOGI(TAG, "TX: AT+MODE=5");
+            }
+            break;
         default:
             break;
     }
@@ -337,22 +470,22 @@ void Bluetooth_restore_mode_ui() {
     Bluetooth_refresh_mode_buttons();
     switch (Bluetooth_active_mode) {
         case BtMode::kMode1:
-            Bluetooth_show_mode1_panel(true);
             Bluetooth_show_mode2_panel(false);
             Bluetooth_update_status_label(Lang::Strings::BT_MODE1_SET);
             break;
         case BtMode::kMode2:
-            Bluetooth_show_mode1_panel(false);
             Bluetooth_show_mode2_panel(true);
             Bluetooth_update_status_label(Lang::Strings::BT_MODE2_SET);
             break;
         case BtMode::kMode3:
-            Bluetooth_show_mode1_panel(false);
             Bluetooth_show_mode2_panel(false);
             Bluetooth_update_status_label(Lang::Strings::BT_MODE3_SET);
             break;
+        case BtMode::kMode5:
+            Bluetooth_show_mode2_panel(false);
+            Bluetooth_update_status_label(Lang::Strings::BT_MODE5_SET);
+            break;
         default:
-            Bluetooth_show_mode1_panel(false);
             Bluetooth_show_mode2_panel(false);
             break;
     }
@@ -360,6 +493,7 @@ void Bluetooth_restore_mode_ui() {
 
 void Bluetooth_reset_ui_state() {
     Bluetooth_State() = {};
+    std::lock_guard<std::mutex> lock(Bluetooth_rx_mutex);
     Bluetooth_rx_buffer.clear();
     Bluetooth_devices.clear();
     Bluetooth_conn_state = ConnState::kIdle;
@@ -386,8 +520,11 @@ lv_obj_t* Bluetooth_make_action_button(lv_obj_t* parent, const char* label, lv_e
 lv_obj_t* Bluetooth_make_mode_button(lv_obj_t* parent, const char* label, int idx) {
     lv_obj_t* btn = lv_obj_create(parent);
     lv_obj_remove_style_all(btn);
+    lv_obj_set_width(btn, 0);
     lv_obj_set_height(btn, kSettingsOptionH);
     lv_obj_set_flex_grow(btn, 1);
+    lv_obj_set_style_pad_hor(btn, kSettingsOptionPad, 0);
+    lv_obj_set_style_pad_ver(btn, UiSy(4), 0);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
     HapticAttachClick(btn);
@@ -398,7 +535,7 @@ lv_obj_t* Bluetooth_make_mode_button(lv_obj_t* parent, const char* label, int id
     lv_obj_set_style_text_font(lbl, fontpack_lv_font_ui(), 0);
     lv_obj_center(lbl);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn, ScreenFitButtonLabelOnSize, LV_EVENT_SIZE_CHANGED, lbl);
     SettingsStyleSelectable(btn, lbl, false);
     return btn;
 }
-

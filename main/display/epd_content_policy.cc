@@ -3,6 +3,7 @@
 #include "src/draw/lv_draw_private.h"
 #include "src/draw/sw/blend/lv_draw_sw_blend_private.h"
 #include "src/draw/sw/blend/lv_draw_sw_blend_to_l8.h"
+#include "src/draw/sw/blend/lv_draw_sw_blend_to_argb8888.h"
 #include "src/misc/lv_area_private.h"
 #include <algorithm>
 #include <vector>
@@ -90,6 +91,7 @@ void Blend(lv_draw_task_t* task,const lv_draw_sw_blend_dsc_t* dsc) {
     if(dsc->src_buf && !lv_area_intersect(&area,&area,dsc->src_area)) return;
     if(dsc->mask_buf && dsc->mask_area && !lv_area_intersect(&area,&area,dsc->mask_area)) return;
     auto* layer=task->target_layer;
+    const bool argb=layer->color_format==LV_COLOR_FORMAT_ARGB8888;
     const auto* base=static_cast<const lv_draw_dsc_base_t*>(task->draw_dsc);
     const auto role=ContentRole(base->obj);
     const bool gray=task->type==LV_DRAW_TASK_TYPE_LAYER || GrayRole(role);
@@ -106,12 +108,14 @@ void Blend(lv_draw_task_t* task,const lv_draw_sw_blend_dsc_t* dsc) {
         mask+=size_t(area.y1-dsc->mask_area->y1)*mask_stride+area.x1-dsc->mask_area->x1;
     }
     const int dest_stride=layer->draw_buf->header.stride;
-    if(!dsc->src_buf && gray) {
+    if(!dsc->src_buf && (gray || argb)) {
         lv_draw_sw_blend_fill_dsc_t fill{};
         fill.dest_buf=dest; fill.dest_w=width; fill.dest_h=height; fill.dest_stride=dest_stride;
         fill.color=dsc->color; fill.opa=dsc->opa; fill.relative_area=relative;
         fill.mask_buf=mask; fill.mask_stride=mask_stride;
-        lv_draw_sw_blend_color_to_l8(&fill); return;
+        if(argb) lv_draw_sw_blend_color_to_argb8888(&fill);
+        else lv_draw_sw_blend_color_to_l8(&fill);
+        return;
     }
     if(!dsc->src_buf && !mask) {
         // White UI backgrounds dominate gray-content pages. Preserve the
@@ -122,17 +126,19 @@ void Blend(lv_draw_task_t* task,const lv_draw_sw_blend_dsc_t* dsc) {
         fill.opa=LV_OPA_COVER;fill.relative_area=relative;
         lv_draw_sw_blend_color_to_l8(&fill);return;
     }
-    if(dsc->src_buf && gray && !darken) {
+    if(dsc->src_buf && (gray || argb) && !darken) {
         lv_draw_sw_blend_image_dsc_t image{};
         image.dest_buf=dest; image.dest_w=width; image.dest_h=height; image.dest_stride=dest_stride;
-        image.opa=task->type==LV_DRAW_TASK_TYPE_LAYER ? static_cast<lv_opa_t>(LV_OPA_COVER) : dsc->opa; image.blend_mode=dsc->blend_mode;
+        image.opa=!argb && task->type==LV_DRAW_TASK_TYPE_LAYER ? static_cast<lv_opa_t>(LV_OPA_COVER) : dsc->opa; image.blend_mode=dsc->blend_mode;
         image.src_stride=dsc->src_stride; image.src_color_format=dsc->src_color_format;
         image.src_buf=static_cast<const uint8_t*>(dsc->src_buf)+
             size_t(area.y1-dsc->src_area->y1)*dsc->src_stride+
             ((area.x1-dsc->src_area->x1)*lv_color_format_get_bpp(dsc->src_color_format)>>3);
         image.src_area=*dsc->src_area; lv_area_move(&image.src_area,-layer->buf_area.x1,-layer->buf_area.y1);
         image.relative_area=relative; image.mask_buf=mask; image.mask_stride=mask_stride;
-        lv_draw_sw_blend_image_to_l8(&image); return;
+        if(argb) lv_draw_sw_blend_image_to_argb8888(&image);
+        else lv_draw_sw_blend_image_to_l8(&image);
+        return;
     }
     // One reusable row, bounded by the layer width. No source mutation/cache
     // poisoning: the same resource may be reused later as actual gray content.
@@ -192,7 +198,8 @@ void Blend(lv_draw_task_t* task,const lv_draw_sw_blend_dsc_t* dsc) {
         image.blend_mode=darken ? dsc->blend_mode : LV_BLEND_MODE_NORMAL;
         image.src_buf=row.data(); image.src_stride=width*2; image.src_color_format=LV_COLOR_FORMAT_AL88;
         image.mask_buf=mask ? mask_row.data() : nullptr; image.mask_stride=width;
-        lv_draw_sw_blend_image_to_l8(&image);
+        if(argb) lv_draw_sw_blend_image_to_argb8888(&image);
+        else lv_draw_sw_blend_image_to_l8(&image);
     }
 }
 } // namespace
@@ -228,5 +235,8 @@ bool EpdVisibleContentNeedsGray(lv_display_t* display) {
 }
 bool EpdContentBlendInit() {
     lv_draw_sw_custom_blend_handler_t handler{LV_COLOR_FORMAT_L8,Blend};
+    if(!lv_draw_sw_register_blend_handler(&handler)) return false;
+    // 圆角的上下边带使用 ARGB 图层，图片在入层时应用同一色调，合成时不再压暗。
+    handler.dest_cf=LV_COLOR_FORMAT_ARGB8888;
     return lv_draw_sw_register_blend_handler(&handler);
 }

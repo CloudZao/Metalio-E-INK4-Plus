@@ -1,3 +1,4 @@
+#include "ble_page_turner.h"
 #include "screen_frontlight.h"
 #include "standby_screen/standby_screen.h"
 
@@ -179,6 +180,7 @@ void StandbyScreen::Show() {
     }
 
     WallpaperScreen::SetDecodePaused(true);
+    BlePageTurner::SetStandby(true);
     BookScreen::OnEnterStandby();
     AssistantScreen::SetStandby(true);
     WorkBuddyScreen::SetStandby(true);
@@ -226,6 +228,7 @@ void StandbyScreen::Dismiss() {
 
     DisplayUiSetFullScreen(false);
     PowerPolicy::GetInstance().OnStandbyOverlayDismissed();
+    BlePageTurner::SetStandby(false);
     AssistantScreen::SetStandby(false);
     WorkBuddyScreen::SetStandby(false);
 

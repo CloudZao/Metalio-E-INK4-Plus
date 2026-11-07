@@ -509,6 +509,7 @@ void ReleaseReaderSessionForLeave() {
     CancelReadFontScan();
     CloseBookmarkMessage();
     auto& st = Book_State();
+    const bool refresh_reader_aa = st.reader.read_scr != nullptr && BookReaderPrefsAntialias();
     CancelReaderPrefsReopen();
     st.reader.open_token.fetch_add(1);
     st.reader.read_scr = nullptr;
@@ -565,7 +566,7 @@ void ReleaseReaderSessionForLeave() {
     FinishDeferredCleanup();
     SyncReaderAaForImmersion(false);
     DisplayUiSetFullScreen(false);
-    if (DisplayUiSetOrient(kDisplayUiPortrait)) {
+    if (DisplayUiSetOrient(kDisplayUiPortrait) || refresh_reader_aa) {
         if (auto* disp = LVAdapterDisplay::Instance()) {
             disp->RequestFullOnNextCommit();
         }

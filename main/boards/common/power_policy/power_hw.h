@@ -32,7 +32,7 @@ esp_err_t power_hw_pa_set(bool on);
 esp_err_t power_hw_bt_power_reset(void);
 
 /**
- * @brief 网络电源策略标记；S31 实际 P14 在浅睡路径关闭/恢复。
+ * @brief 网络电源策略标记；待机保持 P14 共享供电。
  * @note 上电策略可请求 4G 异步恢复；false 不直接切 P14（与蓝牙/功放共享）。
  */
 esp_err_t power_hw_main_rail_set(bool on);
@@ -80,7 +80,7 @@ esp_err_t power_hw_sd_park(void);
 /** @brief 恢复已休眠的 SD 和串口；日志在退出待机后恢复。 */
 esp_err_t power_hw_sd_restore(void);
 
-/** @brief 待机画面完成后休眠屏幕和总线，先关 P5 再关 P14；可重试。 */
+/** @brief 待机画面完成后休眠屏幕和总线，关闭 P5 并保留 P14；可重试。 */
 esp_err_t power_hw_standby_rails_park(void);
 /** @brief 恢复待机关闭的外设电源、通知驱动并恢复屏总线；未停放时不操作。 */
 esp_err_t power_hw_standby_rails_restore(void);

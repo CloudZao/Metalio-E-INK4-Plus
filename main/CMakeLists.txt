@@ -11,6 +11,7 @@ endif()
 # Storage sources include the runtime log writer.
 file(GLOB BOARD_COMMON_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/board/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/bluetooth/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/power/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/power/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/power_policy/*.cc"
@@ -42,6 +43,7 @@ file(GLOB HOME_SCREEN_SRCS
 
 # Settings sources include manual log upload and its UI.
 file(GLOB SETTINGS_SCREEN_SRCS
+    "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/pager_screen/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/settings_screen/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/settings_screen/settings_test/*.cc"
 )
@@ -162,11 +164,13 @@ idf_component_register(
         "boards/common/camera/dvp_camera.cc"
         "boards/common/camera/dvp_camera_adapter.cc"
         "display/screen/screen_common.cc"
+        "display/screen/screen_keyboard.cc"
         "display/screen/screen_common_nav.cc"
         "display/screen/screen_frontlight.cc"
         "display/screen/screen_wifi.cc"
         "display/screen/vk_key_handler.cc"
         "display/screen/vk_page_repeat.cc"
+        "display/screen/pager_key_handler.cc"
         "display/screen/boot_key_handler.cc"
         "display/screen/checklist_cache.cc"
         "display/screen/task_screen/task_screen.cc"
@@ -196,10 +200,8 @@ idf_component_register(
         "boards/common/sensor/sc7a20h.cc"
         "boards/metalio-e-ink4-plus/periph/metalio_accel.cc"
     EMBED_FILES
-        "assets/embedded/bg_shutdown_en.a2i1"
-        "assets/embedded/bg_shutdown_zh.a2i1"
         "factory-test-assets/factory_test_audio.ogg"
-        "boards/metalio-e-ink4-plus/display/firmware/ft6336u_v03_app.bin"
+        "boards/metalio-e-ink4-plus/display/firmware/ft6336u_v04_app.bin"
     INCLUDE_DIRS
         "."
         "assets"
@@ -229,6 +231,7 @@ idf_component_register(
         "display/screen/ota_confirm_dialog"
         "display/screen/task_screen"
         "boards/common/board"
+        "boards/common/bluetooth"
         "boards/common/power"
         "boards/common/power_policy"
         "boards/common/sensor"
@@ -249,6 +252,7 @@ idf_component_register(
         app_update spi_flash esp_psram esp_wifi esp_netif esp_http_client esp_http_server
         mbedtls esp_timer efuse espcoredump 78__uart-uhci espressif__iot_eth esp_driver_cam esp_driver_i2c
     PRIV_REQUIRES
+        bt
         esp-wifi-connect esp-ml307 espressif__cjson 78__esp-opus-encoder 78__esp-opus esp_driver_jpeg
 )
 
@@ -374,9 +378,9 @@ foreach(_lvgl_comp lvgl__lvgl lvgl)
     endif()
 endforeach()
 
-# Offline expansion avoids repeated PNG inflate and decoder allocations at runtime.
-# Immutable pixels stay in application Flash; no RAM image cache is introduced.
-file(GLOB _home_icon_pngs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/xingzhi-assets/ic_app_home_*.png")
+# Lossless icon tiles keep source pixels in Flash; decode buffers are session-local.
+file(GLOB _home_icon_pngs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/xingzhi-assets/ic_app_home_*.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/xingzhi-assets/ic_s_standby_calendar.png")
 file(GLOB _home_icon_overrides CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded/ic_app_home_*.png")
 set(_pixel_icon_dir "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded/pixel")
 file(GLOB _pixel_icon_pngs CONFIGURE_DEPENDS "${_pixel_icon_dir}/ic_px_*.png")
@@ -390,6 +394,16 @@ add_custom_command(OUTPUT "${_home_icon_pixels}"
         "${CMAKE_CURRENT_SOURCE_DIR}/xingzhi-assets" "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded" "${_pixel_icon_dir}"
     VERBATIM)
 target_sources(${COMPONENT_LIB} PRIVATE "${_home_icon_pixels}" "${CMAKE_CURRENT_SOURCE_DIR}/display/home_icon_decoder.cc")
+
+foreach(_shutdown_lang en zh)
+    set(_shutdown_source "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded/bg_shutdown_${_shutdown_lang}.a2i1")
+    set(_shutdown_packed "${CMAKE_CURRENT_BINARY_DIR}/bg_shutdown_${_shutdown_lang}.a2i1.z")
+    add_custom_command(OUTPUT "${_shutdown_packed}"
+        COMMAND ${PYTHON} "${PROJECT_DIR}/tools/compress_binary.py" "${_shutdown_source}" "${_shutdown_packed}"
+        DEPENDS "${_shutdown_source}" "${PROJECT_DIR}/tools/compress_binary.py"
+        VERBATIM)
+    target_add_binary_data(${COMPONENT_LIB} "${_shutdown_packed}" BINARY)
+endforeach()
 
 set(_quick_icon_dir "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded/quick_controls")
 set(_quick_icon_pixels "${CMAKE_CURRENT_BINARY_DIR}/quick_control_icons.cc")
@@ -434,3 +448,6 @@ add_custom_command(OUTPUT "${AP_FILEMAN_EN_GZ}"
         "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/cloudzao-logo.png"
     VERBATIM)
 target_add_binary_data(${COMPONENT_LIB} "${AP_FILEMAN_EN_GZ}" BINARY)
+
+# 中英文页面共用同一份标识图片。
+target_add_binary_data(${COMPONENT_LIB} "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/cloudzao-logo.png" BINARY)

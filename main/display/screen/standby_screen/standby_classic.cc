@@ -14,6 +14,7 @@
 
 #include "assets/lang_config.h"
 #include "haptic_feedback.h"
+#include "home_icon_source.h"
 
 void StandbyClassic_RefreshDateOnce() {
     if (StandbyClassic_State().date_lbl == nullptr) {
@@ -68,8 +69,11 @@ void StandbyClassic_ApplyWeatherUi() {
         if (snap.icon_code[0] != '\0') {
             char path[48];
             std::snprintf(path, sizeof(path), "A:ic_s_weather_%s.spng", snap.icon_code);
-            lv_image_set_src(StandbyClassic_State().weather_icon, path);
-            lv_obj_remove_flag(StandbyClassic_State().weather_icon, LV_OBJ_FLAG_HIDDEN);
+            if (HomeIconSetFullSource(StandbyClassic_State().weather_icon, path)) {
+                lv_obj_remove_flag(StandbyClassic_State().weather_icon, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(StandbyClassic_State().weather_icon, LV_OBJ_FLAG_HIDDEN);
+            }
         } else {
             lv_obj_add_flag(StandbyClassic_State().weather_icon, LV_OBJ_FLAG_HIDDEN);
         }
@@ -137,8 +141,9 @@ void StandbyClassic_BuildUi(lv_obj_t* root) {
     lv_obj_clear_flag(date_row, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* cal_icon = lv_image_create(date_row);
-    lv_image_set_src(cal_icon, "A:ic_s_standby_calendar.spng");
+    lv_image_set_src(cal_icon, HomeIconSource("A:ic_s_standby_calendar.spng"));
     lv_obj_set_size(cal_icon, kCalendarIconW, kCalendarIconH);
+    lv_image_set_inner_align(cal_icon, LV_IMAGE_ALIGN_CONTAIN);
     lv_obj_clear_flag(cal_icon, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* date_col = lv_obj_create(date_row);
@@ -188,6 +193,7 @@ void StandbyClassic_BuildUi(lv_obj_t* root) {
 
     StandbyClassic_State().weather_icon = lv_image_create(StandbyClassic_State().weather_row);
     lv_obj_set_size(StandbyClassic_State().weather_icon, kWeatherIcon, kWeatherIcon);
+    lv_image_set_inner_align(StandbyClassic_State().weather_icon, LV_IMAGE_ALIGN_CONTAIN);
     lv_obj_clear_flag(StandbyClassic_State().weather_icon, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* meta = lv_obj_create(StandbyClassic_State().weather_row);

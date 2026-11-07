@@ -41,8 +41,6 @@ lv_coord_t Network_NearbyRowHEstimate();
 lv_coord_t Network_SavedRowHEstimate();
 /** @brief 断开原因文案 */
 const char* Network_DisconnectReasonText(uint8_t reason);
-/** @brief 密码键盘字库：30@2，失败回退 UI 默认字 */
-const lv_font_t* Network_KbFont();
 /** @brief 重启倒计时定时器回调 */
 void Network_RestartTimerCb(lv_timer_t* timer);
 /** @brief 打开重启倒计时遮罩 */

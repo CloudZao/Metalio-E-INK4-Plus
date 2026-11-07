@@ -313,14 +313,24 @@ void RenderTocList() {
     const lv_font_t* title_font = Book_ListFont();
     const lv_coord_t title_lh =
         (title_font != nullptr && title_font->line_height > 0) ? title_font->line_height : 30;
+    const lv_font_t* author_font = Book_ItemFont();
+    const lv_coord_t author_lh =
+        (author_font != nullptr && author_font->line_height > 0) ? author_font->line_height : 25;
+    const lv_coord_t title_top = land ? 0 : 40;
+    const lv_coord_t author_bottom = 12;
+    const lv_coord_t meta_gap = 8;
+    // 竖屏为作者预留独立区域，书名仅使用可容纳完整行的高度。
+    const lv_coord_t title_lines = land ? 2 : std::min<lv_coord_t>(
+        3, std::max<lv_coord_t>(0, kTocCoverH - title_top - author_bottom - author_lh - meta_gap) / title_lh);
     lv_obj_t* title_lbl = lv_label_create(meta);
     lv_obj_set_style_text_font(title_lbl, title_font, 0);
     lv_obj_set_style_text_color(title_lbl, lv_color_black(), 0);
-    lv_obj_set_size(title_lbl, meta_w, title_lh * (land ? 2 : 3)); // 横屏叠在封面下，两行
+    lv_obj_set_style_text_line_space(title_lbl, 0, 0);
+    lv_obj_set_size(title_lbl, meta_w, title_lh * title_lines);
     lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_DOT);
     lv_label_set_text(title_lbl, book_title.c_str());
     if (!land) {
-        lv_obj_align(title_lbl, LV_ALIGN_TOP_LEFT, 0, 40); // 相对 meta 顶下移
+        lv_obj_align(title_lbl, LV_ALIGN_TOP_LEFT, 0, title_top);
     }
     lv_obj_clear_flag(title_lbl, LV_OBJ_FLAG_CLICKABLE);
 
@@ -331,9 +341,6 @@ void RenderTocList() {
     if (author.empty()) {
         author = Lang::Strings::COMMON_UNKNOWN;
     }
-    const lv_font_t* author_font = Book_ItemFont();
-    const lv_coord_t author_lh =
-        (author_font != nullptr && author_font->line_height > 0) ? author_font->line_height : 25;
     lv_obj_t* author_lbl = lv_label_create(meta);
     lv_obj_set_style_text_font(author_lbl, author_font, 0);
     lv_obj_set_style_text_color(author_lbl, lv_color_black(), 0);
@@ -341,7 +348,7 @@ void RenderTocList() {
     lv_label_set_long_mode(author_lbl, LV_LABEL_LONG_DOT);
     lv_label_set_text(author_lbl, TruncateTextToWidth(author, author_font, meta_w).c_str());
     if (!land) {
-        lv_obj_align(author_lbl, LV_ALIGN_BOTTOM_LEFT, 0, -12); // 相对 meta 底上移 12px
+        lv_obj_align(author_lbl, LV_ALIGN_BOTTOM_LEFT, 0, -author_bottom);
     }
     lv_obj_clear_flag(author_lbl, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_t* col_rule = nullptr;

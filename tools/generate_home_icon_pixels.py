@@ -1,11 +1,12 @@
-"""Expand black/alpha home icons to immutable BGRA in Flash, preserving all alpha levels.
+"""Pack home icons as lossless 16-row tiles, preserving all colours and alpha levels.
 
 Resource-partition icons must be black-only to preserve the original decoder's
 colour handling. Embedded overrides also support coloured and white artwork.
-Pixel-theme and black WorkBuddy icons use native A8 descriptors for scaling without RGB copies.
+Pixel-theme, calendar and black WorkBuddy icons decode to A8 without RGB copies.
 """
 from pathlib import Path
 import argparse
+import zlib
 from PIL import Image
 
 def bgra_pixels(path,black_only=True):
@@ -22,6 +23,9 @@ def generate(asset_dir,output,override_dir=None,pixel_dir=None):
            'namespace {']
     entries=[]
     paths={path.name:path for path in Path(asset_dir).glob('ic_app_home_*.png')}
+    calendar = Path(asset_dir) / 'ic_s_standby_calendar.png'
+    if calendar.is_file():
+        paths[calendar.name] = calendar
     if override_dir:
         paths.update({path.name:path for path in Path(override_dir).glob('ic_app_home_*.png')})
     if pixel_dir:
@@ -40,32 +44,37 @@ def generate(asset_dir,output,override_dir=None,pixel_dir=None):
             decoded=bgra_pixels(path,black_only=not (override_dir and path.parent == Path(override_dir)))
             if decoded is None:continue
             w,h,data=decoded
-        is_alpha = is_pixel or bool(path.name == 'ic_app_home_workbuddy.png' and
+        is_alpha = is_pixel or path.name == 'ic_s_standby_calendar.png' or bool(path.name == 'ic_app_home_workbuddy.png' and
                                    override_dir and path.parent == Path(override_dir) and
                                    not any(data[i] or data[i+1] or data[i+2] for i in range(0,len(data),4)))
         if is_alpha and not is_pixel:
             data = data[3::4]
+        stride = w if is_alpha else w*4
+        offsets = [0]
+        tiles = []
+        for y in range(0, h, 16):
+            tile = zlib.compress(data[y*stride:min(y+16,h)*stride], 9)
+            tiles.append(tile)
+            offsets.append(offsets[-1] + len(tile))
+        data = b''.join(tiles)
         name=path.stem
         lines.append('alignas(16) static const uint8_t '+name+'_pixels[] = {')
         lines.extend(','.join('0x%02x'%v for v in data[i:i+32])+',' for i in range(0,len(data),32))
         lines.append('};')
-        color_format = 'LV_COLOR_FORMAT_A8' if is_alpha else 'LV_COLOR_FORMAT_RAW'
-        flags = '0' if is_alpha else 'LV_IMAGE_FLAGS_USER8'
-        stride = w if is_alpha else w*4
-        lines.append('static const lv_image_dsc_t '+name+' = { .header={.magic=LV_IMAGE_HEADER_MAGIC,.cf='+color_format+',.flags='+flags+',.w='+str(w)+',.h='+str(h)+',.stride='+str(stride)+',.reserved_2=0},.data_size=sizeof('+name+'_pixels),.data='+name+'_pixels,.reserved=nullptr,.reserved_2=nullptr };')
+        color_format = 'LV_COLOR_FORMAT_A8' if is_alpha else 'LV_COLOR_FORMAT_ARGB8888'
+        lines.append('static const uint32_t '+name+'_offsets[] = {'+','.join(map(str,offsets))+'};')
+        lines.append('static const HomeIconCompressed '+name+' = { .image={.header={.magic=LV_IMAGE_HEADER_MAGIC,.cf=LV_COLOR_FORMAT_RAW,.flags=LV_IMAGE_FLAGS_USER8 | LV_IMAGE_FLAGS_USER7,.w='+str(w)+',.h='+str(h)+',.stride='+str(stride)+',.reserved_2=0},.data_size=sizeof('+name+'_pixels),.data='+name+'_pixels,.reserved=nullptr,.reserved_2=nullptr},.tile_offsets='+name+'_offsets,.color_format='+color_format+' };')
         entries.append((name,'A:'+name+'.spng',is_alpha))
     lines.extend(['}', 'const void* HomeIconSource(const char* path) {','if(!path)return nullptr;',
                   ])
     for name,path,is_alpha in entries:
-        result = 'static_cast<const void*>(&'+name+')'
-        if not is_alpha:
-            result = 'HomeIconDecoderReady() ? '+result+' : path'
+        result = 'HomeIconDecoderReady() ? static_cast<const void*>(&'+name+'.image) : path'
         lines.append('if(std::strcmp(path,"'+path+'")==0)return '+result+';')
     lines.extend(['return path;','}'])
     output=Path(output);output.parent.mkdir(parents=True,exist_ok=True)
     result='\n'.join(lines)+'\n'
     if not output.exists() or output.read_text(encoding='utf8')!=result:output.write_text(result,encoding='utf8')
-    print('Flash-backed home icons:',len(entries))
+    print('Compressed home icons:',len(entries))
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--assets',required=True);parser.add_argument('--output',required=True)

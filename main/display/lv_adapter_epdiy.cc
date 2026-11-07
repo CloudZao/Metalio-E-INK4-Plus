@@ -46,6 +46,7 @@ bool BlitL8ToEpdFullScreen(const reader::RasterImage& img);
 #include "book_screen/book_screen.h"
 #include "book_screen/book_nav.h"
 #include "vk_key_handler.h"
+#include "pager_key_handler.h"
 #include "book_screen/reader/book_open_worker.h"
 #include "book_screen/reader/book_reader_prefs.h"
 #include "book_screen/settings/book_tap_zones.h"
@@ -56,6 +57,8 @@ bool BlitL8ToEpdFullScreen(const reader::RasterImage& img);
 
 #include <cstdio>
 #include <esp_heap_caps.h>
+#include <memory>
+#include <zlib.h>
 #include <esp_log.h>
 #include <esp_lv_decoder.h>
 #include <esp_lv_fs.h>
@@ -682,6 +685,7 @@ void LvAdapterEpdiy::Tick() {
     if (Lock(50)) {
         const int64_t round_start = esp_timer_get_time();
         VkKey_DrainTouch();
+        PagerKey_Drain();
         PollBootKey();
         PollSideKeys();
         while (MetalioKeys_TakeEdge()) {}
@@ -934,19 +938,27 @@ bool TryDecodeShutdownFromSd(reader::RasterImage& out) {
 
 bool TryDecodeShutdownBuiltin(reader::RasterImage& out) {
     // 中英文默认图随应用固件更新，不依赖 resources 分区升级。
-    extern const uint8_t zh_start[] asm("_binary_bg_shutdown_zh_a2i1_start");
-    extern const uint8_t zh_end[] asm("_binary_bg_shutdown_zh_a2i1_end");
-    extern const uint8_t en_start[] asm("_binary_bg_shutdown_en_a2i1_start");
-    extern const uint8_t en_end[] asm("_binary_bg_shutdown_en_a2i1_end");
+    extern const uint8_t zh_start[] asm("_binary_bg_shutdown_zh_a2i1_z_start");
+    extern const uint8_t zh_end[] asm("_binary_bg_shutdown_zh_a2i1_z_end");
+    extern const uint8_t en_start[] asm("_binary_bg_shutdown_en_a2i1_z_start");
+    extern const uint8_t en_end[] asm("_binary_bg_shutdown_en_a2i1_z_end");
     const bool is_zh = std::strcmp(Lang::CODE, "zh-CN") == 0;
     const uint8_t* start = is_zh ? zh_start : en_start;
     const uint8_t* end = is_zh ? zh_end : en_end;
-    if (reader::DecodeImageToL8(start, static_cast<size_t>(end - start),
-                              0, 0, out) && !out.empty()) {
+    uint32_t raw_size = 0;
+    if (end - start > 4) std::memcpy(&raw_size, start, sizeof(raw_size));
+    std::unique_ptr<uint8_t, decltype(&heap_caps_free)> raw(nullptr, heap_caps_free);
+    if (raw_size && raw_size <= DISPLAY_WIDTH * DISPLAY_HEIGHT) {
+        raw.reset(static_cast<uint8_t*>(heap_caps_malloc(raw_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+    }
+    uLongf decoded_size = raw_size;
+    if (raw && uncompress(raw.get(), &decoded_size, start + 4, end - start - 4) == Z_OK &&
+        decoded_size == raw_size && reader::DecodeImageToL8(raw.get(), raw_size, 0, 0, out) && !out.empty()) {
         ESP_LOGI(TAG, "shutdown img: embedded %s %dx%d", Lang::CODE, out.width, out.height);
         return true;
     }
     ESP_LOGW(TAG, "shutdown img: embedded %s decode fail", Lang::CODE);
+    raw.reset();
     if (s_resources == nullptr) {
         ESP_LOGW(TAG, "shutdown img: built-in missing (no mmap)");
         return false;

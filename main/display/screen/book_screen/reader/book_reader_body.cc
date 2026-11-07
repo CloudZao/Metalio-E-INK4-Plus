@@ -100,6 +100,7 @@ void OnReaderUnderlineDraw(lv_event_t* e) {
     if (width <= 0 || ink_bottom < 0) return;
     lv_area_t coords;
     lv_obj_get_content_coords(label, &coords);
+    if (reader::IsJustifiedTextLabel(label)) width = lv_area_get_width(&coords);
     int x = coords.x1;
     const auto align = lv_obj_get_style_text_align(label, LV_PART_MAIN);
     if (align == LV_TEXT_ALIGN_CENTER) x += (lv_area_get_width(&coords) - width) / 2;
@@ -344,29 +345,8 @@ void RenderReaderPage() {
         lv_obj_clean(st.reader.content);
         AttachReadBodyInput(st.reader.content);
     }
-    // 按本页实际行宽收栏：行未撑满视口时居中整栏，避免满宽 label 左齐造成右空
-    lv_coord_t block_w = 0;
-    if (!page_images && book_font != nullptr) {
-        for (const auto& item : page->items) {
-            if (item.kind != reader::ContentKind::kText || item.text.empty()) {
-                continue;
-            }
-            lv_point_t sz = {};
-            lv_text_get_size(&sz, item.text.c_str(), book_font, 0, 0, LV_COORD_MAX,
-                             LV_TEXT_FLAG_NONE);
-            lv_coord_t w = static_cast<lv_coord_t>(sz.x);
-            if (item.para_indent) {
-                w = static_cast<lv_coord_t>(w + reader::ParaIndentPadPx(book_font));
-            }
-            if (w > block_w) {
-                block_w = w;
-            }
-        }
-    }
-    lv_coord_t col_w = max_w;
-    if (!page_images && reader::PageIsTextOnly(*page) && block_w > 40 && block_w < max_w) {
-        col_w = block_w;
-    }
+    const lv_coord_t col_w = page_images ? max_w
+        : reader::PageTextColumnWidth(*page, book_font, max_w);
     const lv_coord_t col_x = content_area.x1 + (max_w - col_w) / 2;
 
     lv_obj_t* col = lv_obj_create(st.reader.content);

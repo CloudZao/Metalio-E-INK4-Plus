@@ -43,7 +43,6 @@ static lv_timer_t* s_storage_error_timer = nullptr;
 DownloadGate s_dl_gate{};
 DownloadGate s_sync_gate{};  // 进页/手动拉列表刷新
 int64_t s_last_user_sync_us = 0;  // 上次手动刷新；0=尚未点过
-std::atomic<bool> s_ui_net_held{false};
 std::atomic<bool> s_thumb_busy{false};
 std::atomic<bool> s_thumb_abort{false};  // 下载开始时置位，封面 Read 循环退出
 std::atomic<bool> s_dl_owns_http{false};  // 下载/批量独占 HTTP，禁止旁路 CreateHttp
@@ -101,7 +100,7 @@ void InvalidateSession() {
     st.data.thumbs.clear();
     st.data.filtered.clear();
     st.data.selected.clear();
-    st.data.cover_bytes.clear();
+    st.data.cover_cache.clear();
     st.data.batch_save_ids.clear();
     st.data.status_text[0] = '\0';
     st.data.multi = false;
@@ -320,7 +319,6 @@ void Cloud_OnScreenDeleted(lv_event_t* e) {
     ScreenPaintCoalesceReset(&s_cloud_paint);
     ScreenPaintCoalesceReset(&s_cloud_check_paint);
     InvalidateSession();
-    ReleaseUiKeepNet();
     if (auto* disp = Board::GetInstance().GetDisplay()) {
         disp->SetIdleStatusMode(IdleStatusMode::kClock);
     }
@@ -389,7 +387,7 @@ lv_obj_t* CloudScreen::Create() {
     st.data.selected.clear();
     st.data.batch_save_ids.clear();
     st.data.thumbs.clear();
-    st.data.cover_bytes.clear();
+    st.data.cover_cache.clear();
     // InvalidateSession 已 bump epoch；勿清 busy/句柄，孤儿任务靠 epoch 自停
     ++st.data.thumb_epoch;
     st.data.error.clear();

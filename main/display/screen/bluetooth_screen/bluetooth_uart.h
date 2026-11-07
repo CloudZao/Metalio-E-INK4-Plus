@@ -15,6 +15,14 @@ void Bluetooth_set_mode_audio_power(BtMode mode);
 void Bluetooth_release_page_audio_power();
 /** @brief 查询蓝牙固件版本，命令发送成功返回 true */
 bool Bluetooth_query_version();
+/** @brief 发送预设 HID 指令，UART 发送成功返回 true */
+bool Bluetooth_send_hid_shortcut(const char* shortcut);
+/** @brief 查询经典蓝牙名称 */
+bool Bluetooth_query_name();
+/** @brief 校验名称长度及控制字符 */
+bool Bluetooth_is_valid_name(const char* name);
+/** @brief 修改经典蓝牙名称并恢复当前模式，接受 1～63 字节名称 */
+bool Bluetooth_rename(const char* name);
 /** @brief UART 收包回调 */
 void Bluetooth_on_uart_data(const std::vector<uint8_t>& data);
 /** @brief 复位蓝牙页 UI 状态 */
