@@ -4,6 +4,7 @@
  */
 
 #include "lv_adapter_epdiy_touch.h"
+#include "lv_adapter_display.h"
 
 #include "config.h"
 #include "display_orient.h"
@@ -16,6 +17,7 @@
 #include "standby_screen/standby_screen.h"
 #include "ui_scale.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <atomic>
 #include <cstring>
@@ -25,9 +27,17 @@
 #define TAG "epdiy_touch"
 
 /** @brief 逻辑坐标 → UI：扣 content inset 再加板级微调；越界返回 false */
-static bool MapLogicalToUi(int lx, int ly, int* ux, int* uy) {
+static bool MapLogicalToUi(int lx, int ly, int* ux, int* uy, bool clamp_border = false) {
     int x, y;
     DisplayUiTouchToLogical(lx + DISPLAY_TOUCH_OFFSET_X, ly + DISPLAY_TOUCH_OFFSET_Y, &x, &y);
+    // 仅手势起点接纳屏幕留白，普通点击仍限制在内容区域。
+    if (clamp_border && x >= -DISPLAY_CONTENT_LEFT_INSET &&
+        x < DisplayUiLogW() + DISPLAY_CONTENT_RIGHT_INSET &&
+        y >= -DISPLAY_CONTENT_TOP_INSET &&
+        y < DisplayUiLogH() + DISPLAY_CONTENT_BOTTOM_INSET) {
+        x = std::clamp(x, 0, DisplayUiLogW() - 1);
+        y = std::clamp(y, 0, DisplayUiLogH() - 1);
+    }
     if (x < 0 || x >= DisplayUiLogW() || y < 0 || y >= DisplayUiLogH()) {
         return false;
     }
@@ -166,6 +176,7 @@ static bool PageOwnsVerticalDrag(lv_point_t point) {
         auto* target = FindGestureTarget(layer, point);
         if (target == nullptr) continue;
         for (auto* obj = target; obj != nullptr; obj = lv_obj_get_parent(obj)) {
+            if (lv_obj_has_flag(obj, kTouchUiPagedVerticalDrag)) return true;
             const auto dir = lv_obj_get_scroll_dir(obj);
             // 仅实际存在纵向滚动范围的容器保留手势，长列表到达边界时仍优先滚动。
             if (lv_obj_has_flag(obj, LV_OBJ_FLAG_SCROLLABLE) && (dir & LV_DIR_VER) != 0 &&
@@ -191,6 +202,48 @@ void LvAdapterEpdiy_TouchReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
         consumed = false;
         ignore_until_release = pressed;
     }
+    int ux = 0;
+    int uy = 0;
+    if ((pressed || tracking) && !MapLogicalToUi(p.x, p.y, &ux, &uy)) {
+        // 从留白起滑时等待手指进入内容区，不将整次触摸标为无效。
+        if (pressed && !blocked && !tracking && !ignore_until_release &&
+            MapLogicalToUi(p.x, p.y, &ux, &uy, true)) {
+            data->state = LV_INDEV_STATE_RELEASED;
+            data->continue_reading = metalio_touch_has_pending_edges();
+            return;
+        }
+        data->state = LV_INDEV_STATE_RELEASED;
+        tracking = false;
+        consumed = false;
+        ignore_until_release = pressed;
+        return;
+    }
+    if (pressed && !blocked && !ignore_until_release && !tracking) {
+        tracking = true;
+        int start_x = 0, start_y = 0;
+        if (!MapLogicalToUi(p.start_x, p.start_y, &start_x, &start_y, true)) {
+            data->state = LV_INDEV_STATE_RELEASED;
+            tracking = false;
+            ignore_until_release = true;
+            return;
+        }
+        origin = {static_cast<int32_t>(start_x), static_cast<int32_t>(start_y)};
+        start_screen = lv_screen_active();
+        close_panel = ScreenFrontlightIsVisible();
+        if ((close_panel && ScreenFrontlightOwnsDrag(origin.x, origin.y)) ||
+            (!close_panel && PageOwnsVerticalDrag(origin))) {
+            tracking = false;
+            ignore_until_release = true;
+        }
+    }
+    if (tracking && !consumed) {
+        const int dy = uy - origin.y;
+        const int distance = close_panel ? -dy : dy;
+        if (distance >= UiSy(60) && distance > 2 * std::abs(ux - origin.x)) {
+            consumed = true;
+            lv_indev_wait_release(indev);
+        }
+    }
     if (!pressed) {
         data->state = LV_INDEV_STATE_RELEASED;
         if (consumed && !blocked) {
@@ -209,34 +262,6 @@ void LvAdapterEpdiy_TouchReadCb(lv_indev_t* indev, lv_indev_data_t* data) {
         consumed = false;
         ignore_until_release = false;
         return;
-    }
-    int ux = 0;
-    int uy = 0;
-    if (!MapLogicalToUi(p.x, p.y, &ux, &uy)) {
-        data->state = LV_INDEV_STATE_RELEASED;
-        tracking = false;
-        consumed = false;
-        ignore_until_release = true;
-        return;
-    }
-    if (!blocked && !ignore_until_release && !tracking) {
-        tracking = true;
-        origin = {static_cast<int32_t>(ux), static_cast<int32_t>(uy)};
-        start_screen = lv_screen_active();
-        close_panel = ScreenFrontlightIsVisible();
-        if ((close_panel && ScreenFrontlightOwnsDrag(ux, uy)) ||
-            (!close_panel && PageOwnsVerticalDrag(origin))) {
-            tracking = false;
-            ignore_until_release = true;
-        }
-    }
-    if (tracking && !consumed) {
-        const int dy = uy - origin.y;
-        const int distance = close_panel ? -dy : dy;
-        if (distance >= UiSy(60) && distance > 2 * std::abs(ux - origin.x)) {
-            consumed = true;
-            lv_indev_wait_release(indev);
-        }
     }
     if (consumed) {
         data->state = LV_INDEV_STATE_RELEASED;

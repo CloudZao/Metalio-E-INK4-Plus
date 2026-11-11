@@ -3,6 +3,7 @@
  * @note 显示 Tick 在 LvAdapterEpdiy::Init 后由 lv_epdiy_tick 任务跑，保证开机联网/激活期间顶栏能刷
  */
 #include "application.h"
+#include "ntp_server.h"
 #include "epd_board_metalio_eink4_plus.h"
 #include "power_hw.h"
 #include "ble_page_turner.h"
@@ -15,6 +16,8 @@
 #define TAG "eink4p_main"
 
 extern "C" void app_main(void) {
+    // SDK 调频配置会随屏幕刷新频繁打印，默认仅保留该模块的告警和错误。
+    esp_log_level_set("pm", ESP_LOG_WARN);
     power_hw_log_sleep_reset();
     epd_board_metalio_eink4_plus_boot_release_holds();
 
@@ -26,6 +29,7 @@ extern "C" void app_main(void) {
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+    NtpServer::GetInstance().Initialize();
 
     ESP_LOGI(TAG, "Metalio-E-Ink4-Plus bring-up");
     BlePageTurner::Init(PagerKey_Receive);

@@ -14,7 +14,7 @@ constexpr uint32_t kMemoryCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 #endif
 }
 
-bool ApRequestWorker::Start(const char* name) {
+bool ApRequestWorker::Start(const char* name, bool internal_stack) {
     if (queue_) return true;
     if (!mutex_) mutex_ = xSemaphoreCreateMutexStatic(&mutex_storage_);
     if (!done_) done_ = xSemaphoreCreateBinaryStatic(&done_storage_);
@@ -26,7 +26,8 @@ bool ApRequestWorker::Start(const char* name) {
     for (auto& fd : fds_) fd = -1;
     if (!queue_) { heap_caps_free(buffer_); buffer_ = nullptr; return false; }
     accepting_ = true;
-    if (xTaskCreateWithCaps(Run, name, 16384, this, 5, nullptr, kMemoryCaps) != pdPASS) {
+    const uint32_t stack_caps = internal_stack ? MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT : kMemoryCaps;
+    if (xTaskCreateWithCaps(Run, name, 16384, this, 5, nullptr, stack_caps) != pdPASS) {
         accepting_ = false;
         vQueueDelete(queue_); queue_ = nullptr;
         heap_caps_free(buffer_); buffer_ = nullptr;

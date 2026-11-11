@@ -5,7 +5,19 @@
 - 进页准备语音 / 离页停语音（`StartXiaozhiVoice` / `StopXiaozhiVoice`）
 - **云服务**：设置 → 对话中选择百问 AI / 小智 AI / 网易 AI，保存后重启生效；协议配置和小智/网易本地语音开关分别保存。固件更新与 AI 激活使用独立请求。
 - **空会话**：中英文欢迎页使用 LVGL Label、线条和圆弧绘制，不加载默认位图；标题跟随云服务，小智/网易不显示待办介绍。有消息或历史回放后隐藏。
-- **Push-to-Talk（多源）**：BOOT / **屏内任意区域** 长按满 `kBootLongPressMs`（500ms）开听，松开结束；任一源仍按住则保持聆听
+- **Push-to-Talk（多源）**：BOOT / **底栏录音按钮** 长按满 `kBootLongPressMs`（500ms）开听，松开结束；任一源仍按住则保持聆听。正文仅点击翻页。
+- **待发送照片**：仅百问开放，进页即预留拍照入口位置，检测完成后填入图标，不移动录音区域；无摄像头硬件保留空位，不显示按钮。拍照按钮或 BOOT 双击取得一张待发送照片，重拍成功后替换旧图，失败保留旧图。缩略图悬浮于正文左下方，不改变正文高度、页码或欢迎页布局；支持删除和窗口查看。普通待机保留，离页清理。
+- **照片上传与提问**：每张照片使用当前启动内自增的 `image_id`，通过 `api::VisionUploadUrl()` 的 HTTPS 地址上传，URL 参数为 `image_id`，multipart 二进制字段为 `image`，请求头 `Device-Id` 与 WebSocket 一致。必须同时检查 HTTP 状态、`success` 和响应编号。单图发送先准备 WebSocket，上传后提交 `listen/detect` 与单元素 `image_ids`，省略问题文字以使用默认描述。带图录音在开始时固定附件，松手后上传，再发送 `listen/stop` 与对应 `image_ids`。照片加入本地聊天记录后不重复插入，提问成功提交后清除待发送照片。上传或提问提交失败保留照片；暂存时间接近服务端默认有效期时重新上传。服务端返回识图关闭或分析错误时恢复当前照片供重试。
+- **底部布局**：圆角操作栏左侧为拍照，中间为按住说话；右侧无照片时显示静态猫爪，有照片时显示发送按钮。页码位于操作栏上方的正文区域居中。照片区仅显示可点击的缩略图与角标删除按钮，不显示状态文案和照片数量。
+- **Bottom layout**: the rounded toolbar places capture on the left and hold-to-talk in the middle. Its right side shows a static paw without a photo and a Send button with a photo. Page numbers are centered in the content area above the toolbar. The attachment area contains only a tappable thumbnail and a corner delete button, with no status or photo count.
+- **照片查看**：悬浮缩略图带细外框，右上角删除按钮及触摸区域同步放大。点击缩略图在顶层打开透明背景的居中窗口，原页面保持可见，图片等比适配；点击窗口外空白区域或下方“关闭”按钮收起。
+- **图片尺寸与位置**：聊天记录中的照片复用拍摄缩略图的像素和尺寸，左侧同行显示当前语言的“用户：”或“User:”。悬浮缩略图与底栏保持小间距，不为页码额外预留空间；页码仍固定在正文区域居中。
+- **Image size and placement**: chat photos reuse the captured thumbnail pixels and dimensions, with the localized User label on the left in the same row. The floating thumbnail has a small gap above the toolbar without extra space for page numbers; page numbers remain centered in the content area.
+- **Photo viewer**: the floating thumbnail has a thin border and a larger delete button and touch target at its upper-right corner. Tapping it opens a centered window on a transparent top-layer overlay, keeping the original page visible. The image fits the window; tap outside or use Close beneath it to dismiss.
+- **Pending photo (Baiwen only)**: the toolbar reserves its camera slot from entry; detection reveals the button without moving hold-to-talk. Hardware without a camera keeps the slot empty. A detected camera enables capture by button or BOOT double-click. One photo is retained; a successful retake replaces it, while a failed retake keeps it. Its floating thumbnail does not resize or repaginate the conversation or rearrange the welcome page. Standby retains it; leaving the page clears it.
+- **Photo upload and questions**: each capture has an ID incremented within the current boot. Upload uses the HTTPS `api::VisionUploadUrl()`, an `image_id` query parameter, a multipart binary field named `image`, and the same `Device-Id` as WebSocket. Validate the HTTP status, success flag and returned ID. Image-only Send prepares WebSocket, uploads, then submits `listen/detect` with a single-element `image_ids` array and no text for the default description. Recording snapshots its attachment at start; release uploads it before sending `listen/stop` with its image ID. Local history insertion is not repeated on retry. Successful question submission clears the pending attachment. Failed upload or submission retains it; uploads nearing the default temporary-cache expiry are repeated. Vision-disabled or analysis errors restore the current photo for retry.
+- **轮次与生命周期**：上传中允许开始新录音。新录音替代旧提问，旧 HTTP 上传继续完成；迟到回调仅保存上传及本地图片结果，不发送旧轮次的结束消息。普通录音不自动携带已上传图片或照片组。待机和离页取消对应页面的未完成提问；图片历史保留在现有 RAM/SD 缓存与会话存储中。Wi-Fi 关闭时，录音和发送显示顶部提示。本地拍照及预览不依赖联网。当前页面仅提供单图提问，不提供照片组追问、追加或多图入口。
+- **Turns and lifecycle**: a new recording can start during upload and replaces the previous question while its HTTP upload continues. Late callbacks retain upload and local-image results without sending the old turn's stop message. Ordinary recordings never automatically attach earlier images or groups. Standby and page exit cancel unfinished questions for that page. Image history uses the existing RAM/SD caches and session store. With Wi-Fi disabled, recording and Send show a top notice; local capture and preview remain available offline. The current page provides single-image questions, with no group follow-up, append or multi-image controls.
 - Listening 后状态栏居中显示代码绘制的录音波形（隐藏时钟）
 - 对话区解析 A2UI，**保留原组件样式**（Text / RichText / **Math** / Card / Image / Header 等）追加到会话
 - 按视口**字形精确分页**后，用 `a2ui_handle_json` 渲染当前页（禁止滚动）
@@ -14,8 +26,8 @@
 
 | 源 | 臂听 | 松手 | 备注 |
 |----|------|------|------|
-| BOOT | `OnBootLongPress` | `OnBootPressUp` → `StopListeningIfNoPttHeld` | 短按打断说话；**双击**有摄像头则拍照并以 A2UI `Image` 插入对话 |
-| 屏触 hit 层 | one-shot timer 500ms | `RELEASED` / `PRESS_LOST` → 同上 | `HapticAttachClick` 按下早震；短按 CLICKED 投递翻页（不二次震）；长按臂听不二次震；二者互斥；盖板 VK 仍走 touch_feed |
+| BOOT | `OnBootLongPress` | `OnBootPressUp` → `StopListeningIfNoPttHeld` | 短按打断说话；双击仅在百问且有摄像头时准备待发送照片 |
+| 底栏录音 hit 层 | one-shot timer 500ms | `RELEASED` / `PRESS_LOST` → 同上 | `HapticAttachClick` 按下早震，长按开听不二次震；正文点击独立处理翻页；盖板 VK 仍走 touch_feed |
 
 离页：`ResetTouchPttState` 删臂听 timer + 清标志，避免泄漏与迟到开听。
 

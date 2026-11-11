@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <algorithm>
-#include <climits>
 
 namespace reader {
 
@@ -46,19 +45,29 @@ inline bool VerticalCanBreak(uint32_t before, uint32_t after) {
         !(before == after && (before == 0x2014 || before == 0x2026));
 }
 
-// 横排优先压缩字距以容纳尾部标点；竖排使用合法断点回退。
-// 字形包围框之间保留 1px 净空，并额外预留标题向右加粗的 1px。
+// 按每处实际空白累计收紧容量，保留 1px 净空及标题加粗的 1px 余量。
 struct TextSpacingState {
-    int limit = INT_MAX; // 所有已见字间隔允许的统一收紧量
+    int capacity = 0; // 当前行可安全收紧的总像素数
+    int tail_blank = 0; // 末字符为小标点时可收回的尾部空白
     int advance = 0; // 上一有墨迹字形至当前字符的累计步进
-    int right = 0; // 上一有墨迹字形的右边界，不包含边界像素
-    int gaps = 0; // 上一有墨迹字形之后的字间隔数
+    int right = 0; // 上一有墨迹字形的右边界，不含边界像素
+    int gaps = 0; // 上一有墨迹字形之后的间隔数
+    int slots = 0; // 可用于两端对齐的间隔数
     bool ink = false; // 已遇到非空字形
+    bool seen = false; // 已遇到字符
+    bool known = true; // 当前行的字形边界均已知
 
-    void Observe(int glyph_advance, int offset, int box_width, bool known = true) {
-        if (!known) limit = 0;
+    void Observe(int glyph_advance, int offset, int box_width, bool glyph_known,
+                 int gap_limit, bool expand, int trailing_blank = 0) {
+        tail_blank = glyph_known ? trailing_blank : 0;
+        if (seen && expand) ++slots;
+        seen = true;
+        known = known && glyph_known;
+        if (!known) capacity = 0;
         if (box_width > 0) {
-            if (ink) limit = std::min(limit, std::max(0, (advance + offset - right - 2) / gaps));
+            if (ink && known) {
+                capacity += std::min(std::max(0, advance + offset - right - 2), gap_limit * gaps);
+            }
             ink = true;
             right = offset + box_width;
             advance = glyph_advance;
@@ -70,23 +79,14 @@ struct TextSpacingState {
     }
 };
 
-inline int PunctuationLetterSpace(int width, int available, size_t glyphs, int cell,
-                                   int blank_limit) {
-    if (width <= available || glyphs < 2) return 0;
-    const int gaps = static_cast<int>(glyphs - 1);
-    const int reduction = (width - available + gaps - 1) / gaps;
-    const int limit = cell / 12 > 0 ? cell / 12 : 1; // 每字间距最多收紧约字框的 8%，至少 1px
-    return reduction <= std::min(limit, blank_limit) ? -reduction : 0;
-}
-
 inline bool CanFitTrailingPunctuation(uint32_t cp, int width, int available,
-                                      size_t glyphs, int cell, int blank_limit) {
+                                      const TextSpacingState& spacing) {
     return (VerticalClosing(cp) || cp == 0x2014 || cp == 0x2026) &&
-        PunctuationLetterSpace(width, available, glyphs, cell, blank_limit) < 0;
+        width > available && width - available <= spacing.capacity + spacing.tail_blank;
 }
 
 // 仅记录最后一个合法断点；源偏移与 UTF-8 长度分开保存，兼容 GBK TXT。
-// ponytail: 不可分字符超过整列容量时按容量换列，避免越界或无限回退。
+// ponytail: 不可分字符超过整行或整列容量时按容量换行或换列，避免越界或无限回退。
 struct VerticalBreakState {
     size_t glyphs = 0; // 当前行或列的码点数，不含段首缩进
     uint32_t previous = 0; // 前一码点，零表示行首或列首

@@ -37,6 +37,8 @@ BookTapZoneAction BookTapZonesActionAt(int cell);
  * @note 返回 true 不表示异步保存已完成
  */
 bool BookTapZonesSetAction(int cell, BookTapZoneAction action);
+/** @brief 查询当前分区是否与默认配置一致。 */
+bool BookTapZonesIsDefault();
 /** @brief 恢复默认分区并异步请求保存 */
 void BookTapZonesResetDefaults();
 

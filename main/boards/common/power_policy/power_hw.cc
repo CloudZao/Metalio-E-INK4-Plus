@@ -344,7 +344,11 @@ static esp_err_t ApplyCpuFreq(int mhz) {
         .light_sleep_enable = false,
     };
     esp_err_t err = esp_pm_configure(&cfg);
-    ESP_LOGI(TAG, "cpu %dMHz (no auto_ls): %s", mhz, esp_err_to_name(err));
+    if (err == ESP_OK) {
+        ESP_LOGD(TAG, "cpu configured mhz=%d auto_ls=0", mhz);
+    } else {
+        ESP_LOGE(TAG, "cpu configuration failed mhz=%d result=%d", mhz, static_cast<int>(err));
+    }
     return err;
 #else
     (void)mhz;

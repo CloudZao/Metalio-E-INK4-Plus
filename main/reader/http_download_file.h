@@ -9,6 +9,8 @@
 
 namespace reader {
 
+enum class HttpCacheApp { Transfer, Books, Wallpaper }; // 临时文件所属应用
+
 using HttpDownloadCancelledFn = bool (*)(void* user);
 
 /** @brief 共享 HTTP 磁盘缓存，最后一个引用释放时删除文件 */
@@ -22,7 +24,8 @@ struct HttpTempFile {
 
 /** @brief 分块下载到临时缓存，不在内存中保留完整响应 */
 std::shared_ptr<HttpTempFile> DownloadHttpToCache(const char* url, std::string& err_out,
-    DownloadGate* gate = nullptr, HttpDownloadCancelledFn cancelled = nullptr, void* context = nullptr);
+    DownloadGate* gate = nullptr, HttpDownloadCancelledFn cancelled = nullptr, void* context = nullptr,
+    HttpCacheApp app = HttpCacheApp::Transfer);
 
 using HttpDownloadProgressFn = void (*)(int percent, void* user);
 

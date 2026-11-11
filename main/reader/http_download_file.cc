@@ -10,6 +10,7 @@
 #include "board.h"
 #include "application.h"
 #include "sd_paths.h"
+#include "sd_data_layout.h"
 #include "sd_access.h"
 
 #include <cerrno>
@@ -20,7 +21,6 @@
 #include <memory>
 #include <mutex>
 #include <new>
-#include <dirent.h>
 #include <fcntl.h>
 #include <esp_random.h>
 
@@ -78,39 +78,30 @@ HttpTempFile::~HttpTempFile() {
     }
 }
 
-static std::shared_ptr<HttpTempFile> CreateHttpTempFile(std::string& err_out) try {
+static std::shared_ptr<HttpTempFile> CreateHttpTempFile(std::string& err_out, HttpCacheApp app) try {
     err_out.clear();
     sd_access::Transaction transaction;
-    if (!transaction || !SdEnsureDir(SD_PATH_TEMP) || !SdEnsureDir(SD_PATH_TEMP "/http")) {
+    const unsigned index = static_cast<unsigned>(app);
+    static const char* const directories[] = {SD_PATH_TRANSFER_WORK, SD_PATH_BOOK_WORK, SD_PATH_WALLPAPER_TEMP};
+    if (index >= 3) { err_out = Lang::Strings::BOOK_BAD_ARG; return {}; }
+    static const char* const parents[] = {SD_PATH_TRANSFER_TEMP, SD_PATH_BOOK_TEMP, SD_PATH_WALLPAPER_APP_TEMP};
+    const char* directory_path = directories[index];
+    if (!transaction || !SdEnsureDir(SD_PATH_TEMP) || !SdEnsureDir(parents[index]) || !SdEnsureDir(directory_path)) {
         err_out = Lang::Strings::BOOK_WRITE_FAIL;
         return {};
     }
     static std::mutex cache_mutex;
-    static bool cleaned = false;
+    static bool cleaned[3] = {};
     std::lock_guard<std::mutex> lock(cache_mutex);
-    if (!cleaned) {
-        DIR* directory = opendir(SD_PATH_TEMP "/http");
-        if (!directory) { err_out = Lang::Strings::BOOK_WRITE_FAIL; return {}; }
-        while (const dirent* entry = readdir(directory)) {
-            const char* name = entry->d_name;
-            if (std::strlen(name) != 17 || std::strncmp(name, "http-", 5) || std::strcmp(name + 13, ".tmp")) continue;
-            bool owned = true;
-            for (int i = 5; i < 13; ++i)
-                if (!((name[i] >= '0' && name[i] <= '9') || (name[i] >= 'a' && name[i] <= 'f'))) owned = false;
-            if (owned) {
-                char path[SD_FILE_PATH_CAPACITY];
-                std::snprintf(path, sizeof(path), SD_PATH_TEMP "/http/%.17s", name);
-                unlink(path);
-            }
-        }
-        closedir(directory);
-        cleaned = true;
+    if (!cleaned[index]) {
+        if (!sd_data::CleanWorkFiles(directory_path, "http-")) { err_out = Lang::Strings::BOOK_WRITE_FAIL; return {}; }
+        cleaned[index] = true;
     }
     auto cache = std::make_shared<HttpTempFile>();
     cache->path.reserve(SD_FILE_PATH_CAPACITY);
     for (unsigned attempt = 0; attempt < 8; ++attempt) {
         char path[SD_FILE_PATH_CAPACITY];
-        std::snprintf(path, sizeof(path), SD_PATH_TEMP "/http/http-%08lx.tmp", static_cast<unsigned long>(esp_random()));
+        std::snprintf(path, sizeof(path), "%s/http-%08lx.tmp", directory_path, static_cast<unsigned long>(esp_random()));
         const int fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0600);
         if (fd < 0) { if (errno == EEXIST) continue; break; }
         cache->path = path;
@@ -125,10 +116,10 @@ static std::shared_ptr<HttpTempFile> CreateHttpTempFile(std::string& err_out) tr
 }
 
 std::shared_ptr<HttpTempFile> DownloadHttpToCache(const char* url, std::string& err_out,
-    DownloadGate* gate, HttpDownloadCancelledFn cancelled, void* context) {
+    DownloadGate* gate, HttpDownloadCancelledFn cancelled, void* context, HttpCacheApp app) {
     sd_access::Transaction transaction;
     if (!transaction) { err_out = Lang::Strings::BOOK_WRITE_FAIL; return {}; }
-    auto cache = CreateHttpTempFile(err_out);
+    auto cache = CreateHttpTempFile(err_out, app);
     if (!cache || !DownloadHttpToFile(url, cache->path.c_str(), nullptr, 0,
                                      nullptr, nullptr, err_out, gate, cancelled, context)) return {};
     return cache;

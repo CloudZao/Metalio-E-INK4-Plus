@@ -5,9 +5,7 @@
 #include "board.h"
 #include "book_cover_sidecar.h"
 #include "power_policy.h"
-#include "reader/book_home_snapshot.h"
 #include "reader/book_library.h"
-#include "reader/book_progress_cache.h"
 #include "reader/book_session.h"
 #include "reader/file_size.h"
 #include "reader/http_download_file.h"
@@ -151,7 +149,7 @@ bool DownloadCloudBook(const CloudBookTask& task, std::string& err_out,
         if (!sidecar_ok && !task.cover_image_url.empty()) {
             ESP_LOGI(TAG, "cover sidecar try coverImageUrl HTTP");
             std::string cover_err;
-            auto cache = DownloadHttpToCache(task.cover_image_url.c_str(), cover_err, gate);
+            auto cache = DownloadHttpToCache(task.cover_image_url.c_str(), cover_err, gate, nullptr, nullptr, HttpCacheApp::Books);
             if (cache && SaveCoverFile(final_path.c_str(), cache->path.c_str())) {
                 sidecar_ok = true;
                 ESP_LOGI(TAG, "cover sidecar ok source=coverImageUrl %s", final_path.c_str());
@@ -187,28 +185,10 @@ bool DeleteCloudBookLocal(const CloudBookTask& task, std::string& err_out) {
         err_out = Lang::Strings::BOOK_NO_LOCAL_FILE;
         return false;
     }
-    // 先 Peek/缓存 再删 .pos：供首页聚合扣减
-    BookSession::ProgressPeek peek;
-    if (!book_progress_cache::TryGet(path.c_str(), peek)) {
-        peek = BookSession::PeekProgress(path.c_str());
-    }
-    if (unlink(path.c_str()) != 0) {
+    if (!BookSession::DeleteFile(path.c_str())) {
         err_out = Lang::Strings::BOOK_DELETE_FAILED;
         return false;
     }
-    unlink((path + ".tmp").c_str());
-    unlink((path + ".pos").c_str());      // 进度+终身累计+当日阅读秒
-    unlink((path + ".pos.tmp").c_str());  // 原子写残留
-    DeleteBookCoverSidecar(path.c_str());
-    if (DetectFormatByPath(path.c_str()) == BookFormat::kTxt) {
-        unlink((path + ".idx").c_str());
-    }
-    InvalidateBookLibraryCache();
-    book_progress_cache::Erase(path.c_str());
-    book_home_snapshot::RemoveBook(path.c_str());
-    book_home_snapshot::SubtractAggregateContribution(peek.reading_seconds,
-                                                      peek.progress_x10 >= 1000);
-    ESP_LOGI(TAG, "deleted local cloud book %s", path.c_str());
     return true;
 }
 

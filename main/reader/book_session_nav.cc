@@ -11,7 +11,8 @@ std::unique_ptr<BookSession> BookSession::CreateNavigationCursor(NavigationKind 
     cursor->open_ = true;
     cursor->close_progress_queued_ = true;
     cursor->info_ = info_;
-    cursor->font_ = font_;
+    cursor->SetFont(font_, glyph_font_);
+    cursor->text_style_ = text_style_;
     cursor->vertical_writing_ = vertical_writing_;
     cursor->physical_w_ = physical_w_; cursor->physical_h_ = physical_h_;
     cursor->viewport_w_ = viewport_w_; cursor->viewport_h_ = viewport_h_;
@@ -22,6 +23,10 @@ std::unique_ptr<BookSession> BookSession::CreateNavigationCursor(NavigationKind 
     cursor->chapter_page_counts_ = chapter_page_counts_;
     cursor->chapter_pages_ready_.store(chapter_pages_ready_.load());
     cursor->ebook_spine_ = ebook_spine_;
+    if (info_.format == BookFormat::kEpub) {
+        cursor->toc_ = toc_;
+        cursor->epub_toc_positions_ = epub_toc_positions_;
+    }
     cursor->txt_mode_ = txt_mode_; cursor->txt_empty_ = txt_empty_;
     cursor->txt_as_gb18030_ = txt_as_gb18030_;
     cursor->live_preview_active_ = live_preview_active_;
@@ -147,6 +152,10 @@ bool BookSession::CommitNavigation(BookSession& cursor) {
         NoteChapterPageCount(cursor.chapter_index_, std::max(1, static_cast<int>(pages_.size())));
     } else if (!txt_mode_ && !pages_.TakeReadCache(cursor.pages_)) {
         return false;
+    }
+    epub_toc_positions_.swap(cursor.epub_toc_positions_);
+    if (info_.format == BookFormat::kEpub && !toc_.empty() && !cursor.toc_.empty()) {
+        toc_.front().first_page = cursor.toc_.front().first_page;
     }
     chapter_index_ = cursor.chapter_index_;
     page_index_ = cursor.page_index_;

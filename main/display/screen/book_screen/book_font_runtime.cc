@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <strings.h>
 #include <new>
 #include <memory>
 #include <vector>
@@ -64,9 +65,10 @@ void LoadFont(void* data) {
             else if (job.size > 0) job.ok = (job.ttf = TtfRuntimeOpen(job.path, job.size)) != nullptr;
             else {
                 job.ef = epdfont_open(job.path);
-                if (!job.ef && !job.selected) job.ef = epdfont_open(kBookFontPath);
-                if (!job.ef && !job.selected) job.ef = epdfont_open(kBookFontPathAlt);
-                job.ok = job.ef != nullptr;
+                const bool defaults = std::strcmp(job.file, kBookReaderDefaultFontFile) == 0;
+                if (!job.ef && (!job.selected || defaults)) job.ef = epdfont_open(kBookFontPath);
+                if (!job.ef && (!job.selected || defaults)) job.ef = epdfont_open(kBookFontPathAlt);
+                job.ok = job.ef != nullptr || (defaults && Book_ItemFont() != nullptr);
             }
         }
     }
@@ -75,7 +77,7 @@ void LoadFont(void* data) {
 }
 }
 
-static void ClearPreparedTtf() {
+static void ClearPreparedFont() {
     s_prepared_file[0] = s_prepared_base_file[0] = '\0';
     s_prepared_size = s_prepared_base_size = 0;
 }
@@ -108,7 +110,6 @@ void EnsureBookFont() {
         return;
     }
     char path[SD_FILE_PATH_CAPACITY];
-    const char* loaded_path = path;
     if (BookReaderPrefsFontFullPath(path, sizeof(path)) != nullptr) {
         if (BookReaderPrefsFontSize() > 0) {
             s_ttf_font = TtfRuntimeOpen(path, BookReaderPrefsFontSize());
@@ -119,23 +120,25 @@ void EnsureBookFont() {
     }
     if (s_epdfont == nullptr) {
         s_epdfont = epdfont_open(kBookFontPath);
-        loaded_path = kBookFontPath;
     }
     if (s_epdfont == nullptr) {
         s_epdfont = epdfont_open(kBookFontPathAlt);
-        loaded_path = kBookFontPathAlt;
     }
     if (s_epdfont == nullptr) {
-        ESP_LOGW(TAG, "epdfont load failed (%s), fallback MiSans flash",
-                 BookReaderPrefsFontFile());
+        ESP_LOGW(TAG, "bitmap font unavailable; using embedded font");
     } else {
-        ESP_LOGI(TAG, "epdfont loaded file=%s glyphs=%u bpp=%u", loaded_path,
+        ESP_LOGI(TAG, "bitmap font loaded glyphs=%u bpp=%u",
                  static_cast<unsigned>(epdfont_glyph_count(s_epdfont)), epdfont_get_bpp(s_epdfont));
     }
 }
 
-bool PrepareBookTtfFont(const char* filename, int size_px) {
-    if (!SdIsValidFileName(filename) || size_px < 20 || size_px > 80) return false;
+bool PrepareBookFont(const char* filename, int size_px) {
+    if (!SdIsValidFileName(filename) || (size_px != 0 && (size_px < 20 || size_px > 80))) return false;
+    const char* extension = std::strrchr(filename, '.');
+    const bool vector = extension && (strcasecmp(extension, ".ttf") == 0 || strcasecmp(extension, ".otf") == 0);
+    if (!extension || (vector ? size_px == 0 : strcasecmp(extension, ".ef") != 0 || size_px != 0)) return false;
+    if (!s_prepared_file[0] && !s_reload && size_px == BookReaderPrefsFontSize() &&
+        std::strcmp(filename, BookReaderPrefsFontFile()) == 0) return false;
     ++s_font_request;
     std::snprintf(s_prepared_file, sizeof(s_prepared_file), "%s", filename);
     s_prepared_size = size_px;
@@ -149,9 +152,9 @@ bool BookFontReloadBusy() { return s_reload != nullptr; }
 bool StartBookFontReload() {
     if (s_reload) return false;
     if (s_prepared_file[0] && (s_prepared_base_size != BookReaderPrefsFontSize() ||
-        std::strcmp(s_prepared_base_file, BookReaderPrefsFontFile()) != 0)) ClearPreparedTtf();
+        std::strcmp(s_prepared_base_file, BookReaderPrefsFontFile()) != 0)) ClearPreparedFont();
     auto job = std::unique_ptr<FontReload>(new(std::nothrow) FontReload);
-    if (!job) return false;
+    if (!job) { ESP_LOGE("BookFont", "font request allocation failed"); return false; }
     job->selected = s_prepared_file[0] != '\0';
     job->size = job->selected ? s_prepared_size : BookReaderPrefsFontSize();
     job->base_size = BookReaderPrefsFontSize();
@@ -165,6 +168,7 @@ bool StartBookFontReload() {
     if (xTaskCreateWithCaps(LoadFont, "book_font", 12 * 1024, s_reload.get(), 2, nullptr,
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         s_reload.reset();
+        ESP_LOGE("BookFont", "font load task creation failed");
         return false;
     }
     return true;
@@ -176,11 +180,12 @@ BookFontReloadResult PollBookFontReload(bool apply) {
     if (!apply || job->token != s_font_request || job->base_size != BookReaderPrefsFontSize() ||
         std::strcmp(job->base_file, BookReaderPrefsFontFile()) != 0) return BookFontReloadResult::kDiscarded;
     if (!job->ok) {
-        ClearPreparedTtf();
+        ESP_LOGE("BookFont", "font load failed kind=%s size=%d", job->size > 0 ? "vector" : "bitmap", job->size);
+        ClearPreparedFont();
         return BookFontReloadResult::kFailed;
     }
     if (job->selected) BookReaderPrefsSetFontFile(job->file, job->size);
-    ClearPreparedTtf();
+    ClearPreparedFont();
     const auto& session = Book_State().reader.session;
     if (!job->unchanged && !(session && session->IsPageImagesMode())) {
         if (s_retired_ttf || s_retired_ef) {
@@ -207,34 +212,41 @@ void ReleaseRetiredBookFont() {
 
 bool ReloadBookFont() {
     TtfRuntime* prepared = nullptr;
+    epdfont_t* prepared_ef = nullptr;
     if (s_prepared_file[0] != '\0' && (s_prepared_base_size != BookReaderPrefsFontSize() ||
         std::strcmp(s_prepared_base_file, BookReaderPrefsFontFile()) != 0)) {
-        ClearPreparedTtf();
+        ClearPreparedFont();
     }
     if (s_prepared_file[0] != '\0') {
         char path[SD_FILE_PATH_CAPACITY];
-        std::snprintf(path, sizeof(path), "%s/%s", SD_PATH_FONT_SRC, s_prepared_file);
-        prepared = TtfRuntimeOpen(path, s_prepared_size);
-        if (!prepared) {
-            ClearPreparedTtf();
+        std::snprintf(path, sizeof(path), "%s/%s", s_prepared_size > 0 ? SD_PATH_FONT_SRC : SD_PATH_FONTS, s_prepared_file);
+        if (s_prepared_size > 0) prepared = TtfRuntimeOpen(path, s_prepared_size);
+        else prepared_ef = epdfont_open(path);
+        const bool defaults = s_prepared_size == 0 && std::strcmp(s_prepared_file, kBookReaderDefaultFontFile) == 0;
+        if (!prepared_ef && defaults) prepared_ef = epdfont_open(kBookFontPathAlt);
+        if (!prepared && !prepared_ef && !defaults) {
+            ESP_LOGE(TAG, "font reload failed kind=%s size=%d", s_prepared_size > 0 ? "vector" : "bitmap", s_prepared_size);
+            ClearPreparedFont();
             return false;
         }
         BookReaderPrefsSetFontFile(s_prepared_file, s_prepared_size);
-        ClearPreparedTtf();
+        ClearPreparedFont();
         const auto& session = Book_State().reader.session;
         if (session && session->IsPageImagesMode()) {
             TtfRuntimeClose(prepared);
+            if (prepared_ef) epdfont_close(prepared_ef);
             return true;
         }
     }
     ReleaseBookFont();
     if (prepared) s_ttf_font = prepared;
+    else if (prepared_ef) s_epdfont = prepared_ef;
     else EnsureBookFont();
     return true;
 }
 
 void ReleaseBookFont(bool cancel_prepared) {
-    if (cancel_prepared) ClearPreparedTtf();
+    if (cancel_prepared) ClearPreparedFont();
     ReleaseRetiredBookFont();
     TtfRuntimeClose(s_ttf_font);
     s_ttf_font = nullptr;

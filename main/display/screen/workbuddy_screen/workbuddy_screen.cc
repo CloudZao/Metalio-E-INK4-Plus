@@ -50,7 +50,7 @@ constexpr int32_t kContentPad = UiSx(8);
 constexpr int32_t kTouchSlop = UiSx(24);
 constexpr int64_t kMinResultPaintUs = 1500000;
 constexpr int64_t kMinTranscriptPaintUs = 1000000;
-constexpr uint32_t kVoiceStackBytes = 16 * 1024;
+constexpr uint32_t kVoiceStackBytes = 16 * 1024; // 仅处理网络，Opus 编码使用共享编解码任务栈。
 constexpr uint32_t kPcStackBytes = 12 * 1024;
 std::atomic<unsigned> s_request_workers{0}; // 最多保留一个旧请求收尾和一个当前请求
 std::atomic<unsigned> s_authorization_workers{0}; // 限制快速离页重进时尚未退出的授权任务
@@ -333,7 +333,7 @@ void SetListeningWave(Page* page, bool show) {
  * @brief 在状态栏中央建立倾听波形，控件不拦截全屏长按与松手事件。
  * @param page 新建页面。
  * @param bar 页面拥有的状态栏，提供中央文字和高度。
- * @return 无；初始保持隐藏，首批PCM到达后才启动动画。
+ * @return 无；初始保持隐藏，首个 Opus 包到达后才启动动画。
  */
 void CreateListeningWave(Page* page, const EpdStatusBar& bar) {
     page->status_clock = bar.status_label;
@@ -985,30 +985,26 @@ void StartCapture(const std::shared_ptr<Turn>& turn) {
     std::weak_ptr<Turn> weak = turn;
     turn->phase.store(Phase::Recording);
     std::string capture_error;
-    const bool started = turn->audio.Start([weak](const int16_t* samples, size_t count) {
+    const bool started = turn->audio.Start([weak](const uint8_t* packet, size_t size, size_t samples) {
         auto current = weak.lock();
-        if (!current || current->gate.IsCancelled() || !current->held.load() ||
+        if (!current || current->gate.IsCancelled() || !current->stream_running.load() ||
             current->phase.load() != Phase::Recording) return false;
-        // 只读取驱动和BOOT的线程安全状态，不访问Page，LVGL繁忙时松手也能及时停止收音。
-        if (!TouchUiFingerIsDown() && !BootKey_IsHeld()) {
-            current->held.store(false);
-            return false;
-        }
-        if (!samples || count == 0) {
-            Fail(current, Lang::Strings::WB_MIC_READ_FAILED);
+        // 松手收尾期间仍接收共享编码任务已排队的尾帧。
+        if (!packet || size == 0) {
+            Fail(current, Lang::Strings::WB_AUDIO_CAPTURE_FAILED);
             current->finish_requested.store(true);
             return false;
         }
         const char* input_error = nullptr;
-        if (!current->stream->PushPcm(samples, count, input_error)) {
+        if (!current->stream->PushOpus(packet, size, samples, input_error)) {
             // 正常取消、结束或网络收尾沿用原结果，只发布明确的采音写入错误。
-            if (!input_error || !current->held.load() || !current->stream_running.load() || current->gate.IsCancelled() ||
+            if (!input_error || !current->stream_running.load() || current->gate.IsCancelled() ||
                 current->phase.load() != Phase::Recording) return false;
             Fail(current, input_error);
             current->finish_requested.store(true);
             return false;
         }
-        current->samples.store(std::min(kMinSamples, current->samples.load() + count));
+        current->samples.store(std::min(kMinSamples, current->samples.load() + samples));
         return true;
     }, [turn]() {
         return !turn->gate.IsCancelled() && turn->held.load() &&

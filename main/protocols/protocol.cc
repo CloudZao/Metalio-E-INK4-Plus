@@ -1,6 +1,7 @@
 #include "protocol.h"
 
 #include <esp_log.h>
+#include <memory>
 
 #define TAG "Protocol"
 
@@ -87,4 +88,32 @@ bool Protocol::IsTimeout() const {
         ESP_LOGE(TAG, "Channel timeout %ld seconds", (long)duration.count());
     }
     return timeout;
+}
+
+bool Protocol::SendImageQuestion(const std::string& image_id, bool recorded) {
+    const auto encoding_failed = []() {
+        ESP_LOGE(TAG, "image question failed stage=encode");
+        return false;
+    };
+    using Json = std::unique_ptr<cJSON, decltype(&cJSON_Delete)>;
+    Json root(cJSON_CreateObject(), cJSON_Delete);
+    if (!root || !cJSON_AddStringToObject(root.get(), "session_id", session_id_.c_str()) ||
+        !cJSON_AddStringToObject(root.get(), "type", "listen") ||
+        !cJSON_AddStringToObject(root.get(), "state", recorded ? "stop" : "detect")) return encoding_failed();
+    if (!recorded && !cJSON_AddStringToObject(root.get(), "mode", "auto")) return encoding_failed();
+    auto* images = cJSON_AddArrayToObject(root.get(), "image_ids");
+    auto* image = cJSON_CreateString(image_id.c_str());
+    if (!images || !image) {
+        cJSON_Delete(image);
+        return encoding_failed();
+    }
+    cJSON_AddItemToArray(images, image);
+    std::unique_ptr<char, decltype(&cJSON_free)> json(cJSON_PrintUnformatted(root.get()), cJSON_free);
+    if (!json) return encoding_failed();
+    if (!SendText(json.get())) {
+        ESP_LOGW(TAG, "image question failed stage=send; photo retained");
+        return false;
+    }
+    ESP_LOGI(TAG, "image question submitted images=1 recorded=%d", recorded ? 1 : 0);
+    return true;
 }

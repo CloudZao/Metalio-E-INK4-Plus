@@ -2,17 +2,19 @@
 #include "book_screen/shelf/book_shelf_ops.h"
 
 #include <cerrno>
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <dirent.h>
+#include <memory>
+#include <new>
 #include <string>
+#include <vector>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <esp_log.h>
 
 #include "assets/lang_config.h"
-#include "reader/book_cover_sidecar.h"
-#include "reader/book_home_snapshot.h"
-#include "reader/book_progress_cache.h"
 #include "reader/reader.h"
 #include "reader/book_library.h"
 #include "sd_paths.h"
@@ -60,7 +62,10 @@ bool DeleteLibraryPathRecursive(const std::string& path, int depth, std::string&
     }
     struct stat st {};
     if (stat(path.c_str(), &st) != 0) {
-        return true; // 已不存在
+        if (errno == ENOENT) return true;
+        ESP_LOGE(TAG, "library delete failed stage=stat errno=%d", errno);
+        err_out = Lang::Strings::BOOK_DELETE_FAILED;
+        return false;
     }
     if (S_ISREG(st.st_mode)) {
         const reader::BookFormat fmt = reader::DetectFormatByPath(path.c_str());
@@ -73,38 +78,54 @@ bool DeleteLibraryPathRecursive(const std::string& path, int depth, std::string&
             info.mtime = static_cast<int64_t>(st.st_mtime);
             return DeleteLibraryBookFile(info, err_out);
         }
-        unlink(path.c_str());
-        return true;
+        if (unlink(path.c_str()) == 0 || errno == ENOENT) return true;
+        ESP_LOGE(TAG, "library delete failed stage=unlink errno=%d", errno);
+        err_out = Lang::Strings::BOOK_DELETE_FAILED;
+        return false;
     }
     if (!S_ISDIR(st.st_mode)) {
         return true;
     }
     DIR* d = opendir(path.c_str());
     if (d == nullptr) {
+        ESP_LOGE(TAG, "library delete failed stage=opendir errno=%d", errno);
         err_out = Lang::Strings::BOOK_DELETE_FAILED;
         return false;
     }
+    std::unique_ptr<DIR, int (*)(DIR*)> directory(d, closedir);
     std::string prefix = path;
     if (!prefix.empty() && prefix.back() != '/') {
         prefix.push_back('/');
     }
+    std::vector<std::string> children;
+    int read_error = 0;
     while (true) {
         errno = 0;
         dirent* ent = readdir(d);
         if (ent == nullptr) {
+            read_error = errno;
             break;
         }
-        if (ent->d_name[0] == '.') {
+        if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0) {
             continue;
         }
-        const std::string child = prefix + ent->d_name;
-        if (!DeleteLibraryPathRecursive(child, depth + 1, err_out)) {
-            closedir(d);
-            return false;
-        }
+        children.push_back(prefix + ent->d_name);
     }
-    closedir(d);
+    const bool closed = closedir(directory.release()) == 0;
+    if (read_error || !closed) {
+        ESP_LOGE(TAG, "library delete failed stage=list errno=%d", read_error ? read_error : errno);
+        err_out = Lang::Strings::BOOK_DELETE_FAILED;
+        return false;
+    }
+    // 先删书籍，读取进度并扣减统计后再处理同目录的旧辅助文件。
+    std::stable_sort(children.begin(), children.end(), [](const auto& a, const auto& b) {
+        return reader::DetectFormatByPath(a.c_str()) != reader::BookFormat::kUnknown &&
+               reader::DetectFormatByPath(b.c_str()) == reader::BookFormat::kUnknown;
+    });
+    for (const auto& child : children)
+        if (!DeleteLibraryPathRecursive(child, depth + 1, err_out)) return false;
     if (rmdir(path.c_str()) != 0 && errno != ENOENT) {
+        ESP_LOGE(TAG, "library delete failed stage=rmdir errno=%d", errno);
         err_out = Lang::Strings::BOOK_DELETE_FAILED;
         return false;
     }
@@ -112,13 +133,17 @@ bool DeleteLibraryPathRecursive(const std::string& path, int depth, std::string&
     return true;
 }
 
-bool DeleteLibraryFolder(const std::string& dir, std::string& err_out) {
+bool DeleteLibraryFolder(const std::string& dir, std::string& err_out) try {
     err_out.clear();
     if (!DeleteLibraryPathRecursive(dir, 0, err_out)) {
         return false;
     }
     EraseBooksUnderDirPrefix(dir);
     return true;
+} catch (const std::bad_alloc&) {
+    ESP_LOGE(TAG, "library delete failed stage=allocate");
+    err_out = Lang::Strings::BOOK_DELETE_FAILED;
+    return false;
 }
 
 bool DeleteLibraryBookFile(const reader::BookInfo& info, std::string& err_out) {
@@ -132,28 +157,9 @@ bool DeleteLibraryBookFile(const reader::BookInfo& info, std::string& err_out) {
         err_out = Lang::Strings::BOOK_PATH_INVALID;
         return false;
     }
-    // 先 Peek/缓存 再删 .pos：供首页聚合扣减（删后无法再读）
-    reader::BookSession::ProgressPeek peek;
-    if (!reader::book_progress_cache::TryGet(info.path.c_str(), peek)) {
-        peek = reader::BookSession::PeekProgress(info.path.c_str());
-    }
-    if (unlink(info.path.c_str()) != 0) {
+    if (!reader::BookSession::DeleteFile(info.path.c_str())) {
         err_out = Lang::Strings::BOOK_DELETE_FAILED;
         return false;
     }
-    unlink((info.path + ".tmp").c_str());
-    unlink((info.path + ".pos").c_str());      // 进度+终身累计+当日阅读秒
-    unlink((info.path + ".pos.tmp").c_str());  // 原子写残留
-    reader::DeleteBookCoverSidecar(info.path.c_str());
-    // TXT 分页索引缓存：同目录 <name>.txt.idx
-    if (info.format == reader::BookFormat::kTxt) {
-        unlink((info.path + ".idx").c_str());
-    }
-    ESP_LOGI(TAG, "deleted library book %s", info.path.c_str());
-    reader::book_progress_cache::Erase(info.path.c_str());
-    reader::book_home_snapshot::RemoveBook(info.path.c_str());
-    reader::book_home_snapshot::SubtractAggregateContribution(
-        peek.reading_seconds, peek.progress_x10 >= 1000);
     return true;
 }
-

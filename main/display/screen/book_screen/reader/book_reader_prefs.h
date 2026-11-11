@@ -172,6 +172,22 @@ int BookReaderPrefsTextDirection();
 /** @brief 设置并保存竖排列方向 */
 void BookReaderPrefsSetTextDirection(int direction);
 
-// Auto page-turn interval in seconds (5..45); enabling is session-local.
+/** @brief 获取自动翻页间隔秒数，范围 5–45 秒；启用状态仅在当前会话生效。 */
 int BookReaderPrefsAutoTurnSeconds();
+/** @brief 设置并保存自动翻页间隔秒数。 */
 void BookReaderPrefsSetAutoTurnSeconds(int seconds);
+
+#include "reader/reader_types.h"
+
+inline constexpr char kBookReaderDefaultFontFile[] = "misans_40_2.ef"; // 默认阅读位图字体
+
+enum class BookTextOption { ParaGap, LetterGap, LineGap, Margin, Indent, UnderlineOffset, AaStrength, Count };
+
+/** @brief 读取连续排版参数；段距、行距和边距的负值表示沿用旧档位。 */
+int BookReaderPrefsTextValue(BookTextOption option);
+/** @brief 更新连续排版参数并提交异步保存。 */
+bool BookReaderPrefsSetTextValue(BookTextOption option, int value);
+/** @brief 获取供分页及绘制共享的排版参数快照。 */
+reader::TextStyle BookReaderPrefsTextStyle();
+/** @brief 恢复阅读设置，不改变当前字体及书架偏好。 */
+void BookReaderPrefsResetReading();

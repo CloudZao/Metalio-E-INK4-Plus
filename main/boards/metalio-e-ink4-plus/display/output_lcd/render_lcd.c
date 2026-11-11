@@ -297,14 +297,14 @@ finished:
     epd_set_mode(0);
     if (spv_periods>0) {
         const int millihz=(int)(1000000000LL*spv_periods/spv_total);
-        ESP_LOGI("EpdTiming","SPV=%d.%03dHz period_us=%d samples=%d completed=%d",
+        ESP_LOGD("EpdTiming","SPV=%d.%03dHz period_us=%d samples=%d completed=%d",
             millihz/1000,millihz%1000,(int)(spv_total/spv_periods),spv_periods,completed_frames);
     }
     if (periods) {
         __atomic_store_n(&last_phase_average,(int)(period_total/periods),__ATOMIC_RELAXED);
         __atomic_store_n(&last_phase_minimum,period_min,__ATOMIC_RELAXED);
         __atomic_store_n(&last_phase_maximum,period_max,__ATOMIC_RELAXED);
-        ESP_LOGI("EpdTiming","phase cadence us: avg=%d min=%d max=%d frames=%d completed=%d cycle=%dms "
+        ESP_LOGD("EpdTiming","phase cadence us: avg=%d min=%d max=%d frames=%d completed=%d cycle=%dms "
         "scan_us=%d/%d/%d eof_gap_max=%d eof_work_max=%d",
         (int)(period_total/periods),period_min,period_max,ctx->cycle_frames,
         completed_frames,(int)((esp_timer_get_time()-cycle_start)/1000),

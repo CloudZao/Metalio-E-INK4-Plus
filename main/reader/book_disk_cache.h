@@ -23,6 +23,7 @@ public:
     /** @brief 扩展逻辑记录范围；只分配一个 PSRAM 窗口。 */
     bool Reserve(const std::string& path, size_t count) {
         if (read_only_) return false;
+        if (path.empty()) { good_ = false; error_ = BookReadError::kCacheIo; return false; }
         if (count > (static_cast<size_t>(std::numeric_limits<long>::max()) - kBytes) / sizeof(T)) { error_ = BookReadError::kUnsupported; good_ = false; return false; }
         if (path_.empty()) {
             path_ = path;

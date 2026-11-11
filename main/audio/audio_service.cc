@@ -109,6 +109,9 @@ void AudioService::Start() {
 
     // 栈放 SPIRAM：内部 DRAM 碎片时 xTaskCreate 易失败；TCB 仍在内部
     constexpr UBaseType_t kStackCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    // 与刷新调度同级，避免语音包长时间待解码；屏幕扫描供数仍保留更高优先级。
+    constexpr UBaseType_t kOutputPriority = configMAX_PRIORITIES - 2;
+    constexpr UBaseType_t kCodecPriority = configMAX_PRIORITIES - 2;
 
 #if CONFIG_USE_AUDIO_PROCESSOR
     /* Start the audio input task */
@@ -136,7 +139,7 @@ void AudioService::Start() {
             audio_service->AudioOutputTask();
             audio_service->ParkStoppedTask(AS_EVENT_OUTPUT_EXITED);
         },
-        "audio_output", 2048 * 2, this, 4, &audio_output_task_handle_, kStackCaps);
+        "audio_output", 2048 * 2, this, kOutputPriority, &audio_output_task_handle_, kStackCaps);
     if (ok_out != pdPASS) {
         ESP_LOGE(TAG, "Failed to create audio_output");
         audio_output_task_handle_ = nullptr;
@@ -168,7 +171,7 @@ void AudioService::Start() {
             audio_service->AudioOutputTask();
             audio_service->ParkStoppedTask(AS_EVENT_OUTPUT_EXITED);
         },
-        "audio_output", 2048, this, 4, &audio_output_task_handle_, kStackCaps);
+        "audio_output", 2048, this, kOutputPriority, &audio_output_task_handle_, kStackCaps);
     if (ok_out != pdPASS) {
         ESP_LOGE(TAG, "Failed to create audio_output");
         audio_output_task_handle_ = nullptr;
@@ -203,7 +206,7 @@ void AudioService::Start() {
             audio_service->OpusCodecTask();
             audio_service->ParkStoppedTask(AS_EVENT_OPUS_EXITED);
         },
-        "opus_codec", kOpusCodecStackWords, this, 2, opus_codec_stack_, opus_codec_tcb_);
+        "opus_codec", kOpusCodecStackWords, this, kCodecPriority, opus_codec_stack_, opus_codec_tcb_);
     if (opus_codec_task_handle_ == nullptr) {
         ESP_LOGE(TAG, "Failed to create opus_codec static task");
         Stop();
@@ -215,7 +218,7 @@ void AudioService::Start() {
 }
 
 void AudioService::Stop() {
-    StopPcmCapture();
+    StopOpusCapture();
     if (service_stopped_ && !audio_input_task_handle_ && !audio_output_task_handle_ && !opus_codec_task_handle_) {
         if (codec_) codec_->ReleaseHardware();
         return;
@@ -355,7 +358,7 @@ void AudioService::ParkStoppedTask(EventBits_t bit) {
 void AudioService::AudioInputTask() {
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
-            AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING | AS_EVENT_PCM_CAPTURE_RUNNING,
+            AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING | AS_EVENT_OPUS_CAPTURE_RUNNING,
             pdFALSE, pdFALSE, portMAX_DELAY);
 
         if (service_stopped_) {
@@ -367,24 +370,25 @@ void AudioService::AudioInputTask() {
             continue;
         }
 
-        if (bits & AS_EVENT_PCM_CAPTURE_RUNNING) {
+        if (bits & AS_EVENT_OPUS_CAPTURE_RUNNING) {
             uint32_t generation;
             int samples;
             {
-                std::lock_guard<std::mutex> feed_lock(pcm_feed_mutex_);
-                if (service_stopped_ || !(xEventGroupGetBits(event_group_) & AS_EVENT_PCM_CAPTURE_RUNNING)) continue;
-                generation = pcm_capture_generation_.load();
+                std::lock_guard<std::mutex> feed_lock(capture_feed_mutex_);
+                if (service_stopped_ || !(xEventGroupGetBits(event_group_) & AS_EVENT_OPUS_CAPTURE_RUNNING)) continue;
+                generation = opus_capture_generation_.load();
                 samples = capture_processor_->GetFeedSize();
             }
             std::vector<int16_t> data;
             if (samples <= 0 || !ReadAudioData(data, 16000, samples)) {
-                FailPcmCapture(generation);
+                ESP_LOGE(TAG, "Opus capture input failed: requested_samples=%d", samples);
+                FailOpusCapture(generation);
                 continue;
             }
-            // 复用直通处理器提取麦克风通道，不经过原有 Opus 发送路径。
-            std::lock_guard<std::mutex> feed_lock(pcm_feed_mutex_);
-            if (!service_stopped_ && generation == pcm_capture_generation_.load() &&
-                (xEventGroupGetBits(event_group_) & AS_EVENT_PCM_CAPTURE_RUNNING)) {
+            // 提取麦克风通道后交给共享 Opus 编码任务。
+            std::lock_guard<std::mutex> feed_lock(capture_feed_mutex_);
+            if (!service_stopped_ && generation == opus_capture_generation_.load() &&
+                (xEventGroupGetBits(event_group_) & AS_EVENT_OPUS_CAPTURE_RUNNING)) {
                 capture_processor_->Feed(std::move(data));
             }
             continue;
@@ -490,11 +494,13 @@ void AudioService::AudioOutputTask() {
 }
 
 void AudioService::OpusCodecTask() {
+    uint32_t capture_generation = 0;
     while (true) {
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
         audio_queue_cv_.wait(lock, [this]() {
             return service_stopped_ ||
-                (!audio_encode_queue_.empty() && audio_send_queue_.size() < MAX_SEND_PACKETS_IN_QUEUE) ||
+                (!audio_encode_queue_.empty() && (audio_encode_queue_.front()->type == kAudioTaskTypeEncodeToCapture ||
+                    audio_send_queue_.size() < MAX_SEND_PACKETS_IN_QUEUE)) ||
                 (!audio_decode_queue_.empty() && audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE);
         });
         if (service_stopped_) {
@@ -533,9 +539,12 @@ void AudioService::OpusCodecTask() {
         }
         
         /* Encode the audio to send queue */
-        if (!audio_encode_queue_.empty() && audio_send_queue_.size() < MAX_SEND_PACKETS_IN_QUEUE) {
+        if (!audio_encode_queue_.empty() && (audio_encode_queue_.front()->type == kAudioTaskTypeEncodeToCapture ||
+            audio_send_queue_.size() < MAX_SEND_PACKETS_IN_QUEUE)) {
             auto task = std::move(audio_encode_queue_.front());
             audio_encode_queue_.pop_front();
+            const bool capture = task->type == kAudioTaskTypeEncodeToCapture;
+            capture_encoding_ = capture;
             audio_queue_cv_.notify_all();
             lock.unlock();
 
@@ -543,18 +552,33 @@ void AudioService::OpusCodecTask() {
             packet->frame_duration = OPUS_FRAME_DURATION_MS;
             packet->sample_rate = 16000;
             packet->timestamp = task->timestamp;
-            if (!opus_encoder_->Encode(std::move(task->pcm), packet->payload)) {
+            const size_t samples = task->pcm.size();
+            if (capture && capture_generation != task->capture_generation) {
+                opus_encoder_->ResetState();
+                capture_generation = task->capture_generation;
+            }
+            const bool encoded = opus_encoder_->Encode(std::move(task->pcm), packet->payload);
+            if (!encoded) {
                 ESP_LOGE(TAG, "Failed to encode audio");
+                if (capture) FailOpusCapture(task->capture_generation);
                 lock.lock();
+                capture_encoding_ = false;
+                audio_queue_cv_.notify_all();
                 continue;
             }
 
-            if (task->type == kAudioTaskTypeEncodeToSendQueue) {
+            if (capture) {
+                HandleCapturedOpus(packet->payload, samples, task->capture_generation);
+            } else if (task->type == kAudioTaskTypeEncodeToSendQueue) {
+                bool queued = false;
                 {
                     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-                    audio_send_queue_.push_back(std::move(packet));
+                    if (task->send_generation == send_generation_) {
+                        audio_send_queue_.push_back(std::move(packet));
+                        queued = true;
+                    }
                 }
-                if (callbacks_.on_send_queue_available) {
+                if (queued && callbacks_.on_send_queue_available) {
                     callbacks_.on_send_queue_available();
                 }
             } else if (task->type == kAudioTaskTypeEncodeToTestingQueue) {
@@ -570,6 +594,8 @@ void AudioService::OpusCodecTask() {
             }
             debug_statistics_.encode_count++;
             lock.lock();
+            capture_encoding_ = false;
+            audio_queue_cv_.notify_all();
         }
     }
 
@@ -603,6 +629,8 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
     /* Push the task to the encode queue */
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
 
+    task->send_generation = send_generation_;
+
     /* If the task is to send queue, we need to set the timestamp */
     if (type == kAudioTaskTypeEncodeToSendQueue && !timestamp_queue_.empty()) {
         if (timestamp_queue_.size() <= MAX_TIMESTAMPS_IN_QUEUE) {
@@ -616,7 +644,7 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
     audio_queue_cv_.wait(lock, [this]() {
         return service_stopped_ || audio_encode_queue_.size() < MAX_ENCODE_TASKS_IN_QUEUE;
     });
-    if (service_stopped_) {
+    if (service_stopped_ || task->send_generation != send_generation_) {
         return;
     }
     if (type == kAudioTaskTypeEncodeToTestingQueue) {
@@ -859,7 +887,11 @@ void AudioService::ResetDecoder() {
 }
 
 void AudioService::FlushQueues() {
-    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    const bool capture_dropped = std::any_of(audio_encode_queue_.begin(), audio_encode_queue_.end(),
+        [](const auto& task) { return task->type == kAudioTaskTypeEncodeToCapture; });
+    const uint32_t capture_generation = opus_capture_generation_.load();
+    ++send_generation_;
     audio_encode_queue_.clear();
     audio_send_queue_.clear();
     audio_decode_queue_.clear();
@@ -867,6 +899,11 @@ void AudioService::FlushQueues() {
     audio_testing_queue_.clear();
     timestamp_queue_.clear();
     audio_queue_cv_.notify_all();
+    lock.unlock();
+    if (capture_dropped) {
+        ESP_LOGW(TAG, "Opus capture cancelled: pending encode queue flushed");
+        FailOpusCapture(capture_generation);
+    }
 }
 
 void AudioService::CheckAndUpdateAudioPowerState() {

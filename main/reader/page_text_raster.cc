@@ -87,7 +87,7 @@ void BlitGlyphA8(RasterImage& img, int dst_x, int dst_y, const uint8_t* a8, uint
 }
 
 // 字形重叠合成后统一加深灰边；整块黑白像素无需重写。
-void FinishTextRaster(RasterImage& image, bool antialias) {
+void FinishTextRaster(RasterImage& image, bool antialias, int strength) {
     if (antialias) {
         size_t offset = 0;
         for (; offset + sizeof(uint32_t) <= image.pixels.size(); offset += sizeof(uint32_t)) {
@@ -97,12 +97,12 @@ void FinishTextRaster(RasterImage& image, bool antialias) {
             if (((pixels ^ (pixels >> 1)) & 0x7f7f7f7fu) == 0) continue;
             for (unsigned byte = 0; byte < sizeof(pixels); ++byte) {
                 auto& pixel = image.pixels[offset + byte];
-                if (pixel != 0 && pixel != 255) pixel -= pixel * 4 / 5;
+                if (pixel != 0 && pixel != 255) pixel -= pixel * (2 - std::clamp(strength, 0, 2)) * 2 / 5;
             }
         }
         for (; offset < image.pixels.size(); ++offset) {
             auto& pixel = image.pixels[offset];
-            if (pixel != 0 && pixel != 255) pixel -= pixel * 4 / 5;
+            if (pixel != 0 && pixel != 255) pixel -= pixel * (2 - std::clamp(strength, 0, 2)) * 2 / 5;
         }
     }
     image.BindDsc();
@@ -123,19 +123,9 @@ void DrawUnderline(RasterImage& img, int x0, int x1, int y, int mode) {
     }
 }
 
-lv_coord_t MeasureTextW(const lv_font_t* font, const char* utf8, int letter_space = 0) {
-    if (font == nullptr || utf8 == nullptr) {
-        return 0;
-    }
-    lv_point_t sz = {};
-    lv_text_get_size(&sz, utf8, font, letter_space, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-    return static_cast<lv_coord_t>(sz.x);
-}
-
 bool DrawUtf8Line(RasterImage& img, const lv_font_t* font, int x, int line_top, const char* utf8,
                   bool faux_bold, int* out_end_x, bool vertical = false, bool antialias = false,
-                  int* out_ink_bottom = nullptr, int letter_space = 0,
-                  int justify_extra = 0, int justify_gaps = 0) {
+                  int* out_ink_bottom = nullptr, const TextLineSpacing& spacing = {}, int letter_gap = 0) {
     if (font == nullptr || utf8 == nullptr) {
         return false;
     }
@@ -153,7 +143,7 @@ bool DrawUtf8Line(RasterImage& img, const lv_font_t* font, int x, int line_top, 
     int ink_bottom = -1;
 
     int glyph_index = 0;
-    const TextLineSpacing spacing{letter_space, justify_extra, justify_gaps};
+    TextSpacingState spacing_state;
     while (left > 0) {
         uint32_t cp = 0;
         const size_t n = Utf8Next(p, left, &cp);
@@ -167,15 +157,17 @@ bool DrawUtf8Line(RasterImage& img, const lv_font_t* font, int x, int line_top, 
             continue;
         }
 
-        if (glyph_index > 0) pen_x += spacing.Offset(glyph_index) - spacing.Offset(glyph_index - 1);
-        ++glyph_index;
+        const int vertical_slot = glyph_index++;
         const uint32_t glyph_cp = vertical ? VerticalGlyph(cp) : cp;
-        lv_font_glyph_dsc_t gdsc;
+        lv_font_glyph_dsc_t gdsc{};
         if (!lv_font_get_glyph_dsc(font, &gdsc, glyph_cp, 0)) {
-            pen_x += vertical ? VerticalAdvance(cp, font->line_height, 1)
-                              : std::max(1, static_cast<int>(font->line_height / 3));
+            if (!vertical) ObserveTextGlyph(spacing_state, font, cp, gdsc, false, letter_gap);
+            pen_x += TextAdvanceWithGap(vertical ? VerticalAdvance(cp, font->line_height, 1)
+                              : std::max(1, static_cast<int>(lv_font_get_glyph_width(font, cp, 0))), letter_gap);
             continue;
         }
+        if (!vertical) ObserveTextGlyph(spacing_state, font, cp, gdsc, true, letter_gap);
+        const int shift = vertical ? spacing.Offset(vertical_slot) : spacing.Offset(spacing_state.slots, spacing_state.capacity);
         if (gdsc.resolved_font == nullptr) {
             gdsc.resolved_font = font;
         }
@@ -202,14 +194,14 @@ bool DrawUtf8Line(RasterImage& img, const lv_font_t* font, int x, int line_top, 
             const int rotated_height = vertical && cp == 0x2014 ? font->line_height : 0;
             const int box_w = rotate ? gdsc.box_h : gdsc.box_w;
             const int box_h = rotated_height > 0 ? rotated_height : rotate ? gdsc.box_w : gdsc.box_h;
-            int gx = vertical ? x + (font->line_height - box_w) / 2 : pen_x + gdsc.ofs_x;
+            int gx = vertical ? x + (font->line_height - box_w) / 2 : pen_x + shift + gdsc.ofs_x;
             // 与 lv_draw_label：y1 = line_top + (lh - base) - box_h - ofs_y
-            int gy = vertical ? line_top + pen_x - x + (font->line_height - box_h) / 2
+            int gy = vertical ? line_top + pen_x - x + shift + (font->line_height - box_h) / 2
                                     : line_top + static_cast<int>(font->line_height - font->base_line) -
                                           static_cast<int>(gdsc.box_h) - gdsc.ofs_y;
             if (vertical) {
                 const int cell = font->line_height;
-                const int top = line_top + pen_x - x;
+                const int top = line_top + pen_x - x + shift;
                 switch (cp) {
                     case ',': case '.': case 0xFF0C: case 0x3001: case 0x3002:
                         gx = x + cell - box_w;
@@ -230,10 +222,11 @@ bool DrawUtf8Line(RasterImage& img, const lv_font_t* font, int x, int line_top, 
                 font->release_glyph(font, &gdsc);
             }
         }
-        pen_x += vertical ? VerticalAdvance(cp, font->line_height, std::max(1, static_cast<int>(gdsc.adv_w))) : static_cast<int>(gdsc.adv_w);
+        pen_x += TextAdvanceWithGap(vertical ? VerticalAdvance(cp, font->line_height, std::max(1, static_cast<int>(gdsc.adv_w))) : TextGlyphAdvance(gdsc), letter_gap);
     }
     if (out_end_x != nullptr) {
-        *out_end_x = pen_x;
+        *out_end_x = pen_x + (vertical ? spacing.Offset(std::max(0, glyph_index - 1))
+            : spacing.Offset(spacing_state.slots, spacing_state.capacity) - spacing.trim);
     }
     if (out_ink_bottom != nullptr) *out_ink_bottom = ink_bottom;
     return true;
@@ -251,14 +244,21 @@ bool PageIsTextOnly(const Page& page) {
 }
 
 int EstimatePageTextHeight(const Page& page, const lv_font_t* font, int spacing_percent,
-                           lv_coord_t para_gap, int max_h) {
+                           lv_coord_t para_gap, int max_h, int line_gap) {
     if (!font || max_h <= 0) return 0;
-    const auto layout = MakeTextLineLayout(font, max_h, spacing_percent);
+    const auto layout = MakeTextLineLayout(font, max_h, spacing_percent, false, line_gap);
     if (layout.count <= 0) return 0;
     int row = 0, y = 0;
     bool any = false, previous_title = false;
     for (const auto& item : page.items) {
-        if (item.kind != ContentKind::kText || item.text.empty()) continue;
+        if (item.kind != ContentKind::kText) {
+            if (item.image_h <= 0 || item.image_h > max_h - y) return 0;
+            y += item.image_h;
+            previous_title = false;
+            any = true;
+            continue;
+        }
+        if (item.text.empty()) continue;
         if (item.para_gap_before && any) y += ReaderParagraphGap(para_gap, previous_title);
         int lines = 1;
         if (item.chapter_title) for (size_t i = 0; i + 1 < item.text.size(); ++i) if (item.text[i] == '\n') ++lines;
@@ -274,13 +274,14 @@ int EstimatePageTextHeight(const Page& page, const lv_font_t* font, int spacing_
 
 bool RasterPageTextToL8(const Page& page, const lv_font_t* font, int spacing_percent,
                         lv_coord_t para_gap, int page_w, int page_h, int underline_mode,
-                        RasterImage& out, bool antialias) {
+                        RasterImage& out, bool antialias, std::vector<int>* image_tops, const TextStyle& style) {
     out.Reset();
-    if (font == nullptr || page_w <= 0 || page_h <= 0 || !PageIsTextOnly(page)) {
+    if (image_tops) image_tops->clear();
+    if (font == nullptr || page_w <= 0 || page_h <= 0) {
         return false;
     }
-    const auto layout = MakeTextLineLayout(font, page_h, spacing_percent);
-    const int image_h = EstimatePageTextHeight(page, font, spacing_percent, para_gap, page_h);
+    const auto layout = MakeTextLineLayout(font, page_h, spacing_percent, false, style.line_gap);
+    const int image_h = EstimatePageTextHeight(page, font, spacing_percent, para_gap, page_h, style.line_gap);
     if (image_h <= 0) return false;
     const size_t n = static_cast<size_t>(page_w) * static_cast<size_t>(image_h);
     try {
@@ -296,15 +297,20 @@ bool RasterPageTextToL8(const Page& page, const lv_font_t* font, int spacing_per
     out.width = static_cast<uint16_t>(page_w);
     out.height = static_cast<uint16_t>(image_h);
 
-    const lv_coord_t indent_px = ParaIndentPadPx(font);
+    const lv_coord_t indent_px = ParaIndentPadPx(font, style.indent_chars);
     lv_coord_t y = 0;
     int row = 0;
     bool any = false, previous_title = false;
 
     for (const auto& item : page.items) {
-        if (item.kind != ContentKind::kText || item.text.empty()) {
+        if (item.kind != ContentKind::kText) {
+            if (image_tops) image_tops->push_back(y);
+            y += item.image_h;
+            previous_title = false;
+            any = true;
             continue;
         }
+        if (item.text.empty()) continue;
         if (item.para_gap_before && any) {
             y = static_cast<lv_coord_t>(y + ReaderParagraphGap(para_gap, previous_title));
         }
@@ -319,19 +325,19 @@ bool RasterPageTextToL8(const Page& page, const lv_font_t* font, int spacing_per
             while (p != nullptr && *p != '\0') {
                 const char* nl = std::strchr(p, '\n');
                 std::string line = nl ? std::string(p, static_cast<size_t>(nl - p)) : std::string(p);
-                const int letter_space = TextLineLetterSpace(font, line, page_w);
-                const lv_coord_t tw = MeasureTextW(font, line.c_str(), letter_space);
+                const auto spacing = MakeTextLineSpacing(font, line, page_w, false, false, style.letter_gap);
+                const lv_coord_t tw = spacing.width;
                 text_x = tw < page_w ? static_cast<lv_coord_t>((page_w - tw) / 2) : 0;
                 if (row >= layout.count || y + layout.CellHeight(row) > page_h) return false;
                 const int line_y = y + layout.TextOffset(row);
                 int ink_bottom = -1;
                 if (!DrawUtf8Line(out, font, text_x, line_y, line.c_str(), true,
-                                  &end_x, false, antialias, &ink_bottom, letter_space)) {
+                                  &end_x, false, antialias, &ink_bottom, spacing, style.letter_gap)) {
                     out.Reset();
                     return false;
                 }
                 if (underline_mode > 0 && ink_bottom >= 0) {
-                    const int ul_y = line_y + ReaderUnderlineTop(ink_bottom);
+                    const int ul_y = line_y + ReaderUnderlineTop(ink_bottom) + style.underline_offset;
                     DrawUnderline(out, text_x, end_x - 1, ul_y, underline_mode);
                 }
                 y += layout.CellHeight(row++);
@@ -342,10 +348,9 @@ bool RasterPageTextToL8(const Page& page, const lv_font_t* font, int spacing_per
             continue;
         }
         const int available = page_w - (item.para_indent && !item.chapter_title ? indent_px : 0);
-        const auto spacing = MakeTextLineSpacing(font, item.text, available, item.justify && !item.chapter_title);
-        const int letter_space = spacing.letter_space;
+        const auto spacing = MakeTextLineSpacing(font, item.text, available, item.justify && !item.chapter_title, false, style.letter_gap);
         if (item.chapter_title) {
-            const lv_coord_t tw = MeasureTextW(font, txt, letter_space);
+            const lv_coord_t tw = spacing.width;
             text_x = tw < page_w ? static_cast<lv_coord_t>((page_w - tw) / 2) : 0;
         } else if (item.para_indent) {
             text_x = indent_px;
@@ -354,12 +359,12 @@ bool RasterPageTextToL8(const Page& page, const lv_font_t* font, int spacing_per
         int end_x = text_x;
         int ink_bottom = -1;
         const int line_y = y + layout.TextOffset(row);
-        if (!DrawUtf8Line(out, font, text_x, line_y, txt, item.chapter_title, &end_x, false, antialias, &ink_bottom, letter_space, spacing.extra, spacing.gaps)) {
+        if (!DrawUtf8Line(out, font, text_x, line_y, txt, item.chapter_title, &end_x, false, antialias, &ink_bottom, spacing, style.letter_gap)) {
             out.Reset();
             return false;
         }
         if (underline_mode > 0 && ink_bottom >= 0) {
-            const int ul_y = line_y + ReaderUnderlineTop(ink_bottom);
+            const int ul_y = line_y + ReaderUnderlineTop(ink_bottom) + style.underline_offset;
             DrawUnderline(out, text_x, end_x - 1, ul_y, underline_mode);
         }
         y += layout.CellHeight(row++);
@@ -367,13 +372,13 @@ bool RasterPageTextToL8(const Page& page, const lv_font_t* font, int spacing_per
         previous_title = item.chapter_title;
     }
 
-    FinishTextRaster(out, antialias);
+    FinishTextRaster(out, antialias, style.aa_strength);
     return any;
 }
 
 bool RasterPageVerticalTextToL8(const Page& page, const lv_font_t* font, int spacing_percent,
                                 lv_coord_t para_gap, int page_w, int page_h, int rule_mode,
-                                RasterImage& out, bool antialias, bool right_to_left) {
+                                RasterImage& out, bool antialias, bool right_to_left, const TextStyle& style) {
     out.Reset();
     if (!font || font->line_height == 0 || page_w <= 0 || page_h <= 0 || !PageIsTextOnly(page)) return false;
     try {
@@ -384,7 +389,7 @@ bool RasterPageVerticalTextToL8(const Page& page, const lv_font_t* font, int spa
     out.width = static_cast<uint16_t>(page_w);
     out.height = static_cast<uint16_t>(page_h);
     const int cell = font->line_height;
-    const auto layout = MakeTextLineLayout(font, page_w, spacing_percent, true);
+    const auto layout = MakeTextLineLayout(font, page_w, spacing_percent, true, style.line_gap);
     int x = 0, row = 0;
     bool any = false, previous_title = false;
     for (const auto& item : page.items) {
@@ -395,15 +400,15 @@ bool RasterPageVerticalTextToL8(const Page& page, const lv_font_t* font, int spa
         if (row >= layout.count || x + layout.CellHeight(row) > page_w) { out.Reset(); return false; }
         const int column_x = (right_to_left ? page_w - x - layout.CellHeight(row) : x) + layout.TextOffset(row);
         const int top = item.para_indent && !item.chapter_title
-            ? std::min(2 * cell, std::max(0, page_h - cell)) : 0;
+            ? std::min(style.indent_chars * cell, std::max(0, page_h - cell)) : 0;
         const auto spacing = MakeTextLineSpacing(font, item.text, page_h - top,
-            item.justify && !item.chapter_title, true);
+            item.justify && !item.chapter_title, true, style.letter_gap);
         if (!DrawUtf8Line(out, font, column_x, top, item.text.c_str(), item.chapter_title, nullptr, true, antialias,
-                          nullptr, 0, spacing.extra, spacing.gaps)) {
+                          nullptr, spacing, style.letter_gap)) {
             out.Reset(); return false;
         }
         if (rule_mode > 0) {
-            const int rule_x = column_x + cell + kReaderUnderlineGap + (item.chapter_title ? 1 : 0);
+            const int rule_x = column_x + cell + kReaderUnderlineGap + (item.chapter_title ? 1 : 0) + style.underline_offset;
             for (int y = 0; y < page_h; ++y) {
                 if (rule_mode != 2 || y % 10 < 6) PlotInk(out, rule_x, y);
             }
@@ -412,7 +417,7 @@ bool RasterPageVerticalTextToL8(const Page& page, const lv_font_t* font, int spa
         previous_title = item.chapter_title;
         any = true;
     }
-    FinishTextRaster(out, antialias);
+    FinishTextRaster(out, antialias, style.aa_strength);
     return any;
 }
 

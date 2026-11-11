@@ -194,7 +194,8 @@ void PollReaderPageWork() {
             progress_after_us = now + 100000;
             if (st.reader.session->PollLayoutProgress()) {
                 if (st.reader.read_chrome == BookUiState::ReadChrome::kToc) RequestRenderTocList();
-                else if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings) RequestSettingsSheetPaint();
+                else if (st.reader.read_chrome == BookUiState::ReadChrome::kSettings &&
+                    (st.settings.reader_tab == 0 || st.settings.reader_tab == 4)) RequestSettingsSheetPaint();
             }
         }
     }
@@ -234,7 +235,9 @@ void PollReaderPageWork() {
                 ReaderAutoTurnPageMoved();
                 pending_direction = moved;
             }
-            if (result->kind == Kind::kDelta && result->value == 1 && moved > 0) {
+            // 跨章游标可能持有独立分页文件，只有同章提交才能接续原预取链。
+            if (result->kind == Kind::kDelta && result->value == 1 && moved > 0 &&
+                old_position.chapter == position.chapter) {
                 prefetched[0] = std::move(prefetched[1]);
                 if (prefetched[0]) prefetched[0]->value = 1;
                 prefetch_attempted >>= 1;
@@ -764,6 +767,7 @@ void AsyncTapZonePickBack(void* /*user_data*/) {
 // 盖板 vk_prev：关闭触摸分区浮层。
 void AsyncTapZonesPanelClose(void* /*user_data*/) {
     TapZonesPanelClose();
+    RequestSettingsSheetPaint();
 }
 
 void ClearDetailCoverUiPtrs() {

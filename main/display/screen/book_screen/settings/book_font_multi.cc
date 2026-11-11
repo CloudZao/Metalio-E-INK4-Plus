@@ -1,6 +1,8 @@
 #pragma GCC optimize("O1")
 
 #include "book_screen/settings/book_font_multi.h"
+#include "book_screen/settings/book_ttf_panel.h"
+#include "display/font/epdfont.h"
 #include "book_screen/book_screen_priv.h"
 #include "book_screen/book_font_runtime.h"
 #include "book_screen/book_geom.h"
@@ -40,36 +42,6 @@
 #include "epd_refresh.h"
 #include "lv_adapter_display.h"
 
-bool ParseEfSizePx(const std::string& name, int* size_px) {
-    if (size_px == nullptr || name.size() < 8) {
-        return false;
-    }
-    const size_t dot = name.rfind('.');
-    if (dot == std::string::npos || strcasecmp(name.c_str() + dot, ".ef") != 0) {
-        return false;
-    }
-    const size_t u2 = name.rfind('_', dot);
-    if (u2 == std::string::npos || u2 == 0) {
-        return false;
-    }
-    const size_t u1 = name.rfind('_', u2 - 1);
-    if (u1 == std::string::npos) {
-        return false;
-    }
-    int sz = 0;
-    for (size_t i = u1 + 1; i < u2; ++i) {
-        if (name[i] < '0' || name[i] > '9') {
-            return false;
-        }
-        sz = sz * 10 + (name[i] - '0');
-    }
-    if (sz <= 0) {
-        return false;
-    }
-    *size_px = sz;
-    return true;
-}
-
 bool ReadFontEntryLess(const ReadFontEntry& a, const ReadFontEntry& b) {
     if (a.size_px != b.size_px) {
         return a.size_px < b.size_px;
@@ -90,39 +62,52 @@ std::unique_ptr<FontScanResult> s_font_scan_result; // UI 尚未接收的完整�
 lv_timer_t* s_font_scan_timer = nullptr; // UI 轮询，取消时删除
 
 bool CollectReadFonts(FontScanResult& result) {
-    DIR* dir = opendir(SD_PATH_FONTS);
-    if (dir == nullptr) return false;
-    std::unique_ptr<DIR, decltype(&closedir)> directory(dir, &closedir);
-    size_t visited = 0;
-    while (true) {
-        if (result.generation != s_font_scan_generation.load() || sd_access::IsQuiescing()) return false;
-        errno = 0;
-        dirent* ent = readdir(dir);
-        if (!ent) {
-            if (errno != 0) return false;
-            break;
+    for (const char* root : {SD_PATH_FONT_SRC, SD_PATH_FONTS}) {
+        DIR* dir = opendir(root);
+        if (dir == nullptr) {
+            if (errno == ENOENT) continue;
+            ESP_LOGE(TAG, "font directory open failed source=%d errno=%d", std::strcmp(root, SD_PATH_FONT_SRC) == 0 ? 1 : 0, errno);
+            return false;
         }
-        if ((++visited & 15u) == 0) vTaskDelay(1);
-        if (ent->d_name[0] == '.') {
-            continue;
+        std::unique_ptr<DIR, decltype(&closedir)> directory(dir, &closedir);
+        size_t visited = 0;
+        while (true) {
+            if (result.generation != s_font_scan_generation.load() || sd_access::IsQuiescing()) return false;
+            errno = 0;
+            dirent* ent = readdir(dir);
+            if (!ent) {
+                if (errno != 0) { ESP_LOGE(TAG, "font directory read failed errno=%d", errno); return false; }
+                break;
+            }
+            if ((++visited & 15u) == 0) vTaskDelay(1);
+            if (ent->d_name[0] == '.') {
+                continue;
+            }
+            const size_t n = std::strlen(ent->d_name);
+            if (n < 4 || !SdIsValidFileName(ent->d_name) ||
+                (std::strcmp(root, SD_PATH_FONTS) == 0 ? strcasecmp(ent->d_name + (n - 3), ".ef") != 0 : !IsTtfFileName(ent->d_name))) {
+                continue;
+            }
+            char name[SD_FILE_NAME_CAPACITY];
+            std::memcpy(name, ent->d_name, n + 1);
+            char full[SD_FILE_PATH_CAPACITY];
+            std::snprintf(full, sizeof(full), "%s/%s", root, name);
+            struct stat st_info {};
+            if (stat(full, &st_info) != 0) { ESP_LOGE(TAG, "font stat failed errno=%d", errno); return false; }
+            if (!S_ISREG(st_info.st_mode)) continue;
+            ReadFontEntry fe;
+            fe.file = name;
+            if (std::strcmp(root, SD_PATH_FONTS) == 0) {
+                FILE* fp = std::fopen(full, "rb");
+                epdfont_header_t header{};
+                const bool valid = fp && std::fread(&header, 1, sizeof(header), fp) == sizeof(header) &&
+                    std::memcmp(header.magic, EPDFONT_MAGIC, 8) == 0 && header.version == EPDFONT_VERSION && header.line_height > 0;
+                if (fp) std::fclose(fp);
+                if (!valid) { ESP_LOGW(TAG, "invalid bitmap font header; skipping entry"); continue; }
+                fe.size_px = header.line_height;
+            }
+            result.entries.push_back(std::move(fe));
         }
-        const size_t n = std::strlen(ent->d_name);
-        if (n < 4 || !SdIsValidFileName(ent->d_name) || strcasecmp(ent->d_name + (n - 3), ".ef") != 0) {
-            continue;
-        }
-        char name[SD_FILE_NAME_CAPACITY];
-        std::memcpy(name, ent->d_name, n + 1);
-        char full[SD_FILE_PATH_CAPACITY];
-        std::snprintf(full, sizeof(full), "%s/%s", SD_PATH_FONTS, name);
-        struct stat st_info {};
-        if (stat(full, &st_info) != 0) return false;
-        if (!S_ISREG(st_info.st_mode)) continue;
-        ReadFontEntry fe;
-        fe.file = name;
-        if (!ParseEfSizePx(fe.file, &fe.size_px)) {
-            fe.size_px = 0;
-        }
-        result.entries.push_back(std::move(fe));
     }
     std::sort(result.entries.begin(), result.entries.end(), ReadFontEntryLess);
     return true;
@@ -135,6 +120,7 @@ void ReadFontScanWorker(void* arg) {
         try {
             if (transaction) result->ok = CollectReadFonts(*result);
         } catch (const std::bad_alloc&) {
+            ESP_LOGE(TAG, "font scan allocation failed");
             result->ok = false;
         }
         std::lock_guard<std::mutex> lock(s_font_scan_mu);
@@ -181,7 +167,10 @@ void ReadFontScanTick(lv_timer_t*) {
         if (xTaskCreatePinnedToCoreWithCaps(ReadFontScanWorker, "book_font_scan", 4096, work,
                 tskIDLE_PRIORITY + 1, nullptr, 0, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) == pdPASS) return;
         s_font_scan_busy.store(false);
+        ESP_LOGE(TAG, "font scan task creation failed");
         delete work;
+    } else {
+        ESP_LOGE(TAG, "font scan allocation failed");
     }
     st.settings.font_scan_loading = false;
     st.settings.font_scan_failed = true;
@@ -213,6 +202,7 @@ void StartReadFontScan() {
     if (!s_font_scan_timer) {
         settings.font_scan_loading = false;
         settings.font_scan_failed = true;
+        ESP_LOGE(TAG, "font scan timer allocation failed");
     }
 }
 
@@ -265,9 +255,8 @@ void FormatFontListName(const std::string& file, char* out, size_t out_len) {
         return;
     }
     std::string stem = file;
-    if (stem.size() > 3 && strcasecmp(stem.c_str() + stem.size() - 3, ".ef") == 0) {
-        stem.resize(stem.size() - 3);
-    }
+    const size_t dot = stem.rfind('.');
+    if (dot != std::string::npos) stem.resize(dot);
     if (stem.empty()) {
         stem = file;
     }
@@ -361,18 +350,26 @@ void EnterFontMultiModeSelect(int idx) {
 bool DeleteReadFontFile(const std::string& file, std::string& err_out) {
     err_out.clear();
     if (!SdIsValidFileName(file.c_str()) || file.size() < 4 ||
-        strcasecmp(file.c_str() + file.size() - 3, ".ef") != 0) {
+        (!IsTtfFileName(file.c_str()) && strcasecmp(file.c_str() + file.size() - 3, ".ef") != 0)) {
         err_out = Lang::Strings::BOOK_FONT_NAME_INVALID;
         return false;
     }
-    char path[SD_FILE_PATH_CAPACITY];
-    std::snprintf(path, sizeof(path), "%s/%s", SD_PATH_FONTS, file.c_str());
-    if (unlink(path) != 0 && errno != ENOENT) {
+    sd_access::Transaction transaction;
+    if (!transaction) {
         err_out = Lang::Strings::BOOK_DELETE_FAILED;
         return false;
     }
-    unlink((std::string(path) + ".tmp").c_str());
-    ESP_LOGI(TAG, "deleted font %s", path);
+    char path[SD_FILE_PATH_CAPACITY];
+    std::snprintf(path, sizeof(path), "%s/%s", IsTtfFileName(file.c_str()) ? SD_PATH_FONT_SRC : SD_PATH_FONTS, file.c_str());
+    if (unlink(path) != 0 && errno != ENOENT) {
+        err_out = Lang::Strings::BOOK_DELETE_FAILED;
+        ESP_LOGE(TAG, "font unlink failed errno=%d", errno);
+        return false;
+    }
+    if (unlink((std::string(path) + ".tmp").c_str()) != 0 && errno != ENOENT) {
+        ESP_LOGW(TAG, "font temporary file cleanup failed errno=%d", errno);
+    }
+    ESP_LOGI(TAG, "font deleted kind=%s", IsTtfFileName(file.c_str()) ? "vector" : "bitmap");
     return true;
 }
 
@@ -423,6 +420,10 @@ void OnFontMultiRemove(lv_event_t* e) {
     // 只 Release 不重绑：正文 style 仍握已释放的 lv_font → InstrFetchProhibited。
     // 漫画中只保存字体选择，实际加载的字库可能与偏好不同，删除前统一解绑。
     if (touch_cur || ReaderPageImagesHint()) {
+        const auto fallback = std::find_if(st.settings.font_entries.begin(), st.settings.font_entries.end(),
+            [&](const ReadFontEntry& entry) { return !FontItemSelected(static_cast<int>(&entry - st.settings.font_entries.data())); });
+        const char* file = fallback == st.settings.font_entries.end() ? kBookReaderDefaultFontFile : fallback->file.c_str();
+        BookReaderPrefsSetFontFile(file, IsTtfFileName(file) ? 40 : 0);
         ReleaseBookFont();
         if (st.reader.session && st.reader.session->IsOpen()) {
             BindSessionLayoutPrefs(*st.reader.session);
@@ -441,8 +442,7 @@ void OnFontMultiRemove(lv_event_t* e) {
         }
         std::string err;
         if (!DeleteReadFontFile(st.settings.font_entries[static_cast<size_t>(i)].file, err)) {
-            ESP_LOGW(TAG, "font batch delete fail %s: %s",
-                     st.settings.font_entries[static_cast<size_t>(i)].file.c_str(), err.c_str());
+            ScreenShowToast(Lang::Strings::BOOK_DELETE_FAILED);
             continue;
         }
         st.settings.font_entries.erase(st.settings.font_entries.begin() + i);
@@ -463,7 +463,8 @@ void OnFontMultiRemove(lv_event_t* e) {
     if (BookReaderPrefsFontSize() == 0 && !still_has(BookReaderPrefsFontFile())) {
         // 还有剩余则切到第一项；全删则保持偏好名，EnsureBookFont 失败时 BookFont→fontpack
         if (!st.settings.font_entries.empty()) {
-            BookReaderPrefsSetFontFile(st.settings.font_entries.front().file.c_str());
+            const char* fallback = st.settings.font_entries.front().file.c_str();
+            BookReaderPrefsSetFontFile(fallback, IsTtfFileName(fallback) ? 40 : 0);
         }
         need_layout = true;
     } else if (touch_cur) {
@@ -536,10 +537,7 @@ void OnSheetFontSelect(lv_event_t* e) {
         return;
     }
     const char* file = st.settings.font_entries[static_cast<size_t>(idx)].file.c_str();
-    if (std::strcmp(BookReaderPrefsFontFile(), file) == 0) {
-        return;
-    }
-    BookReaderPrefsSetFontFile(file);
+    if (!PrepareBookFont(file, IsTtfFileName(file) ? std::max(20, BookReaderPrefsFontSize() > 0 ? BookReaderPrefsFontSize() : 40) : 0)) return;
     EnsureFontListPageShowsSelection();
     RequestSettingsSheetPaint();
     ScheduleLayoutApply(true);

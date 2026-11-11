@@ -209,6 +209,27 @@ bool BuildPageJson(const FlowList& page, ChatString& out_json) try {
                         cJSON_AddBoolToObject(img, "border", false);
                     }
                 };
+                if (!item.text.empty()) {
+                    const std::string sender_id = next_id();
+                    const std::string img_id = next_id();
+                    cJSON* row = MakeComp(id.c_str(), "Row");
+                    cJSON_AddNumberToObject(row, "gap", UiSx(8));
+                    cJSON_AddNumberToObject(row, "padding", 0);
+                    cJSON* row_children = cJSON_AddArrayToObject(row, "children");
+                    cJSON_AddItemToArray(row_children, cJSON_CreateString(sender_id.c_str()));
+                    cJSON_AddItemToArray(row_children, cJSON_CreateString(img_id.c_str()));
+                    cJSON_AddItemToArray(comps, row);
+                    add_child_to_parent(id);
+                    cJSON* sender = MakeComp(sender_id.c_str(), "Text");
+                    cJSON_AddStringToObject(sender, "text", item.text.c_str());
+                    cJSON_AddBoolToObject(sender, "bold", true);
+                    cJSON_AddBoolToObject(sender, "wrap", false);
+                    cJSON_AddItemToArray(comps, sender);
+                    cJSON* img = MakeComp(img_id.c_str(), "Image");
+                    fill_image(img);
+                    cJSON_AddItemToArray(comps, img);
+                    continue;
+                }
                 if (item.center) {
                     // 分页扁平化会丢掉嵌套 Column；居中需重建 wrap（gap/pad=0 避免撑高）
                     const std::string wrap_id = id;
@@ -257,7 +278,6 @@ bool BuildPageJson(const FlowList& page, ChatString& out_json) try {
     out_json.assign(raw);
     return true;
 } catch (const std::bad_alloc&) {
-    ESP_LOGW(TAG, "Page JSON skipped: PSRAM exhausted");
     return false;
 }
 
@@ -301,7 +321,7 @@ void Assistant_RenderCurrentPage() {
             Assistant_State().layout.page_index = 0;
         }
         if (!BuildPageJson(Assistant_State().layout.pages[static_cast<size_t>(Assistant_State().layout.page_index)], json)) {
-            ESP_LOGW(TAG, "BuildPageJson failed");
+            ESP_LOGE(TAG, "page render failed stage=json_build");
             return;
         }
     }
@@ -370,7 +390,7 @@ bool Assistant_PageRepeatStep(int page_delta) {
             return false;
         }
         Assistant_State().layout.page_index = next;
-        ESP_LOGI(TAG, "page-repeat %+d -> %d/%d", page_delta, Assistant_State().layout.page_index + 1, last + 1);
+        ESP_LOGD(TAG, "page-repeat %+d -> %d/%d", page_delta, Assistant_State().layout.page_index + 1, last + 1);
         ok = page_delta < 0 ? Assistant_State().layout.page_index > 0 : Assistant_State().layout.page_index < last;
     }
     Assistant_RequestRenderCurrentPage();

@@ -265,7 +265,7 @@ void OnTtfApply(lv_event_t* e) {
     auto& st = Book_State();
     if (st.ttf.ttf_mode != BookUiState::TtfMode::kConfirm || ttf_convert::Busy()) return;
     ClampTtfSizePx();
-    if (!PrepareBookTtfFont(st.ttf.ttf_pick.c_str(), st.ttf.ttf_size_px)) {
+    if (!PrepareBookFont(st.ttf.ttf_pick.c_str(), st.ttf.ttf_size_px)) {
         ScreenShowToast(Lang::Strings::TTF_APPLY_FAILED);
         return;
     }

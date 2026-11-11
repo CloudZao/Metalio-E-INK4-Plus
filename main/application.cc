@@ -21,6 +21,7 @@
 #include "screen_common.h"
 #include "fontpack_lvgl.h"
 #include "settings.h"
+#include "ntp_server.h"
 #include "standby_screen/standby_screen.h"
 #include "task_screen/task_screen.h"
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
@@ -28,6 +29,7 @@
 #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
 #include "boards/metalio-e-ink4-plus/display/metalio_touch.h"
 #include "boards/metalio-e-ink4-plus/bus/metalio_i2c1.h"
+#include "boards/common/sensor/pcf8563.h"
 #endif
 #include "ota_ignore.h"
 #include "reader/book_home_snapshot.h"
@@ -323,6 +325,10 @@ void Application::CheckChatActivation() {
     ESP_LOGI(TAG, "Chat activation check provider=%d pending=%d",
              static_cast<int>(chat_cloud::ActiveProvider()), chat_activation_pending_.load());
     esp_err_t err = ota.CheckChatConfiguration();
+    if (ota.HasServerTime()) {
+        has_network_time_.store(true);
+        board.OnNetworkTimeSynced();
+    }
     if (activation_paused_.load(std::memory_order_acquire)) {
         return;
     }
@@ -342,7 +348,13 @@ void Application::CheckChatActivation() {
         if (activation_paused_.load(std::memory_order_acquire)) {
             return;
         }
-        if (err == ESP_OK) { err = ota.CheckChatConfiguration(); }
+        if (err == ESP_OK) {
+            err = ota.CheckChatConfiguration();
+            if (ota.HasServerTime()) {
+                has_network_time_.store(true);
+                board.OnNetworkTimeSynced();
+            }
+        }
     }
     if (ota.HasActivationCode() || ota.HasActivationChallenge()) {
         ESP_LOGI(TAG, "Chat activation still pending; retry remains enabled");
@@ -373,7 +385,6 @@ void Application::CheckChatActivation() {
         std::lock_guard<std::mutex> lock(activation_state_mutex_);
         current_version_ = ota.GetCurrentVersion();
     }
-    if (ota.HasServerTime()) { board.OnNetworkTimeSynced(); }
     if (device_state_ == kDeviceStateIdle) { ApplyIdleStatusBar(); }
     if (boot_ready_.load(std::memory_order_acquire) && AssistantScreen::IsActive()) {
         StartXiaozhiVoice(AssistantScreen::IsPttHeld());
@@ -465,6 +476,7 @@ void Application::EnsureProtocolReady() {
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this, current_session]() {
                     if (!current_session()) return;
+                    if (chat_cloud::ActiveProvider() == chat_cloud::Provider::Baiwen && AssistantScreen::IsPttHeld()) return;
                     aborted_ = false;
                     if (chat_cloud::SpeechPlaybackEnabled() &&
                         (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening)) {
@@ -474,6 +486,10 @@ void Application::EnsureProtocolReady() {
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 auto after = [this, current_session]() {
                     if (!current_session()) return;
+                    if (!baiwen_image_id_.empty()) {
+                        baiwen_image_id_.clear();
+                        AssistantScreen::FinishPhotoQuestion();
+                    }
                     if (device_state_ == kDeviceStateSpeaking) {
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
@@ -505,6 +521,34 @@ void Application::EnsureProtocolReady() {
                 };
                 if (chat_cloud::IsYunxin()) { QueueYunxinTextBoundary(std::move(after)); }
                 else { Schedule(std::move(after)); }
+            }
+        } else if (strcmp(type->valuestring, "vision") == 0) {
+            const auto* state = cJSON_GetObjectItem(root, "state");
+            const auto* code = cJSON_GetObjectItem(root, "code");
+            if (cJSON_IsString(state) && (strcmp(state->valuestring, "error") == 0 ||
+                                          strcmp(state->valuestring, "missing_images") == 0)) {
+                const bool reupload = strcmp(state->valuestring, "missing_images") == 0 ||
+                    (cJSON_IsString(code) && (strcmp(code->valuestring, "VISION_CONTEXT_EXPIRED") == 0 ||
+                                             strcmp(code->valuestring, "VISION_CONTEXT_UNAVAILABLE") == 0));
+                const bool disabled = cJSON_IsString(code) && strcmp(code->valuestring, "VISION_DISABLED") == 0;
+                const char* safe_code = "unknown";
+                constexpr const char* codes[] = {
+                    "INVALID_IMAGE_REFS", "INVALID_TEXT", "VISION_DISABLED", "VISION_IMAGE_LIMIT",
+                    "VISION_MODEL_FAILED", "VISION_CONTEXT_EXPIRED", "VISION_CONTEXT_CHANGED",
+                    "VISION_CONTEXT_UNAVAILABLE", "VISION_FAILED"
+                };
+                if (cJSON_IsString(code)) {
+                    for (const auto* known : codes) {
+                        if (strcmp(code->valuestring, known) == 0) { safe_code = known; break; }
+                    }
+                } else if (strcmp(state->valuestring, "missing_images") == 0) {
+                    safe_code = "missing_images";
+                }
+                Schedule([this, current_session, reupload, disabled, safe_code]() {
+                    if (!current_session() || baiwen_image_id_.empty()) return;
+                    ESP_LOGW(TAG, "image question rejected stage=vision_response code=%s; photo retained", safe_code);
+                    AssistantScreen::PhotoQuestionError(baiwen_image_id_, reupload, disabled);
+                });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
             auto emotion = cJSON_GetObjectItem(root, "emotion");
@@ -963,6 +1007,9 @@ void Application::StopXiaozhiVoiceOnTask() {
     }
     ESP_LOGI(TAG, "Stopping Xiaozhi voice session");
     xiaozhi_voice_active_ = false;
+    ++baiwen_question_turn_;
+    baiwen_image_id_.clear();
+    baiwen_stop_waiting_ = false;
     // 覆盖音频释放到协议关闭之间的收尾阶段，待机任务不能在此期间进入浅睡。
     PowerNeedHold closing(PowerNeed::ForegroundNetwork);
 
@@ -1198,15 +1245,17 @@ bool Application::TrySdCardFirmwareUpgrade() {
 }
 
 void Application::ShowActivationCode(const std::string& code) {
+    bool changed = false;
     {
         std::lock_guard<std::mutex> lock(activation_state_mutex_);
+        changed = activation_code_ != code;
         activation_code_ = code;
     }
-    // 只在顶部状态栏显示验证码，不语音播报；日志里不打印 host 文本，避免任何云域名残留。
+    // 验证码只在屏幕显示，不写入日志。
     char status[64];
     std::snprintf(status, sizeof(status), Lang::Strings::ACTIVATION_CODE_FMT, code.c_str());
 
-    ESP_LOGW(TAG, "Activation [%s]", status);
+    if (changed) ESP_LOGI(TAG, "activation required; code shown on display");
     auto display = Board::GetInstance().GetDisplay();
     display->SetStatus(status);
 }
@@ -1506,9 +1555,95 @@ void Application::StopListening() {
     }
 
     if (device_state_ == kDeviceStateListening && protocol_) {
-        protocol_->SendStopListening();
-        SetDeviceState(kDeviceStateIdle);
+        if (chat_cloud::ActiveProvider() == chat_cloud::Provider::Baiwen) {
+            SetDeviceState(kDeviceStateIdle);
+            baiwen_stop_waiting_ = true;
+            if (!AssistantScreen::EndPhotoListening(baiwen_question_turn_)) {
+                baiwen_stop_waiting_ = false;
+                protocol_->SendAbortSpeaking(kAbortReasonNone);
+                ESP_LOGE(TAG, "photo listening stop dispatch failed");
+            }
+        } else {
+            protocol_->SendStopListening();
+            SetDeviceState(kDeviceStateIdle);
+        }
     }
+}
+
+bool Application::AskBaiwenImage() try {
+    const auto generation = voice_generation_.load();
+    return Schedule([this, generation]() {
+        if (generation != voice_generation_.load() || !AssistantScreen::IsActive() ||
+            StandbyScreen::IsActive() || chat_cloud::ActiveProvider() != chat_cloud::Provider::Baiwen) {
+            AssistantScreen::UploadPhotoQuestion(0, false);
+            return;
+        }
+        const auto turn = ++baiwen_question_turn_;
+        bool ready = false;
+        try {
+            ready = !RejectUnactivatedListening();
+            if (ready && (!xiaozhi_voice_active_ || !protocol_)) StartXiaozhiVoiceOnTask(false, generation);
+            ready = ready && xiaozhi_voice_active_ && protocol_ && generation == voice_generation_.load();
+            if (ready && !protocol_->IsAudioChannelOpened()) {
+                SetDeviceState(kDeviceStateConnecting);
+                ready = EnsureAssistantNetworkReady([this, generation]() {
+                    return generation == voice_generation_.load() && AssistantScreen::IsActive() && !StandbyScreen::IsActive();
+                }) && protocol_->OpenAudioChannel();
+            }
+            ready = ready && generation == voice_generation_.load();
+            if (ready && (baiwen_stop_waiting_ || !baiwen_image_id_.empty() || device_state_ == kDeviceStateSpeaking)) {
+                protocol_->SendAbortSpeaking(kAbortReasonNone);
+            }
+            baiwen_image_id_.clear();
+            baiwen_stop_waiting_ = ready;
+            if (generation == voice_generation_.load()) SetDeviceState(kDeviceStateIdle);
+        } catch (const std::bad_alloc&) {
+            baiwen_stop_waiting_ = false;
+            ESP_LOGE(TAG, "image question preparation failed stage=allocate");
+            ready = false;
+        }
+        if (!AssistantScreen::UploadPhotoQuestion(turn, ready)) {
+            baiwen_stop_waiting_ = false;
+        }
+    });
+} catch (const std::bad_alloc&) {
+    ESP_LOGE(TAG, "image question preparation failed stage=dispatch_allocate");
+    return false;
+}
+
+bool Application::CompleteBaiwenQuestion(uint32_t turn, bool recorded, const std::string& image_id,
+                                        std::function<void(ImageQuestionResult)> completed) try {
+    return Schedule([this, turn, recorded, image_id, completed = std::move(completed)]() {
+        auto result = ImageQuestionResult::Replaced;
+        if (turn == baiwen_question_turn_ && !AssistantScreen::IsPttHeld() &&
+            xiaozhi_voice_active_ && AssistantScreen::IsActive() && !StandbyScreen::IsActive() &&
+            chat_cloud::ActiveProvider() == chat_cloud::Provider::Baiwen) {
+            result = ImageQuestionResult::Failed;
+            try {
+                if (protocol_ && protocol_->IsAudioChannelOpened()) {
+                    if (image_id.empty()) {
+                        if (recorded) protocol_->SendStopListening();
+                        result = recorded ? ImageQuestionResult::Sent : ImageQuestionResult::Failed;
+                    } else {
+                        baiwen_image_id_ = image_id;
+                        if (protocol_->SendImageQuestion(image_id, recorded)) result = ImageQuestionResult::Sent;
+                        else baiwen_image_id_.clear();
+                    }
+                    if (result == ImageQuestionResult::Failed) protocol_->SendAbortSpeaking(kAbortReasonNone);
+                } else {
+                    ESP_LOGW(TAG, "question deferred stage=channel_closed");
+                }
+            } catch (const std::bad_alloc&) {
+                baiwen_image_id_.clear();
+                ESP_LOGE(TAG, "image question failed stage=allocate");
+            }
+            baiwen_stop_waiting_ = false;
+        }
+        if (completed) completed(result);
+    });
+} catch (const std::bad_alloc&) {
+    ESP_LOGE(TAG, "image question failed stage=dispatch_allocate");
+    return false;
 }
 
 void Application::AbortSpeakingToIdle() {
@@ -1568,6 +1703,8 @@ void Application::Start() {
 
     auto& board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
+    // 在本地启动阶段检测摄像头，不依赖联网或云端初始化。
+    board.GetCamera();
 
     /* Setup the display */
     auto display = board.GetDisplay();
@@ -1576,7 +1713,7 @@ void Application::Start() {
     fontpack_lv_ensure_ready();
     (void)fontpack_lv_font_ui();
 
-    // A2UI 图片会话缓存：有 SD 则用 /sdcard/metalio/e-ink/a2ui_cache（开机清空）；无卡则仅 HTTP
+    // A2UI 图片会话缓存：有 SD 则用 /sdcard/metalio/e-ink/temp/bwchat/images（开机清空）；无卡则仅 HTTP
     {
         esp_err_t cache_err = a2ui_img_cache_init();
         if (cache_err != ESP_OK) {
@@ -1584,7 +1721,7 @@ void Application::Start() {
         }
     }
 
-    // 百问AI 会话 JSON：有 SD 则 /sdcard/metalio/e-ink/chat_log（开机清空）；无卡不记历史
+    // 百问AI 会话 JSON：有 SD 则 /sdcard/metalio/e-ink/temp/bwchat/messages（开机清空）；无卡不记历史
     {
         esp_err_t chat_err = assistant_chat_store_init();
         if (chat_err != ESP_OK) {
@@ -1654,15 +1791,10 @@ void Application::Start() {
     if (boot_version_checked_) { CheckChatActivation(); }
     BootStandbyCheckpoint();
 
-    has_server_time_ = ota.HasServerTime();
+    if (boot_version_checked_) { SyncNetworkTime(); }
     {
         std::lock_guard<std::mutex> lock(activation_state_mutex_);
         current_version_ = ota.GetCurrentVersion();
-    }
-
-    // 联网且拿到 server_time 后，通知板级回写 RTC（如 PCF8563）
-    if (has_server_time_) {
-        board.OnNetworkTimeSynced();
     }
 
     // MCP 工具可提前注册；真正连协议在进入 AI 聊天页时
@@ -1794,6 +1926,23 @@ void Application::DispatchVoiceEvents() {
     }
 }
 
+void Application::SyncNetworkTime() {
+    auto& board = Board::GetInstance();
+    if (has_network_time_.load() || !board.IsNetworkReady() || board.IsWifiConfigMode()) return;
+
+    PowerNeedHold network(PowerNeed::ForegroundNetwork);
+    NtpServer::Result result;
+    if (!NtpServer::GetInstance().Sync("", result)) return;
+    has_network_time_.store(true);
+    #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
+    if (!Pcf8563::GetInstance().SyncSystemToRtc()) {
+        ESP_LOGW(TAG, "NTP time applied but RTC writeback failed");
+    }
+    #endif
+    board.OnNetworkTimeSynced();
+    ESP_LOGI(TAG, "NTP fallback synchronized");
+}
+
 void Application::DispatchClockTick() {
     const int tick = clock_ticks_.fetch_add(1) + 1;
     if (!status_work_queued_.exchange(true)) {
@@ -1881,7 +2030,7 @@ void Application::OnWakeWordDetected() {
         }
 
         auto wake_word = audio_service_.GetLastWakeWord();
-        ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+        ESP_LOGI(TAG, "wake word detected");
 #if CONFIG_SEND_WAKE_WORD_DATA
         // Encode and send the wake word data to the server
         while (auto packet = audio_service_.PopWakeWordPacket()) {
@@ -1963,7 +2112,18 @@ void Application::SetDeviceState(DeviceState state) {
             // Make sure the audio processor is running
             if (xiaozhi_voice_active_ && audio_running_ && protocol_ &&
                 !audio_service_.IsAudioProcessorRunning()) {
-                // Send the start listening command
+                if (chat_cloud::ActiveProvider() == chat_cloud::Provider::Baiwen) {
+                    if (baiwen_stop_waiting_ || !baiwen_image_id_.empty()) protocol_->SendAbortSpeaking(kAbortReasonNone);
+                    baiwen_image_id_.clear();
+                    baiwen_stop_waiting_ = false;
+                    ++baiwen_question_turn_;
+                    audio_service_.FlushQueues();
+                    if (!AssistantScreen::BeginPhotoListening(baiwen_question_turn_)) {
+                        SetDeviceState(kDeviceStateIdle);
+                        ESP_LOGE(TAG, "photo listening start dispatch failed");
+                        return;
+                    }
+                }
                 protocol_->SendStartListening(listening_mode_);
                 audio_service_.EnableVoiceProcessing(true);
                 audio_service_.EnableWakeWordDetection(false);
@@ -2131,7 +2291,7 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
             }
         }
 
-        ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+        ESP_LOGI(TAG, "wake word detected");
 #if CONFIG_USE_AFE_WAKE_WORD || CONFIG_USE_CUSTOM_WAKE_WORD
         // Encode and send the wake word data to the server
         while (auto packet = audio_service_.PopWakeWordPacket()) {

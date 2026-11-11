@@ -3,6 +3,7 @@
 #include "config.h"
 #include "sd_log_writer.h"
 #include "sd_access.h"
+#include "sd_data_layout.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -147,8 +148,12 @@ bool SdCardManager::Mount() {
     raw_owned_ = false;
     mounted_ = true;
     sdmmc_card_print_info(stdout, card_);
-    if (!SdEnsureAppLayout()) {
-        ESP_LOGW(TAG, "app layout under %s incomplete", SD_APP_ROOT);
+    static bool prepared = false;
+    if (!prepared) {
+        sd_data::Prepare();
+        prepared = true;
+    } else if (!SdEnsureAppLayout()) {
+        ESP_LOGW(TAG, "app layout incomplete");
     }
     SdLogWriter_OnSdMounted();
     ESP_LOGI(TAG, "SD ok at %s", kMountPoint);

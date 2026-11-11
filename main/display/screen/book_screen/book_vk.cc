@@ -181,7 +181,10 @@ bool BookScreen::OnVkKey(const char* key_name) {
         // 正文 vk_home 短按：设置/目录浮层→收起；长按经阅读退出清理回系统首页
         if (std::strcmp(key_name, "vk_home") == 0) {
             if (st.reader.read_chrome != BookUiState::ReadChrome::kReading) {
-                BookLvAsync(AsyncHideReadChrome);
+                if (st.settings.reader_tab == 3 && st.settings.reader_settings_page != 0 &&
+                    st.tap.tap_zone_ui == BookUiState::TapZoneUi::kClosed) {
+                    BookLvAsync([](void*) { SelectReadingSheetTab(3); });
+                } else BookLvAsync(AsyncHideReadChrome);
                 return true;
             }
             BookLvAsync(BackToDetailAsync);
@@ -213,6 +216,8 @@ bool BookScreen::OnVkKey(const char* key_name) {
                     BookLvAsync(AsyncTapZonePickBack);
                 } else if (st.tap.tap_zone_ui != BookUiState::TapZoneUi::kClosed) {
                     BookLvAsync(AsyncTapZonesPanelClose);
+                } else if (st.settings.reader_tab == 3 && st.settings.reader_settings_page != 0) {
+                    BookLvAsync([](void*) { SelectReadingSheetTab(3); });
                 } else if (st.settings.font_multi) {
                     ExitFontMultiMode(true);
                 } else {
@@ -385,7 +390,7 @@ void BookScreen::PollStandbyWork() {
     if (st.reader.session && st.reader.session->IsOpen()) {
         EnsureBookFont();
         if (st.reader.standby_detached) st.reader.session->ReattachSdHandles();
-        st.reader.session->SetFont(BookLayoutFont());
+        st.reader.session->SetFont(BookLayoutFont(), BookFont());
         st.reader.session->SetBackgroundPaused(false);
     }
     st.reader.standby_paused = st.reader.standby_detached = false;

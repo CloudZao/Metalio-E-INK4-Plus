@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lvgl.h"
+#include <string>
 
 // 百问 AI 页面：管理会话内容、PPT 状态和按键语义。
 class AssistantScreen {
@@ -25,6 +26,16 @@ public:
 
     /** @brief 同步当前 PTT/监听状态到状态栏 */
     static void SyncPttOverlay();
+    /** @brief 在 LVGL 任务中为本轮录音固定待发送照片 */
+    static bool BeginPhotoListening(uint32_t turn);
+    /** @brief 松手后上传本轮照片，再通知语音任务结束录音 */
+    static bool EndPhotoListening(uint32_t turn);
+    /** @brief 将单图提问的连接结果交给页面上传流程 */
+    static bool UploadPhotoQuestion(uint32_t turn, bool ready);
+    /** @brief 显示图片提问错误，并恢复当前照片供重试 */
+    static void PhotoQuestionError(const std::string& image_id, bool reupload, bool disabled);
+    /** @brief 图片回答结束后释放重试用原图 */
+    static void FinishPhotoQuestion();
 
     /** @brief 异步打开页面；已在前台则忽略 */
     static void RequestOpen();

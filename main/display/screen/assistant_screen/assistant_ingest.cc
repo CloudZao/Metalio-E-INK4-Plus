@@ -219,7 +219,7 @@ void WalkToFlow(cJSON* comps, cJSON* comp, FlowList& out, bool parent_center = f
         item.spacer_h = cJSON_IsNumber(h) ? h->valueint : kDefaultSpacerH;
         out.push_back(std::move(item));
     } else {
-        ESP_LOGW(TAG, "skip unknown component: %s", type);
+        ESP_LOGW(TAG, "unsupported component skipped");
     }
 }
 
@@ -245,6 +245,15 @@ IngestResult Assistant_IngestA2uiMessage(cJSON* msg, FlowList& out) {
                    FindComponentById(const_cast<cJSON*>(comps), root->valuestring), out);
     } else if (cJSON_GetArraySize(comps) > 0) {
         WalkToFlow(const_cast<cJSON*>(comps), cJSON_GetArrayItem(comps, 0), out);
+    }
+    // 本地照片旧记录使用 Column，新记录使用 Row，统一归入单个图片行块。
+    if (out.size() == before + 2 && out[before].kind == FlowKind::RichText &&
+        out[before].spans.size() == 1 && out[before].spans[0].bold &&
+        out.back().kind == FlowKind::Image &&
+        out.back().image_url.find("mem://assistant/upload_") == 0) {
+        out.back().text = std::move(out[before].spans[0].text);
+        out[before] = std::move(out.back());
+        out.pop_back();
     }
     return out.size() > before ? IngestResult::kAppended : IngestResult::kNone;
 }
@@ -307,7 +316,7 @@ void AssistantScreen::FinishYunxinSpeech() {
     auto& stream = Assistant_State().stream;
     if (stream.yunxin_text.empty()) { return; }
     FlushYunxinSpeech();
-    ESP_LOGI(TAG, "<< %s", stream.yunxin_text.c_str());
+    ESP_LOGD(TAG, "speech finalized bytes=%u", static_cast<unsigned>(stream.yunxin_text.size()));
     // Only final text is serialized and saved; intermediate snapshots stay plain text.
     cJSON* root = cJSON_CreateObject();
     auto* body = cJSON_AddObjectToObject(root, "updateComponents");
@@ -334,9 +343,10 @@ void AssistantScreen::FinishYunxinSpeech() {
 }
 
 void AssistantScreen::AddMessage(const char* role, const char* content) {
-    ESP_LOGD(TAG, "AddMessage role=%s content=%s",
-             role != nullptr ? role : "(null)",
-             content != nullptr ? content : "(null)");
+    ESP_LOGD(TAG, "AddMessage user=%d assistant=%d bytes=%u",
+             role != nullptr && std::strcmp(role, "user") == 0,
+             role != nullptr && std::strcmp(role, "assistant") == 0,
+             content != nullptr ? static_cast<unsigned>(std::strlen(content)) : 0);
     if (!IsActive()) {
         return;
     }

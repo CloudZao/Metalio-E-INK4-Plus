@@ -23,6 +23,27 @@
 
 // X(name, zh, en)
 #define LANG_STRING_LIST(X)                                                                                    \
+    X(BOOK_FONT_DECREASE, "减小字号", "Smaller text") \
+    X(BOOK_FONT_INCREASE, "增加字号", "Larger text") \
+    X(BOOK_TURN_INTERVAL, "间隔", "Interval") \
+    X(BOOK_DEFAULT, "默认", "Default") \
+    X(BOOK_DECREASE, "减小", "Decrease") \
+    X(BOOK_INCREASE, "增加", "Increase") \
+    X(BOOK_LETTER_GAP, "字间距", "Letter spacing") \
+    X(BOOK_INDENT, "首行缩进", "First-line indent") \
+    X(BOOK_AA_STRENGTH, "强度", "Strength") \
+    X(BOOK_AA_LOW, "弱", "Low") \
+    X(BOOK_AA_MEDIUM, "中", "Medium") \
+    X(BOOK_AA_HIGH, "强", "High") \
+    X(BOOK_FOOTER_LAYOUT, "信息布局", "Information layout") \
+    X(BOOK_FOOTER_BOTTOM, "全部底部", "All at bottom") \
+    X(BOOK_UNDERLINE_POSITION, "上下位置", "Line position") \
+    X(BOOK_UNDERLINE_UP, "上移 2px", "Up 2px") \
+    X(BOOK_UNDERLINE_CENTER, "恢复居中", "Reset") \
+    X(BOOK_UNDERLINE_DOWN, "下移 2px", "Down 2px") \
+    X(BOOK_INDENT_ONE, "1字", "1 char") \
+    X(BOOK_INDENT_TWO, "2字", "2 chars") \
+    X(BOOK_INDENT_THREE, "3字", "3 chars") \
     X(SETTINGS_TEST_FRONTLIGHT_START, "点击开启", "Tap to turn on") \
     X(DEVICE_ACTIVATE_FIRST, "请先前往CloudZao app绑定设备", "Please link your device in the CloudZao app first") \
     X(XIAOZHI_ACTIVATE_FIRST, "请先前往xiaozhi.me绑定设备", "Please link your device at xiaozhi.me first") \
@@ -46,7 +67,19 @@
     X(TTF_CANCELLED, "转换已取消", "Conversion cancelled") \
     X(TTF_GLYPH_MEMORY, "字形缓存内存不足，请减小字号", "Not enough memory for glyphs. Reduce the font size.") \
     X(TTF_CANCELLED_OR_NO_SD, "转换已取消或 SD 卡不可用", "Conversion cancelled or SD card unavailable") \
-    X(ASSISTANT_USER_PREFIX, "用户：", "You: ") \
+    X(ASSISTANT_PHOTO_FAILED, "无法拍照，请检查摄像头后重试", "Cannot capture. Check the camera and retry.") \
+    X(ASSISTANT_PHOTO_BUSY, "拍照、录音或上传正在进行，请稍后重试", "Capture, recording or upload in progress. Retry shortly.") \
+    X(ASSISTANT_PHOTO_CLOSE, "请先关闭图片预览", "Close the image preview first.") \
+    X(ASSISTANT_PHOTO_UPLOADING, "正在上传图片…", "Uploading image…") \
+    X(ASSISTANT_PHOTO_ANALYSIS_FAILED, "图片分析失败，照片已保留，请重试", "Image analysis failed. Photo kept. Retry.") \
+    X(ASSISTANT_PHOTO_DISABLED, "识图服务未开启，照片已保留", "Image service is disabled. Photo kept.") \
+    X(ASSISTANT_PHOTO_SENT, "图片提问已发送", "Image question sent.") \
+    X(ASSISTANT_PHOTO_QUESTION_FAILED, "提问未发送，照片已保留，请重试", "Question not sent. Photo kept. Retry.") \
+    X(ASSISTANT_PHOTO_HISTORY_FAILED, "图片已上传，未能加入聊天记录，请重试", "Image uploaded but not added to chat. Retry.") \
+    X(ASSISTANT_PHOTO_UPLOAD_FAILED, "图片上传失败，照片已保留，请重试", "Upload failed. Photo kept. Retry.") \
+    X(ASSISTANT_RELEASE_SEND, "松开发送", "Release to send") \
+    X(ASSISTANT_SEND, "发送", "Send") \
+    X(ASSISTANT_USER_PREFIX, "用户：", "User: ") \
     X(ASSISTANT_CONNECTING_HOLD, "正在连接语音服务，请继续按住", "Connecting to voice service. Keep holding.") \
     X(BOOK_IMPORT_TTF, "导入 TTF", "Import TTF") \
     X(BOOK_ORIENT_AUTO, "自动", "Auto") \
@@ -233,7 +266,6 @@
     X(WB_TASK_MEMORY, "语音或消息任务内存不足，请稍后再试", "Not enough memory for voice or messages. Try again shortly.") \
     X(WB_HOLD_TO_SPEAK_HINT, "请持续按住，看到倾听波形后再说话（至少半秒）", "Keep holding. Speak after the listening waveform appears (at least half a second).") \
     X(WB_RECORDING_FINISH_BUSY, "录音收尾任务暂忙，请稍后重试", "Recording is finishing. Try again shortly.") \
-    X(WB_MIC_READ_FAILED, "麦克风读取失败，请重新进入应用", "Cannot read microphone. Reopen the app.") \
     X(WB_MINUTE_SUFFIX, " 分钟", " min") \
     X(WB_SECOND_SUFFIX, " 秒", " sec") \
     X(WB_CONFIRM_PHONE, "请在手机上确认绑定", "Confirm the device link on your phone.") \
@@ -315,8 +347,9 @@
     X(WB_VOICE_FINAL_TIMEOUT, "等待最终识别结果超时，请重新说话", "Final recognition result timed out. Speak again.") \
     X(WB_VOICE_OVERFLOW, "实时音频待发送缓冲已满，请检查网络后重试", "Pending audio buffer is full. Check the network and retry.") \
     X(WB_VOICE_BUFFER_UNAVAILABLE, "实时录音缓冲不可用，请重新进入应用", "Live recording buffer is unavailable. Reopen the app.") \
-    X(WB_VOICE_PCM_INVALID, "录音数据无效，请重新进入应用", "Recording data is invalid. Reopen the app.") \
+    X(WB_VOICE_PACKET_INVALID, "录音数据无效，请重新进入应用", "Recording data is invalid. Reopen the app.") \
     X(WB_VOICE_SEND_FAILED, "实时音频发送失败，请重新说话", "Live audio send failed. Speak again.") \
+    X(WB_AUDIO_CAPTURE_FAILED, "语音采集或编码失败，请重新说话", "Audio capture or encoding failed. Speak again.") \
     X(WB_VOICE_TOO_SHORT, "录音不足半秒，请按住并说话更久", "Recording is shorter than half a second. Hold and speak longer.") \
     X(WB_VOICE_INCOMPLETE, "录音发送字节数不匹配，请重新说话", "Sent audio byte count does not match the recording. Speak again.") \
     X(WB_VOICE_FINISH_FAILED, "语音结束确认发送失败", "Cannot send end-of-voice confirmation") \
@@ -1013,6 +1046,7 @@
     X(BOOK_TAP_ZONES_TITLE, "触摸分区", "Tap zones") \
     X(BOOK_TOC, "目录", "Contents") \
     X(BOOK_TOC_BUILDING, "目录识别中…", "Finding contents...") \
+    X(BOOK_TOC_HOME, "首页", "Home") \
     X(BOOK_TOC_EMPTY, "暂无目录", "No contents") \
     X(BOOK_TOC_PAGE_FMT, "目录 %d/%d", "Contents %d/%d") \
     X(BOOK_TODAY_DURATION, "今日时长", "Today") \
@@ -1161,7 +1195,7 @@
     X(WALLPAPER_DISPLAY_MODE, "显示方式", "Display mode") \
     X(WALLPAPER_DECODE_FAIL_CODE, "解码失败（%u）", "Decode failed (%u)") \
     X(WALLPAPER_MODE_FULLSCREEN, "全屏壁纸", "Fullscreen wallpaper") \
-    X(WALLPAPER_MODE_OVERLAY, "叠加当前界面", "Overlay current screen") \
+    X(WALLPAPER_MODE_OVERLAY, "透明壁纸", "Transparent wallpaper") \
     X(WALLPAPER_CLEAR_SELECTION, "取消设置", "Clear selection") \
     X(WALLPAPER_SHUTDOWN_ON, "已设为关机", "Power-off selected") \
     X(WALLPAPER_STANDBY_ON, "已设为待机", "Standby selected")
@@ -1191,6 +1225,11 @@ static const char* const kEn[kStringCount] = {
 };
 
 const char* CODE = LANG_DEFAULT_CODE;
+
+const char* BookHomeLabel(bool chinese) {
+    const size_t index = static_cast<size_t>(LangStringId::BOOK_TOC_HOME);
+    return chinese ? kZh[index] : kEn[index];
+}
 
 namespace Strings {
 #define LANG_DECL(name, zh, en) const char* name = "";

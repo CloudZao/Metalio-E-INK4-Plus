@@ -404,14 +404,17 @@ void RenderTocList() {
     const lv_font_t* row_font = Book_ItemFont();
     for (int i = begin; i < end; ++i) {
         std::string title;
+        lv_coord_t indent = 0;
         int page_1based = -1;
         if (const reader::TocEntry* ent = st.reader.session->TocAt(i)) {
             title = ent->title;
+            indent = std::min<uint16_t>(ent->depth, 3) * 12;
             if (toc_has_page) {
                 page_1based = ent->first_page + 1;
             }
         }
-        if (title.empty() || title == "未知" || title == "未命名") {
+        if (title.empty() || (st.reader.session->Info().format != reader::BookFormat::kEpub &&
+                              (title == "未知" || title == "未命名"))) {
             char b[48];
             std::snprintf(b, sizeof(b), st.reader.session->IsPageImagesMode() ? Lang::Strings::BOOK_PAGE_FMT : Lang::Strings::BOOK_CHAPTER_FMT, i + 1);
             title = b;
@@ -429,7 +432,7 @@ void RenderTocList() {
         }
         const lv_coord_t page_w = Book_MeasureTextWidth(row_font, page_buf);
         const lv_coord_t title_budget =
-            std::max<lv_coord_t>(24, list_w - page_w - (page_w > 0 ? 16 : 0));
+            std::max<lv_coord_t>(24, list_w - indent - page_w - (page_w > 0 ? 16 : 0));
         const std::string display_title = TruncateTextToWidth(title, row_font, title_budget);
 
         lv_obj_t* row = lv_obj_create(list);
@@ -467,7 +470,7 @@ void RenderTocList() {
         lv_obj_set_size(lbl, title_budget, line_h);
         lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
         lv_label_set_text(lbl, display_title.c_str());
-        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, indent, 0);
         lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
 
         if (page_buf[0] != '\0') {

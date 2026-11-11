@@ -294,7 +294,7 @@ EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr) {
     lv_obj_t* rule = lv_obj_create(out.bar);
     lv_obj_remove_style_all(rule);
     lv_obj_add_flag(rule, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_size(rule, LV_HOR_RES - kStatusPadH * 2, kStatusRuleH);
+    lv_obj_set_size(rule, lv_pct(100), kStatusRuleH);
     lv_obj_set_style_bg_color(rule, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
     // content 坐标贴外底：越过 pad_bottom

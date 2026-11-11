@@ -224,14 +224,14 @@ esp_err_t a2ui_img_cache_init(void)
     }
 
     if (!ensure_cache_tree()) {
-        ESP_LOGW(TAG, "cannot create %s — cache disabled", A2UI_IMG_CACHE_BASE_PATH);
+        ESP_LOGW(TAG, "image cache directory unavailable; using RAM only");
         ret = ESP_FAIL;
         goto out;
     }
 
     wipe_all_unlocked(); /* boot: clear previous session */
 
-    ESP_LOGI(TAG, "ready path=%s (boot wipe)", A2UI_IMG_CACHE_BASE_PATH);
+    ESP_LOGI(TAG, "image cache ready (boot wipe)");
 
     s_ready = true;
     ret = ESP_OK;
@@ -278,7 +278,7 @@ static esp_err_t load_unlocked(const char *url, uint8_t **out_buf, size_t *out_l
         hdr.url_fnv != hash || hdr.payload_len == 0 || hdr.payload_len > A2UI_IMG_CACHE_MAX_BLOB) {
         fclose(f);
         unlink(path);
-        ESP_LOGW(TAG, "reject corrupt %s", path);
+        ESP_LOGW(TAG, "corrupt image cache entry rejected");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -301,7 +301,7 @@ static esp_err_t load_unlocked(const char *url, uint8_t **out_buf, size_t *out_l
 
     *out_buf = buf;
     *out_len = hdr.payload_len;
-    ESP_LOGI(TAG, "HIT hash=%08lx len=%u", (unsigned long)hash, (unsigned)hdr.payload_len);
+    ESP_LOGD(TAG, "HIT hash=%08lx len=%u", (unsigned long)hash, (unsigned)hdr.payload_len);
     return ESP_OK;
 }
 
@@ -390,7 +390,7 @@ static esp_err_t store_unlocked(const char *url, const uint8_t *data, size_t len
     char tmp_path[A2UI_IMG_CACHE_PATH_MAX];
     make_paths(hash, final_path, sizeof(final_path), tmp_path, sizeof(tmp_path));
 
-    ESP_LOGI(TAG, "store begin hash=%08lx len=%u", (unsigned long)hash, (unsigned)len);
+    ESP_LOGD(TAG, "store begin hash=%08lx len=%u", (unsigned long)hash, (unsigned)len);
 
     if (!can_fit_unlocked(final_path, len)) {
         wipe_all_unlocked();
@@ -406,11 +406,13 @@ static esp_err_t store_unlocked(const char *url, const uint8_t *data, size_t len
     }
 
     if (err == ESP_OK) {
-        int files = 0;
-        size_t used = 0;
-        scan_cache_dir(&files, &used);
-        ESP_LOGI(TAG, "STORE hash=%08lx len=%u files=%d used=%u", (unsigned long)hash, (unsigned)len,
-                 files, (unsigned)used);
+        if (ESP_LOG_ENABLED(ESP_LOG_DEBUG) && esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+            int files = 0;
+            size_t used = 0;
+            scan_cache_dir(&files, &used);
+            ESP_LOGD(TAG, "STORE hash=%08lx len=%u files=%d used=%u", (unsigned long)hash, (unsigned)len,
+                     files, (unsigned)used);
+        }
         return ESP_OK;
     }
 

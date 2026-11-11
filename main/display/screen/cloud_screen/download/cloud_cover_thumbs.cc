@@ -41,11 +41,11 @@ static bool CoverHttpCancelled(void*) {
     return s_dl_owns_http.load(std::memory_order_acquire) || s_thumb_abort.load(std::memory_order_acquire);
 }
 
-std::shared_ptr<reader::HttpTempFile> Cloud_DownloadCover(const char* url) {
+std::shared_ptr<reader::HttpTempFile> Cloud_DownloadCover(const char* url, reader::HttpCacheApp app) {
     if (CoverHttpCancelled(nullptr)) return {};
     if (!Board::GetInstance().EnsureNetworkReady()) return {};
     std::string error;
-    auto cache = reader::DownloadHttpToCache(url, error, nullptr, CoverHttpCancelled);
+    auto cache = reader::DownloadHttpToCache(url, error, nullptr, CoverHttpCancelled, nullptr, app);
     if (!cache && !CoverHttpCancelled(nullptr)) ESP_LOGW(TAG, "cover download failed: %s", error.c_str());
     return cache;
 }

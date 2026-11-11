@@ -447,7 +447,7 @@ void Assistant_RebuildPages() try {
     const lv_coord_t vw =
         Assistant_State().layout.viewport_w > 0 ? Assistant_State().layout.viewport_w : (LV_HOR_RES - kContentPadX * 2);
     const lv_coord_t vh = Assistant_State().layout.viewport_h > 0 ? Assistant_State().layout.viewport_h
-                                                                  : (LV_VER_RES - kFooterH - kContentPadY * 2);
+                                                                  : (LV_VER_RES - kFooterH - kPageIndicatorH - kContentPadY * 2);
 
     FlowList cur;
     lv_coord_t y = 0;
@@ -475,7 +475,7 @@ int Assistant_RebuildYunxinTextTail() try {
     auto& st = Assistant_State();
     auto& cache = yunxin_cache;
     const lv_coord_t vw = st.layout.viewport_w > 0 ? st.layout.viewport_w : (LV_HOR_RES - kContentPadX * 2);
-    const lv_coord_t vh = st.layout.viewport_h > 0 ? st.layout.viewport_h : (LV_VER_RES - kFooterH - kContentPadY * 2);
+    const lv_coord_t vh = st.layout.viewport_h > 0 ? st.layout.viewport_h : (LV_VER_RES - kFooterH - kPageIndicatorH - kContentPadY * 2);
     if (!cache.valid || st.layout.flow.empty() || cache.flow_index + 1 != st.layout.flow.size() ||
         cache.font != Assistant_UiFont() || cache.width != vw || cache.height != vh ||
         cache.line_height != Assistant_FontLineHeight(Assistant_UiFont()) ||
@@ -583,7 +583,7 @@ int Assistant_RebuildPagesTail() try {
     const lv_coord_t vw =
         Assistant_State().layout.viewport_w > 0 ? Assistant_State().layout.viewport_w : (LV_HOR_RES - kContentPadX * 2);
     const lv_coord_t vh = Assistant_State().layout.viewport_h > 0 ? Assistant_State().layout.viewport_h
-                                                                  : (LV_VER_RES - kFooterH - kContentPadY * 2);
+                                                                  : (LV_VER_RES - kFooterH - kPageIndicatorH - kContentPadY * 2);
 
     FlowList cur;
     lv_coord_t y = 0;

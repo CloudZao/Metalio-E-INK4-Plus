@@ -171,7 +171,7 @@ void SetSheetBtnEnabled(lv_obj_t* btn, bool enabled) {
         lv_obj_set_style_opa(btn, LV_OPA_COVER, 0);
     } else {
         lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_opa(btn, LV_OPA_40, 0);
+        lv_obj_set_style_opa(btn, LV_OPA_COVER, 0);
     }
 }
 
@@ -188,143 +188,6 @@ void UpdateSheetBoundTip(lv_obj_t* tip, bool can_dec, bool can_inc) {
     } else {
         lv_obj_add_flag(tip, LV_OBJ_FLAG_HIDDEN);
     }
-}
-
-void RefreshSettingsSheetAdj() {
-    auto& st = Book_State();
-    if (!SettingsSheetWidgetsReady()) {
-        return;
-    }
-    const int margin_i = BookReaderPrefsMarginPreset();
-    const int gap_i = BookReaderPrefsSpacingPreset();
-    const bool margin_dec = margin_i > 0;
-    const bool margin_inc = margin_i + 1 < kBookReaderMarginPresetCount;
-    const bool gap_dec = gap_i > 0;
-    const bool gap_inc = gap_i + 1 < kBookReaderSpacingPresetCount;
-
-    lv_label_set_text(st.settings.sheet_margin_value, BookReaderPrefsMarginLabel(margin_i));
-    if (st.settings.sheet_gap_value != nullptr && lv_obj_is_valid(st.settings.sheet_gap_value)) {
-        lv_label_set_text(st.settings.sheet_gap_value, BookReaderPrefsSpacingLabel(gap_i));
-    }
-    SetSheetBtnEnabled(st.settings.sheet_margin_dec, margin_dec);
-    SetSheetBtnEnabled(st.settings.sheet_margin_inc, margin_inc);
-    SetSheetBtnEnabled(st.settings.sheet_gap_dec, gap_dec);
-    SetSheetBtnEnabled(st.settings.sheet_gap_inc, gap_inc);
-    UpdateSheetBoundTip(st.settings.sheet_margin_bound, margin_dec, margin_inc);
-    UpdateSheetBoundTip(st.settings.sheet_gap_bound, gap_dec, gap_inc);
-}
-
-void RefreshSettingsSheetFontList() {
-    auto& st = Book_State();
-    if (st.settings.reader_sheet_body != nullptr && st.settings.reader_tab == 1) {
-        RequestSettingsSheetPaint();
-        return;
-    }
-    if (!SettingsSheetWidgetsReady()) {
-        return;
-    }
-    ClampFontListPage();
-    SyncFontSelectedSize();
-    const int font_i = CurrentFontIndex();
-    const int font_n = static_cast<int>(st.settings.font_entries.size());
-    const int font_pages = FontListPageCount();
-    const int font_page_start = st.settings.font_list_page * kFontListPageSize;
-
-    for (int i = 0; i < kFontListPageSize; ++i) {
-        auto& fr = st.settings.sheet_font_rows[i];
-        if (fr.row == nullptr || !lv_obj_is_valid(fr.row)) {
-            continue;
-        }
-        const int idx = font_page_start + i;
-        if (idx >= font_n) {
-            lv_obj_clear_flag(fr.row, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_border_width(fr.row, 0, 0);
-            lv_obj_set_style_border_side(fr.row, LV_BORDER_SIDE_NONE, 0);
-            lv_obj_set_user_data(fr.row, reinterpret_cast<void*>(static_cast<intptr_t>(-1)));
-            if (fr.name != nullptr && lv_obj_is_valid(fr.name)) {
-                lv_label_set_text(fr.name, "");
-            }
-            if (fr.px != nullptr && lv_obj_is_valid(fr.px)) {
-                lv_label_set_text(fr.px, "");
-            }
-            if (fr.check != nullptr && lv_obj_is_valid(fr.check)) {
-                lv_obj_add_flag(fr.check, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_clean(fr.check);
-            }
-            continue;
-        }
-
-        const ReadFontEntry& fe = st.settings.font_entries[static_cast<size_t>(idx)];
-        const bool on = (!st.settings.font_multi && idx == font_i);
-        const bool next_on = (!st.settings.font_multi) && (i + 1 < kFontListPageSize) &&
-                             (font_page_start + i + 1 == font_i) &&
-                             (font_page_start + i + 1 < font_n);
-        if (on) {
-            lv_obj_set_style_border_width(fr.row, kTocLineCur, 0);
-            lv_obj_set_style_border_side(
-                fr.row, static_cast<lv_border_side_t>(LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM),
-                0);
-        } else if (next_on) {
-            lv_obj_set_style_border_width(fr.row, 0, 0);
-            lv_obj_set_style_border_side(fr.row, LV_BORDER_SIDE_NONE, 0);
-        } else if (i + 1 < kFontListPageSize) {
-            lv_obj_set_style_border_width(fr.row, kTocLineThin, 0);
-            lv_obj_set_style_border_side(fr.row, LV_BORDER_SIDE_BOTTOM, 0);
-        } else {
-            lv_obj_set_style_border_width(fr.row, 0, 0);
-            lv_obj_set_style_border_side(fr.row, LV_BORDER_SIDE_NONE, 0);
-        }
-        lv_obj_set_style_border_color(fr.row, lv_color_black(), 0);
-        lv_obj_set_style_border_opa(fr.row, LV_OPA_COVER, 0);
-
-        lv_obj_add_flag(fr.row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_user_data(fr.row, reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
-
-        char name_buf[SD_FILE_NAME_CAPACITY];
-        FormatFontListName(fe.file, name_buf, sizeof(name_buf));
-        if (fr.name != nullptr && lv_obj_is_valid(fr.name)) {
-            lv_label_set_text(fr.name, name_buf);
-            lv_obj_set_style_text_font(fr.name, on ? Book_ListFont() : Book_ItemFont(), 0);
-        }
-        char px_buf[16];
-        if (fe.size_px > 0) {
-            std::snprintf(px_buf, sizeof(px_buf), "%dpx", fe.size_px);
-        } else {
-            std::snprintf(px_buf, sizeof(px_buf), "--");
-        }
-        if (fr.px != nullptr && lv_obj_is_valid(fr.px)) {
-            lv_label_set_text(fr.px, px_buf);
-            lv_obj_set_style_text_opa(fr.px, on ? LV_OPA_COVER : LV_OPA_70, 0);
-        }
-        if (fr.check != nullptr && lv_obj_is_valid(fr.check)) {
-            if (st.settings.font_multi) {
-                lv_obj_clear_flag(fr.check, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_clean(fr.check);
-                if (FontItemSelected(idx)) {
-                    lv_obj_t* mark = lv_label_create(fr.check);
-                    lv_label_set_text(mark, "√");
-                    lv_obj_set_style_text_font(mark, Book_ItemFont(), 0);
-                    lv_obj_set_style_text_color(mark, lv_color_black(), 0);
-                    lv_obj_center(mark);
-                    lv_obj_clear_flag(mark, LV_OBJ_FLAG_CLICKABLE);
-                }
-            } else {
-                lv_obj_add_flag(fr.check, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_clean(fr.check);
-            }
-        }
-    }
-
-    const bool can_prev = st.settings.font_list_page > 0;
-    const bool can_next = st.settings.font_list_page + 1 < font_pages;
-    SetSheetBtnEnabled(st.settings.sheet_font_page_prev, can_prev);
-    SetSheetBtnEnabled(st.settings.sheet_font_page_next, can_next);
-    if (st.settings.sheet_font_page_lab != nullptr && lv_obj_is_valid(st.settings.sheet_font_page_lab)) {
-        char page_meta[24];
-        std::snprintf(page_meta, sizeof(page_meta), "%d / %d", st.settings.font_list_page + 1, font_pages);
-        lv_label_set_text(st.settings.sheet_font_page_lab, page_meta);
-    }
-    RefreshFontMultiFooter();
 }
 
 void RefreshSettingsSheet() {
@@ -391,5 +254,6 @@ void OpenReadFontSettings() {
 void OpenReadSettings() {
     ResetBookmarkSelection();
     Book_State().settings.reader_tab = 3;
+    Book_State().settings.reader_settings_page = 0;
     ShowReadSettingsSheet(false);
 }

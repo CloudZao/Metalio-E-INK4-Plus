@@ -12,6 +12,8 @@ typedef struct {
     int y;     // 逻辑竖屏 Y
     int raw_x; // 芯片原始 X
     int raw_y; // 芯片原始 Y
+    int start_x; // 本轮按下起点的逻辑竖屏 X
+    int start_y; // 本轮按下起点的逻辑竖屏 Y
 } metalio_touch_point_t;
 
 typedef struct {
@@ -41,7 +43,7 @@ void metalio_touch_set_sample_cb(metalio_touch_sample_cb_t cb);
 /**
  * @brief 读屏内触点（无 I2C；由 feed 更新）
  * @return true 应报 PRESSED（含刷屏期间错过的短按回放）
- * @note 短按若整段落在 LVGL 未轮询窗口，会先回放一次 PRESSED，再 RELEASED
+ * @note 按下与松手均返回本轮起点及最新坐标；短按整段错过轮询时先回放 PRESSED，再 RELEASED
  */
 bool metalio_touch_read(metalio_touch_point_t* out);
 

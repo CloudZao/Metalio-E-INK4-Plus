@@ -28,6 +28,7 @@ const char cloudzao_path_push_resources_next[] = "";
 const char cloudzao_path_push_resources[] = "";
 const char cloudzao_path_library_sync[] = "";
 const char cloudzao_path_device_location_wifi[] = "";
+const char cloudzao_vision_upload_host[] = "";
 const char cloudzao_path_vision_upload[] = "";
 
 const char cloudzao_log_upload_host[] = "";

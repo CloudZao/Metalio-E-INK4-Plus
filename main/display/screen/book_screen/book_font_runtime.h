@@ -15,8 +15,8 @@ const lv_font_t* BookFont();
 const lv_font_t* BookLayoutFont();
 /** @brief 按 NVS 字体与字号偏好加载正文字体。 */
 void EnsureBookFont();
-/** @brief 记录待应用的源字体与字号，由安全重载验证并接入。 */
-bool PrepareBookTtfFont(const char* filename, int size_px);
+/** @brief 记录待应用的字体与字号，由安全重载验证并接入；EF 的字号参数为 0。 */
+bool PrepareBookFont(const char* filename, int size_px);
 /** @brief 在编排任务退出后重载字体；待应用字体失败时保留原字体和偏好。 */
 bool ReloadBookFont();
 enum class BookFontReloadResult {

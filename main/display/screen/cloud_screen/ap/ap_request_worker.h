@@ -12,8 +12,8 @@ public:
     ApRequestWorker(const ApRequestWorker&) = delete;
     ApRequestWorker& operator=(const ApRequestWorker&) = delete;
     static constexpr unsigned kMaxClients = 4; // 与 HTTP 服务共用的客户端连接上限
-    /** @brief 创建 PSRAM 队列和优先使用 PSRAM 栈的工作任务。 */
-    bool Start(const char* name);
+    /** @brief 创建 PSRAM 队列及工作任务；涉及 NVS 时使用内部 RAM 栈。 */
+    bool Start(const char* name, bool internal_stack = false);
     /** @brief 接管 SDK 异步请求；失败时不保留请求所有权。 */
     esp_err_t Submit(httpd_req_t* req, esp_err_t (*handler)(httpd_req_t*));
     /** @brief 延后回收连接资源；返回 false 时由调用方回收。 */

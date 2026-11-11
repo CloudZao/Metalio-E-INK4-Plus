@@ -1,14 +1,16 @@
 #include "image_file_write.h"
 #include "sd_access.h"
 #include "sd_paths.h"
+#include "sd_data_layout.h"
+#include "wallpaper_screen/wallpaper_active.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <dirent.h>
 #include <fcntl.h>
 #include <mutex>
+#include <string>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <esp_log.h>
@@ -18,11 +20,20 @@ namespace reader {
 namespace {
 std::mutex s_file_mutex; // 保存、删除与保存工作文件回收共用
 
-const char* WallpaperName(const char* path) {
+const char* WallpaperName(const char* path, bool nested = false) {
     constexpr char prefix[] = SD_PATH_WALLPAPER "/";
     if (!path || std::strncmp(path, prefix, sizeof(prefix) - 1)) return nullptr;
     const char* name = path + sizeof(prefix) - 1;
-    return SdIsValidFileName(name) ? name : nullptr;
+    if (!nested) return SdIsValidFileName(name) ? name : nullptr;
+    const std::string relative = name;
+    size_t start = 0;
+    do {
+        const size_t end = relative.find('/', start);
+        const auto part = relative.substr(start, end - start);
+        if (part == "." || part == ".." || !SdIsValidFileName(part.c_str())) return nullptr;
+        if (end == std::string::npos) return name;
+        start = end + 1;
+    } while (true);
 }
 
 bool BackupPath(const char* name, char* path, size_t capacity) {
@@ -32,25 +43,8 @@ bool BackupPath(const char* name, char* path, size_t capacity) {
 
 bool RemoveIfPresent(const char* path) {
     if (unlink(path) == 0 || errno == ENOENT) return true;
-    ESP_LOGW("WallpaperWrite", "file cleanup failed: %s", path);
+    ESP_LOGW("WallpaperWrite", "file cleanup failed errno=%d", errno);
     return false;
-}
-
-void CleanAbandonedSaveWork() {
-    DIR* directory = opendir(SD_PATH_WALLPAPER_TEMP);
-    if (!directory) return;
-    while (const dirent* entry = readdir(directory)) {
-        const char* name = entry->d_name;
-        if (std::strlen(name) != 15 || std::memcmp(name, "ws-", 3) || std::strcmp(name + 11, ".tmp")) continue;
-        bool owned = true;
-        for (unsigned i = 3; i < 11; ++i)
-            if (!((name[i] >= '0' && name[i] <= '9') || (name[i] >= 'a' && name[i] <= 'f'))) owned = false;
-        if (!owned) continue;
-        char path[SD_FILE_PATH_CAPACITY];
-        std::snprintf(path, sizeof(path), "%s/%.15s", SD_PATH_WALLPAPER_TEMP, name);
-        RemoveIfPresent(path);
-    }
-    closedir(directory);
 }
 
 struct WorkFile {
@@ -91,9 +85,9 @@ bool WriteWallpaperFileAtomic(const char* destination, const uint8_t* data, size
     if (cancelled && cancelled(context)) return fail(ImageDecodeError::kCancelled);
     std::lock_guard<std::mutex> lock(s_file_mutex);
     sd_access::Transaction transaction;
-    if (!transaction || !SdEnsureDir(SD_PATH_TEMP) || !SdEnsureDir(SD_PATH_WALLPAPER_TEMP))
+    if (!transaction || !SdEnsureDir(SD_PATH_TEMP) || !SdEnsureDir(SD_PATH_WALLPAPER_APP_TEMP) || !SdEnsureDir(SD_PATH_WALLPAPER_TEMP))
         return fail(ImageDecodeError::kFileIo);
-    CleanAbandonedSaveWork();
+    sd_data::CleanWorkFiles(SD_PATH_WALLPAPER_TEMP, "ws-");
     WorkFile work;
     if (!work.Open()) return fail(ImageDecodeError::kFileIo);
     for (size_t offset = 0; offset < length;) {
@@ -129,16 +123,20 @@ bool WriteWallpaperFileAtomic(const char* destination, const uint8_t* data, size
 }
 
 bool DeleteWallpaperFile(const char* path) {
-    const char* name = WallpaperName(path);
+    const char* name = WallpaperName(path, true);
     if (!name) return false;
     std::lock_guard<std::mutex> lock(s_file_mutex);
     sd_access::Transaction transaction;
     if (!transaction) return false;
-    CleanAbandonedSaveWork();
+    sd_data::CleanWorkFiles(SD_PATH_WALLPAPER_TEMP, "ws-");
     char temporary[SD_FILE_PATH_CAPACITY];
     if (!BackupPath(name, temporary, sizeof(temporary)) || !RemoveIfPresent(temporary)) return false;
     const int count = std::snprintf(temporary, sizeof(temporary), "%s.tmp", path);
     if (count <= 0 || size_t(count) >= sizeof(temporary) || !RemoveIfPresent(temporary)) return false;
-    return RemoveIfPresent(path);
+    if (!RemoveIfPresent(path)) return false;
+    const bool clean = sd_data::DeleteWallpaperData(path);
+    if (!std::strchr(name, '/')) Wallpaper_ClearActiveIfMatches(name);
+    ESP_LOGI("WallpaperWrite", "wallpaper delete done auxiliary_ok=%d", clean);
+    return clean;
 }
 } // namespace reader

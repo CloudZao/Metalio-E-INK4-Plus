@@ -32,7 +32,10 @@ constexpr uint16_t kUiFontBoldBpp = 4;
 // 源值对齐 397 assistant_screen；经 UiSx/UiSy 同比例到 470
 constexpr lv_coord_t kContentPadX = UiSx(8);
 constexpr lv_coord_t kContentPadY = UiSy(8);
-constexpr lv_coord_t kFooterH = UiSy(36);
+constexpr lv_coord_t kFooterH = UiSy(64);
+constexpr lv_coord_t kPageIndicatorH = UiSy(28);
+constexpr lv_coord_t kFooterInset = UiSx(12);
+constexpr lv_coord_t kFooterActionW = UiSx(64);
 constexpr lv_coord_t kBlockGap = UiSy(8); // 与 a2ui Column 默认 pad_row 一致，分页高度估算才准
 constexpr lv_coord_t kDefaultImgW = UiSx(440);
 constexpr lv_coord_t kDefaultImgH = UiSy(280);
@@ -129,7 +132,7 @@ enum class FlowKind : uint8_t {
 
 struct FlowItem {
     FlowKind kind = FlowKind::Text;
-    SpirString text;
+    SpirString text; // 文本内容；Image 使用此字段保存同行发送者标签。
     SpirString text2;
     SpirString variant = "body";
     SpirString image_url;
@@ -158,11 +161,11 @@ struct AssistantUiState {
     struct Ptt {
         std::atomic<bool> touch_ptt_held{false};  // 屏内 hit 层长按已臂听且未松手
         lv_obj_t* ptt_wave = nullptr;           // 状态栏居中录音波形（代码绘制竖条）
-        lv_obj_t* touch_ptt_hit = nullptr;      // 全屏透明 PTT hit；盖板 VK 不经此层
+        lv_obj_t* touch_ptt_hit = nullptr;      // 底栏录音热区；盖板 VK 不经此层
+        lv_obj_t* touch_ptt_label = nullptr;    // 录音按钮文案
         lv_timer_t* ptt_wave_timer = nullptr;
         lv_timer_t* touch_ptt_arm_timer = nullptr;  // 屏触 one-shot 臂听；离页/松手必须删
         bool touch_ptt_finger_down = false;         // hit 层 PRESSED 尚未抬起（LVGL 任务内）
-        bool touch_suppress_click = false;          // 长按 PTT 臂听后抑制紧随 CLICKED
         bool ptt_wave_visible = false;
         bool ptt_connecting_hint_shown = false; // 当前按住连接期间已显示提示
         lv_coord_t ptt_wave_max_h = 20;  // 竖条最大高度（Create 时按状态栏高度的约一半写入）
@@ -174,6 +177,8 @@ struct AssistantUiState {
         lv_obj_t* scr = nullptr;
         lv_obj_t* content = nullptr;  // a2ui host：只渲染当前页
         lv_obj_t* page_label = nullptr;
+        lv_obj_t* photo_action = nullptr; // 底栏猫爪或发送按钮。
+        lv_obj_t* photo_action_label = nullptr; // 有照片时显示的发送文案。
         lv_obj_t* idle_hint = nullptr;  // 无会话时 LVGL 欢迎页
         lv_obj_t* status_label = nullptr;       // 状态栏居中时钟/文案
         lv_obj_t* notification_label = nullptr;
@@ -254,8 +259,12 @@ void Assistant_RequestSyncPttOverlay();
 void Assistant_ApplyPttWave(bool show);
 /** @brief 停止状态栏 PTT 波形动画 */
 void Assistant_StopPttWaveAnim();
-/** @brief 创建全屏触控 PTT 命中层 */
-lv_obj_t* Assistant_CreateTouchPttHitLayer(lv_obj_t* scr);
+/** @brief 创建底栏触控 PTT 命中层 */
+lv_obj_t* Assistant_CreateTouchPttHitLayer(lv_obj_t* parent);
+/** @brief 检查网络和照片状态是否允许录音，并显示必要提示 */
+bool Assistant_AllowListening();
+/** @brief 根据待发送照片更新底栏操作，不改变正文视口 */
+void Assistant_UpdatePhotoAction();
 /** @brief 创建状态栏波形宿主控件 */
 lv_obj_t* Assistant_CreatePttWaveHost(lv_obj_t* parent, lv_coord_t bar_h);
 /** @brief 翻页；dir=-1 上一页，+1 下一页 */

@@ -72,18 +72,33 @@ void MetalioPeriph_StartSystemMonitor() {
                     static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
                 const unsigned psram_min_kb = static_cast<unsigned>(
                     heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM) / 1024);
-                ESP_LOGI(kMonitorTag, "@@@RAM   | 剩余: %6u KB | 历史最小: %6u KB", free_kb,
-                         min_free_kb);
                 ESP_LOGI(kMonitorTag, "@@@PSRAM | 剩余: %6u KB | 历史最小: %6u KB",
                          psram_free_kb, psram_min_kb);
 
+                unsigned largest_kb = 0;
+                unsigned dma_free_kb = 0;
+                unsigned dma_min_kb = 0;
+                unsigned dma_largest_kb = 0;
                 {
                     // largest-free-block walks the heap under its critical
                     // section. Serialize that walk with the LCD waveform so
                     // monitoring cannot delay bounce-buffer refill interrupts.
                     EpdFlashGuard display_guard;
-                    FirmwareMemoryCheckpoint("system-monitor");
+                    constexpr uint32_t internal_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+                    constexpr uint32_t dma_caps = internal_caps | MALLOC_CAP_DMA;
+                    largest_kb = heap_caps_get_largest_free_block(internal_caps) / 1024;
+                    dma_free_kb = heap_caps_get_free_size(dma_caps) / 1024;
+                    dma_min_kb = heap_caps_get_minimum_free_size(dma_caps) / 1024;
+                    dma_largest_kb = heap_caps_get_largest_free_block(dma_caps) / 1024;
                 }
+                ESP_LOGI(kMonitorTag,
+                         "@@@RAM   | 剩余: %6u KB | 历史最小: %6u KB | 最大连续: %6u KB | 安全余量: %u KB | 历史余量: %s",
+                         free_kb, min_free_kb, largest_kb,
+                         static_cast<unsigned>(kFirmwareInternalFloorBytes / 1024),
+                         min_free_kb >= kFirmwareInternalFloorBytes / 1024 ? "达标" : "曾低于阈值");
+                ESP_LOGI(kMonitorTag,
+                         "@@@DMA   | 剩余: %6u KB | 历史最小: %6u KB | 最大连续: %6u KB",
+                         dma_free_kb, dma_min_kb, dma_largest_kb);
 
                 if (battery_valid) {
                     uint16_t mv = 0;

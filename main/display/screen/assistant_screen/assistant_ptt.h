@@ -6,8 +6,10 @@
 bool Assistant_TurnPage(int dir);
 /** @brief 复位屏触 PTT 臂听状态 */
 void Assistant_ResetTouchPttState();
-/** @brief 创建全屏触控 PTT 命中层 */
+/** @brief 创建底栏触控 PTT 命中层 */
 lv_obj_t* Assistant_CreateTouchPttHitLayer(lv_obj_t* scr);
+/** @brief 正文点击翻页，不触发录音 */
+void OnTouchPageClicked(lv_event_t* event);
 /** @brief 停止状态栏 PTT 波形动画 */
 void Assistant_StopPttWaveAnim();
 /** @brief BOOT 或屏触任一源仍按住 */

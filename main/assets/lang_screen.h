@@ -1,6 +1,18 @@
 #pragma once
 
 namespace Lang { namespace Strings {
+extern const char* ASSISTANT_PHOTO_FAILED;
+extern const char* ASSISTANT_PHOTO_BUSY;
+extern const char* ASSISTANT_PHOTO_CLOSE;
+extern const char* ASSISTANT_PHOTO_UPLOADING;
+extern const char* ASSISTANT_PHOTO_SENT;
+extern const char* ASSISTANT_PHOTO_ANALYSIS_FAILED;
+extern const char* ASSISTANT_PHOTO_DISABLED;
+extern const char* ASSISTANT_PHOTO_QUESTION_FAILED;
+extern const char* ASSISTANT_PHOTO_UPLOAD_FAILED;
+extern const char* ASSISTANT_PHOTO_HISTORY_FAILED;
+extern const char* ASSISTANT_RELEASE_SEND;
+extern const char* ASSISTANT_SEND;
 extern const char* WALLPAPER_ENTER_LOADING;
 extern const char* CLOUD_FETCH_FAIL;
 extern const char* OTA_CHECK_FAILED;

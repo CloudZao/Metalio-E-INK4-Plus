@@ -1,6 +1,7 @@
 #include "epd_content_policy.h"
 #include "a2ui_image.h"
 
+#include <cerrno>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -210,7 +211,7 @@ void a2ui_image_set_http_origin(const char *origin)
         n--;
     }
     s_http_origin[n] = '\0';
-    ESP_LOGD(TAG, "http_origin=%s", s_http_origin);
+    ESP_LOGD(TAG, "image origin configured");
 }
 
 static bool host_is_loopback(const char *host, size_t host_len)
@@ -328,7 +329,7 @@ static esp_err_t file_load(const char *url, uint8_t **out_buf, int *out_len)
 
     FILE *f = fopen(path, "rb");
     if (!f) {
-        ESP_LOGW(TAG, "file open fail %s", path);
+        ESP_LOGW(TAG, "image file open failed errno=%d", errno);
         return ESP_ERR_NOT_FOUND;
     }
     if (fseek(f, 0, SEEK_END) != 0) {
@@ -338,7 +339,7 @@ static esp_err_t file_load(const char *url, uint8_t **out_buf, int *out_len)
     long sz = ftell(f);
     if (sz <= 0 || sz > A2UI_IMG_MAX_LOCAL) {
         fclose(f);
-        ESP_LOGW(TAG, "file bad size %ld path=%s", sz, path);
+        ESP_LOGW(TAG, "image file has invalid size=%ld", sz);
         return ESP_ERR_INVALID_SIZE;
     }
     if (fseek(f, 0, SEEK_SET) != 0) {
@@ -362,7 +363,7 @@ static esp_err_t file_load(const char *url, uint8_t **out_buf, int *out_len)
     }
     *out_buf = buf;
     *out_len = static_cast<int>(sz);
-    ESP_LOGI(TAG, "file load %s (%d bytes)", path, *out_len);
+    ESP_LOGD(TAG, "image file loaded bytes=%d", *out_len);
     return ESP_OK;
 }
 
@@ -577,7 +578,7 @@ static esp_err_t http_download(const char *url, uint8_t **out_buf, int *out_len,
 
     *out_buf = buf;
     *out_len = total;
-    ESP_LOGI(TAG, "downloaded %d bytes", total);
+    ESP_LOGD(TAG, "downloaded %d bytes", total);
     return ESP_OK;
 }
 
@@ -728,7 +729,7 @@ static bool apply_image(lv_obj_t *img_obj, uint8_t *owned_blob, int blob_len, ui
         adapter->UnlockUi();
     }
     (void)s_disp;
-    ESP_LOGI(TAG, "shown L8 %ux%u (%s, sync=%d)", (unsigned)out_w, (unsigned)out_h,
+    ESP_LOGD(TAG, "shown L8 %ux%u (%s, sync=%d)", (unsigned)out_w, (unsigned)out_h,
              l8_is_owned_blob ? "A2L8" : "decoded L8", already_locked ? 1 : 0);
     return true;
 }
@@ -838,7 +839,7 @@ static void image_task(void *arg)
         free_job(job);
         job = dequeue_job_or_idle();
         if (job) {
-            ESP_LOGI(TAG, "run next queued image job");
+            ESP_LOGD(TAG, "run next queued image job");
         }
     }
 
@@ -880,7 +881,7 @@ esp_err_t a2ui_image_load_async(lv_obj_t *img_obj, const char *url, int max_w, i
             }
         }
         if (err != ESP_OK || buf == NULL || len <= 0) {
-            ESP_LOGW(TAG, "mem:// miss %s", resolved);
+            ESP_LOGW(TAG, "local image cache miss");
             free(resolved);
             return err != ESP_OK ? err : ESP_ERR_NOT_FOUND;
         }
@@ -916,7 +917,7 @@ esp_err_t a2ui_image_load_async(lv_obj_t *img_obj, const char *url, int max_w, i
     portEXIT_CRITICAL(&s_job_mux);
 
     if (!start_new) {
-        ESP_LOGI(TAG, "image worker busy — queued FIFO");
+        ESP_LOGD(TAG, "image worker busy — queued FIFO");
         return ESP_OK;
     }
 

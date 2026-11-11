@@ -1,5 +1,10 @@
 #pragma once
 
+namespace Lang {
+/** @brief 按书籍语言获取目录首页文案，不改变界面语言 */
+const char* BookHomeLabel(bool chinese);
+}
+
 // 阅读器补充文案；声明随源码维护，不依赖本地生成的语言头。
 namespace Lang::Strings {
 extern const char* BOOK_OPEN_FAILED_IO;
@@ -99,4 +104,25 @@ extern const char* TTF_ENGINE_INIT_FAILED;
 extern const char* TTF_SOURCE_OPEN_FAILED;
 extern const char* TTF_JOB_INVALID;
 extern const char* TTF_START_FAILED;
+extern const char* BOOK_DECREASE;
+extern const char* BOOK_INCREASE;
+extern const char* BOOK_LETTER_GAP;
+extern const char* BOOK_INDENT;
+extern const char* BOOK_AA_STRENGTH;
+extern const char* BOOK_AA_LOW;
+extern const char* BOOK_AA_MEDIUM;
+extern const char* BOOK_AA_HIGH;
+extern const char* BOOK_FOOTER_LAYOUT;
+extern const char* BOOK_FOOTER_BOTTOM;
+extern const char* BOOK_UNDERLINE_POSITION;
+extern const char* BOOK_UNDERLINE_UP;
+extern const char* BOOK_UNDERLINE_CENTER;
+extern const char* BOOK_UNDERLINE_DOWN;
+extern const char* BOOK_INDENT_ONE;
+extern const char* BOOK_INDENT_TWO;
+extern const char* BOOK_INDENT_THREE;
+extern const char* BOOK_FONT_DECREASE;
+extern const char* BOOK_FONT_INCREASE;
+extern const char* BOOK_TURN_INTERVAL;
+extern const char* BOOK_DEFAULT;
 }

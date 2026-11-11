@@ -1,6 +1,9 @@
 #pragma once
 
 #include "lv_adapter_epdiy.h"
+#include <lvgl.h>
+
+inline constexpr lv_obj_flag_t kTouchUiPagedVerticalDrag = LV_OBJ_FLAG_USER_2; // 分页手势独占 USER_2；USER_1 已由震动绑定占用
 
 /** @brief 屏内手指是否仍按着（盖板键不算；对齐 397） */
 bool TouchUiFingerIsDown();

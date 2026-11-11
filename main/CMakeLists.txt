@@ -8,7 +8,7 @@ elseif(CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL)
     set(BOARD_TYPE "metalio-e-ink4-plus-global")
 endif()
 
-# Storage sources include the runtime log writer.
+# Storage sources include layout compatibility and the runtime log writer.
 file(GLOB BOARD_COMMON_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/board/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/bluetooth/*.cc"
@@ -122,9 +122,6 @@ elseif(CONFIG_USE_CUSTOM_WAKE_WORD)
     list(APPEND WAKE_WORD_SRCS "audio/wake_words/custom_wake_word.cc")
 endif()
 
-# BOOT 双击插图依赖 UVC；S31 拍照使用 DVP/MCP 入口。
-list(FILTER ASSISTANT_SCREEN_SRCS EXCLUDE REGEX "assistant_boot_photo\\.cc$")
-
 idf_component_register(
     SRCS
         "app_main.cc"
@@ -136,6 +133,7 @@ idf_component_register(
         "assets/lang_home.cc"
         "assets.cc"
         "ota.cc"
+        "ntp_server.cc"
         "ota_ignore.cc"
         "mcp_server.cc"
         "system_info.cc"

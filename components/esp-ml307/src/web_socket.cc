@@ -147,8 +147,10 @@ bool WebSocket::Connect(const char* uri) {
     }
     request += "\r\n";
 
-    if (tcp_->Send(request) < 0) {
-        ESP_LOGE(TAG, "Failed to send WebSocket handshake request");
+    const int sent = tcp_->Send(request);
+    if (sent != static_cast<int>(request.size())) {
+        ESP_LOGE(TAG, "WebSocket handshake write incomplete: expected_bytes=%u sent_bytes=%d",
+                 static_cast<unsigned>(request.size()), sent);
         return false;
     }
 
@@ -248,7 +250,13 @@ bool WebSocket::Send(const void* data, size_t len, bool binary, bool fin) {
 
     // 发送帧
     std::lock_guard<std::mutex> lock(send_mutex_);
-    return tcp_->Send(frame) >= 0;
+    const int sent = tcp_->Send(frame);
+    if (sent != static_cast<int>(frame.size())) {
+        ESP_LOGE(TAG, "WebSocket data frame write incomplete: expected_bytes=%u sent_bytes=%d",
+                 static_cast<unsigned>(frame.size()), sent);
+        return false;
+    }
+    return true;
 }
 
 void WebSocket::Ping() {
@@ -467,5 +475,11 @@ bool WebSocket::SendControlFrame(uint8_t opcode, const void* data, size_t len) {
 
     // 发送帧
     std::lock_guard<std::mutex> lock(send_mutex_);
-    return tcp_->Send(frame) >= 0;
+    const int sent = tcp_->Send(frame);
+    if (sent != static_cast<int>(frame.size())) {
+        ESP_LOGE(TAG, "WebSocket control frame write incomplete: expected_bytes=%u sent_bytes=%d",
+                 static_cast<unsigned>(frame.size()), sent);
+        return false;
+    }
+    return true;
 }

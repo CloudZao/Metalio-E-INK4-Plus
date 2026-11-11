@@ -490,7 +490,7 @@ TtfRuntime* TtfRuntimeOpen(const char* path, int size_px) {
     request.path = path;
     request.size_px = size_px;
     if (!Send(*font, request)) {
-        if (!sd_access::IsQuiescing()) ESP_LOGW(TAG, "cannot load font %s at %dpx", path, size_px);
+        if (!sd_access::IsQuiescing()) ESP_LOGW(TAG, "font load failed size=%d", size_px);
         TtfRuntimeClose(font);
         return nullptr;
     }

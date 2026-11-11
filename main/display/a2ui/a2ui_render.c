@@ -493,7 +493,7 @@ static lv_obj_t *create_component(lv_obj_t *parent, const cJSON *comp)
                         cJSON_IsString(value) ? value->valuestring : "",
                         "body", parse_bold(comp), false);
     } else {
-        ESP_LOGW(TAG, "unknown component: %s", type);
+        ESP_LOGW(TAG, "unsupported component skipped");
         return NULL;
     }
 
@@ -630,14 +630,13 @@ esp_err_t a2ui_render_handle_json(const char *json)
         const cJSON *origin = cJSON_GetObjectItemCaseSensitive(welcome, "httpOrigin");
         if (cJSON_IsString(origin) && origin->valuestring && origin->valuestring[0]) {
             a2ui_image_set_http_origin(origin->valuestring);
-            ESP_LOGI(TAG, "welcome httpOrigin=%s", origin->valuestring);
         }
     } else if (cJSON_GetObjectItemCaseSensitive(root, "createSurface")) {
         ret = handle_create_surface(cJSON_GetObjectItemCaseSensitive(root, "createSurface"));
     } else if (cJSON_GetObjectItemCaseSensitive(root, "updateComponents")) {
         ret = handle_update_components(cJSON_GetObjectItemCaseSensitive(root, "updateComponents"));
     } else if (cJSON_GetObjectItemCaseSensitive(root, "updateDataModel")) {
-        ESP_LOGI(TAG, "updateDataModel ignored (render via components)");
+        ESP_LOGD(TAG, "updateDataModel ignored (render via components)");
     } else if (cJSON_GetObjectItemCaseSensitive(root, "ping")) {
         ESP_LOGD(TAG, "ping");
     } else if (cJSON_GetObjectItemCaseSensitive(root, "deleteSurface")) {

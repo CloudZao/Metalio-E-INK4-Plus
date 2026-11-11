@@ -67,6 +67,14 @@ struct Page {
     std::vector<PageItem> items;
 };
 
+struct TextStyle {
+    int line_gap = -1; // 行间首选留白像素，负数沿用相对行距
+    int letter_gap = 0; // 每字额外步进像素
+    int indent_chars = 2; // 首行缩进字数
+    int underline_offset = 0; // 装饰线相对默认位置的像素偏移
+    int aa_strength = 1; // 抗锯齿强度：0 弱、1 中、2 强
+};
+
 // 阅读排版默认值（与 BookReaderPrefs 标准档一致；经 BookSession::SetLineSpacing 注入）
 constexpr int kReaderLineSpacingPercentDefault = 10; // 标准行疏密，按字体行框比例计算
 constexpr lv_coord_t kReaderParaGapDefault = 56; // 普通段落在行距之外增加的默认段距，单位像素
@@ -96,7 +104,7 @@ struct TextLineLayout {
 
 /** @brief 按字体行框、相对疏密及完整视口生成均分余量的行布局。 */
 inline TextLineLayout MakeTextLineLayout(const lv_font_t* font, lv_coord_t extent,
-                                         int spacing_percent, bool vertical = false) {
+                                         int spacing_percent, bool vertical = false, int line_gap = -1) {
     TextLineLayout layout;
     layout.extent = std::max<lv_coord_t>(0, extent);
     const int line_h = font && font->line_height > 0 ? font->line_height : 24;
@@ -104,8 +112,9 @@ inline TextLineLayout MakeTextLineLayout(const lv_font_t* font, lv_coord_t exten
     // 竖排额外预留 1px 线宽及标题向右加粗的 1px。
     const int frame = line_h + (vertical ? kReaderUnderlineGap + 2 : kReaderUnderlineGap + kReaderUnderlineThickness);
     layout.line_height = static_cast<lv_coord_t>(frame);
-    const int desired = std::max(frame, line_h + static_cast<int>(
-        (static_cast<int64_t>(line_h) * std::max(0, spacing_percent) + 50) / 100));
+    const int gap = line_gap >= 0 ? line_gap : static_cast<int>(
+        (static_cast<int64_t>(line_h) * std::max(0, spacing_percent) + 50) / 100);
+    const int desired = std::max(frame, line_h + gap);
     if (layout.extent >= frame) layout.count = std::max(1, static_cast<int>(layout.extent) / std::max(1, desired));
     return layout;
 }

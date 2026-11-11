@@ -383,7 +383,7 @@ bool ZipReader::OpenEntryStream(const char* name) {
 
     Entry e;
     if (!FindEntry(name, &e)) {
-        ESP_LOGW(TAG, "stream missing entry: %s", name);
+        ESP_LOGD(TAG, "stream entry unavailable");
         CloseEntryStream();
         return false;
     }
@@ -427,7 +427,7 @@ bool ZipReader::OpenEntryStream(const char* name) {
     }
 
     stream_open_ = true;
-    ESP_LOGI(TAG, "stream open %s uncomp=%u method=%u", name, static_cast<unsigned>(e.uncomp_size),
+    ESP_LOGD(TAG, "stream open uncomp=%u method=%u", static_cast<unsigned>(e.uncomp_size),
              e.method);
     return true;
 }

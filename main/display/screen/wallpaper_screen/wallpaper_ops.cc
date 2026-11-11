@@ -290,11 +290,6 @@ bool DeleteWallpaperFileOnSd(const char* path, const char* name, std::string& er
         err_out = Lang::Strings::WALLPAPER_DELETE_FAIL;
         return false;
     }
-    reader::DeleteWallpaperMeta(path);
-
-    // ClearActiveIfMatches / NVS：须在本 worker（内部 RAM 栈），勿在 LVGL 任务调用
-    Wallpaper_ClearActiveIfMatches(name);
-    ESP_LOGI(TAG, "deleted wallpaper %s", path);
     return true;
 }
 

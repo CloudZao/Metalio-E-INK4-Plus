@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <mutex>
 
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -79,35 +80,42 @@ static void LoadFromNvs() {
     ESP_LOGI(TAG, "nvs load tap_zones");
 }
 
-struct BookTapPersistArg {
-    uint8_t cells[kBookTapZoneCellCount] = {}; // 待保存的分区配置快照
-};
+static std::mutex s_persist_mutex; // 保存任务与 UI 之间的配置交接
+static uint8_t s_pending_cells[kBookTapZoneCellCount] = {}; // 仅保留最新待写配置
+static bool s_persist_pending = false; // 是否存在尚未写入的快照
+static bool s_persist_running = false; // 同时只运行一个保存任务
 
-static void PersistTask(void* arg) {
-    auto* p = static_cast<BookTapPersistArg*>(arg);
-    if (p == nullptr) {
-        vTaskDelete(nullptr);
-        return;
+static void PersistTask(void*) {
+    for (;;) {
+        char packed[kBookTapZoneCellCount + 1] = {};
+        {
+            std::lock_guard<std::mutex> lock(s_persist_mutex);
+            if (!s_persist_pending) {
+                s_persist_running = false;
+                break;
+            }
+            for (int i = 0; i < kBookTapZoneCellCount; ++i) {
+                packed[i] = static_cast<char>('0' + s_pending_cells[i]);
+            }
+            s_persist_pending = false;
+        }
+        {
+            Settings settings(kNvsNs, true);
+            settings.SetString(kNvsKey, packed);
+        }
     }
-    char packed[kBookTapZoneCellCount + 1] = {};
-    for (int i = 0; i < kBookTapZoneCellCount; ++i) {
-        packed[i] = static_cast<char>('0' + p->cells[i]);
-    }
-    packed[kBookTapZoneCellCount] = '\0';
-    Settings settings(kNvsNs, true);
-    settings.SetString(kNvsKey, packed);
-    ESP_LOGI(TAG, "nvs save tap_zones=%s", packed);
-    delete p;
     vTaskDelete(nullptr);
 }
 
 static void StartPersist() {
-    auto* arg = new BookTapPersistArg{};
-    std::memcpy(arg->cells, s_cells, sizeof(s_cells));
-    if (xTaskCreate(PersistTask, "tap_zones_nvs", 4096, arg, 5, nullptr) != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate(tap_zones_nvs) failed");
-        delete arg;
-    }
+    std::lock_guard<std::mutex> lock(s_persist_mutex);
+    std::memcpy(s_pending_cells, s_cells, sizeof(s_cells));
+    s_persist_pending = true;
+    if (s_persist_running) return;
+    s_persist_running = true;
+    if (xTaskCreate(PersistTask, "tap_zones_nvs", 4096, nullptr, 5, nullptr) == pdPASS) return;
+    s_persist_running = false;
+    ESP_LOGE(TAG, "preference task creation failed");
 }
 
 void BookTapZonesEnsureLoaded() {
@@ -156,6 +164,11 @@ bool BookTapZonesSetAction(int cell, BookTapZoneAction action) {
     s_cells[cell] = v;
     StartPersist();
     return true;
+}
+
+bool BookTapZonesIsDefault() {
+    BookTapZonesEnsureLoaded();
+    return std::memcmp(s_cells, kDefaultCells, sizeof(s_cells)) == 0;
 }
 
 void BookTapZonesResetDefaults() {

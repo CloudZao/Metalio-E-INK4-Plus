@@ -6,6 +6,7 @@ struct ReaderPageResult {
     std::unique_ptr<reader::BookSession> cursor; // 独立导航与页面所有权
     std::shared_ptr<reader::RasterImage> background; // 背景几何变化时生成，其余页面共享
     reader::RasterImage raster; // 后台完成的正文像素
+    std::vector<int> image_tops; // 与页内插图顺序一致的顶部坐标
     lv_coord_t column_width = 0; // 正文实际列宽
     int ink_height = 0; // 正文墨迹高度
     int value = 0; // 请求参数

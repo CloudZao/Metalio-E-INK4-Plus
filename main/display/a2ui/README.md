@@ -195,4 +195,4 @@ cp -f fonts/MiSans-Mixed/fonts_misans_25_30.fontpack ../../use_font/font.fontpac
 | `a2ui_image` | 解析 URL → 查缓存 → HTTP → 上屏 → 延迟后 best-effort 写入；多 surface + FIFO |
 | `assistant_screen` | 只拼 JSON / 分页；不直接碰存储 |
 
-路径约定见 `boards/common/sd_paths.h`：`SD_PATH_A2UI_CACHE` = `/sdcard/metalio/e-ink/a2ui_cache`。
+路径约定见 `boards/common/storage/sd_paths.h`：`SD_PATH_A2UI_CACHE` = `/sdcard/metalio/e-ink/temp/bwchat/images`。

@@ -338,7 +338,11 @@ EpdDrawError Draw(EpdiyHighlevelState* hl, int mode, bool full, bool clean, bool
     last_mode.store(mode);
     last_ms.store((esp_timer_get_time()-start)/1000);
     ++updates;
-    ESP_LOGI(TAG, "seq=%u profile=%d/%d path=%s phases=%d orient=%d aa=%d "
+    if (result != EPD_DRAW_SUCCESS) {
+        ESP_LOGE(TAG, "refresh failed seq=%u result=0x%x", static_cast<unsigned>(drawing_sequence),
+                 static_cast<unsigned>(result));
+    }
+    ESP_LOGD(TAG, "seq=%u profile=%d/%d path=%s phases=%d orient=%d aa=%d "
              "mode=%d full=%d clean=%d recover=%d first_err=0x%x cost=%ums err=0x%x",
              (unsigned)drawing_sequence,profile,refresh_profile.load(),path,phases,orient,
              gray.reader_aa,mode,full,clean,recovered,(unsigned)initial_result,
@@ -534,7 +538,7 @@ void Worker(void*) {
                 ? Draw(hl,mode,promote,reset_gray,false,PageDraw::None,orient,{!scroll_settle,reader_aa,equalize_black}) : EPD_DRAW_SUCCESS);
             // 每个实际上屏的目标帧只记录一次，扫描期间不打印或遍历额外像素。
             if (updates.load()!=draws_before || result!=EPD_DRAW_SUCCESS) {
-                ESP_LOGI(TAG,"route seq=%u merged=%u screen=%d full_gc=%d turn=%d stream=%d scroll=%d settle=%d "
+                ESP_LOGD(TAG,"route seq=%u merged=%u screen=%d full_gc=%d turn=%d stream=%d scroll=%d settle=%d "
                          "changed=%d binary=%d gray=%d promote=%d combined=%d equalize=%d partials=%d gc_age=%lldms",
                          (unsigned)sequence,(unsigned)(sequence-consumed-1),screen_change,full_gc,turn,stream,scrolling,scroll_settle,
                          changed,binary_pages,gray_changed,promote,combined,equalize_black,partials_before,(long long)full_age_ms);

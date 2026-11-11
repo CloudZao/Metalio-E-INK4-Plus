@@ -66,6 +66,20 @@ public:
     // 百问 AI BOOT 页内分工：StartListening/StopListening/AbortSpeakingToIdle。
     void StartListening();
     void StopListening();
+    enum class ImageQuestionResult {
+        Sent, // 已提交本轮问题。
+        Replaced, // 本轮已被新操作替代或页面已失效。
+        Failed, // 提问未成功提交，照片可保留重试。
+    };
+    /** @brief 准备百问 WebSocket 会话，就绪后请求页面上传单张照片 */
+    bool AskBaiwenImage();
+    /**
+     * @brief 在语音任务中完成本轮提问；新轮次会使旧提问失效
+     * @param recorded 为 true 时结束录音；false 且 image_id 为空时取消本轮
+     * @return 成功投递返回 true，具体结果通过 completed 返回
+     */
+    bool CompleteBaiwenQuestion(uint32_t turn, bool recorded, const std::string& image_id,
+                               std::function<void(ImageQuestionResult)> completed = {});
     void AbortSpeakingToIdle();
     void Reboot();
     /** @brief 由语音任务保存当前云服务的播报开关，并在静音时清理待播语音 */
@@ -153,7 +167,7 @@ private:
     uint32_t last_error_generation_ = 0; // activation_state_mutex_ 保护，错误所属语音会话
     AudioService audio_service_;
 
-    bool has_server_time_ = false;
+    std::atomic<bool> has_network_time_{false};
     std::string current_version_;
     bool audio_initialized_ = false;
     std::recursive_mutex audio_service_mutex_; // 串行化服务启动、占用和释放
@@ -167,6 +181,9 @@ private:
     std::atomic<bool> chat_activation_pending_{false};
     std::atomic<bool> xiaozhi_voice_active_{false};
     bool aborted_ = false;
+    uint32_t baiwen_question_turn_ = 0; // 仅语音任务访问，标识录音及单图提问轮次。
+    std::string baiwen_image_id_; // 当前已提交图片问题，用于关联服务端错误。
+    bool baiwen_stop_waiting_ = false; // 本轮已松手，等待照片上传后提交结束消息。
     std::atomic<bool> boot_ready_{false}; // Start() 跑完后置 true
     std::atomic<bool> boot_work_active_{true};
     // 开机未完成时进百问：记录意图，boot_ready 后自动 StartXiaozhiVoice。
@@ -202,6 +219,7 @@ private:
 
     void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);
+    void SyncNetworkTime();
     /** @brief 开机检测 SD 根目录固件并优先升级；成功则重启，取消/失败返回 false */
     bool TrySdCardFirmwareUpgrade();
     void CheckAssetsVersion();

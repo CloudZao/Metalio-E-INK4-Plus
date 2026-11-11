@@ -8,6 +8,7 @@
 #include "book_screen/book_font_runtime.h"
 #include "book_screen/settings/book_tap_zones.h"
 #include "book_screen/book_text_util.h"
+#include "book_screen/book_nav.h"
 #include "book_screen/settings/book_ttf_panel.h"
 #include "book_screen/reader/book_reader_overlay.h"
 
@@ -15,6 +16,8 @@
 
 #include <lvgl.h>
 #include <cstdint>
+#include <algorithm>
+#include "screen_text.h"
 
 #include "assets/lang_config.h"
 #include "display/font/ttf_convert.h"
@@ -62,83 +65,29 @@ void TapZonesRebuildContent() {
         return;
     }
     lv_obj_clean(st.tap.tap_zone_sheet);
-    ApplyReadingPanelRules(st.tap.tap_zone_sheet);
-
-    auto make_action = [](lv_obj_t* parent, const char* text, lv_event_cb_t cb,
-                          intptr_t user) -> lv_obj_t* {
-        lv_obj_t* btn = lv_obj_create(parent);
-        lv_obj_remove_style_all(btn);
-        lv_obj_set_height(btn, 36);
-        lv_obj_set_width(btn, LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_pad_hor(btn, 4, 0);
-        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        Book_DisableScroll(btn);
-        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-        HapticAttachClick(btn);
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, reinterpret_cast<void*>(user));
-        lv_obj_add_event_cb(
-            btn, [](lv_event_t* ev) { lv_event_stop_bubbling(ev); }, LV_EVENT_CLICKED, nullptr);
-        lv_obj_t* wrap = lv_obj_create(btn);
-        lv_obj_remove_style_all(wrap);
-        lv_obj_set_size(wrap, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-        lv_obj_set_style_border_side(wrap, LV_BORDER_SIDE_BOTTOM, 0);
-        lv_obj_set_style_border_width(wrap, kShelfUnderlineH, 0);
-        lv_obj_set_style_border_color(wrap, lv_color_black(), 0);
-        lv_obj_set_style_pad_bottom(wrap, 2, 0);
-        lv_obj_set_style_pad_hor(wrap, kShelfUnderlinePadHor, 0);
-        lv_obj_set_style_bg_opa(wrap, LV_OPA_TRANSP, 0);
-        Book_DisableScroll(wrap);
-        lv_obj_clear_flag(wrap, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_t* lbl = lv_label_create(wrap);
-        lv_label_set_text(lbl, text);
-        lv_obj_set_style_text_font(lbl, Book_ItemFont(), 0);
-        lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-        return btn;
-    };
 
     const bool picking = (st.tap.tap_zone_ui == BookUiState::TapZoneUi::kPick);
     auto* head = lv_obj_create(st.tap.tap_zone_sheet);
     lv_obj_remove_style_all(head);
-    lv_obj_set_size(head, lv_pct(100), 52);
+    lv_obj_set_size(head, lv_pct(100), ReadingSheetHeaderHeight());
     Book_DisableScroll(head);
-    auto* back = make_action(head, "<", picking ? OnTapZonePickBack : OnTapZoneClose, 0);
-    lv_obj_set_style_border_width(lv_obj_get_child(back, 0), 0, 0);
-    lv_obj_set_style_pad_all(lv_obj_get_child(back, 0), 0, 0);
-    lv_obj_set_size(back, 48, 48);
-    lv_obj_set_ext_click_area(back, 12);
-    lv_label_set_text(lv_obj_get_child(lv_obj_get_child(back, 0), 0), "");
-    static const lv_point_precise_t left_points[] = {{10, 0}, {0, 12}, {10, 24}};
-    auto* left = lv_line_create(back);
-    lv_obj_add_flag(left, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_line_set_points(left, left_points, 3);
-    lv_obj_set_style_line_width(left, 4, 0);
-    lv_obj_set_style_line_color(left, lv_color_black(), 0);
-    lv_obj_set_style_line_rounded(left, true, 0);
-    lv_obj_clear_flag(left, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_center(left);
-    lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(back, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_t* title = lv_label_create(head);
-    lv_label_set_text(title, picking ? Lang::Strings::BOOK_TAP_ZONES_PICK : Lang::Strings::BOOK_TAP_ZONES_TITLE);
-    lv_obj_set_style_text_font(title, Book_ListFont(), 0);
-    lv_obj_align(title, LV_ALIGN_LEFT_MID, 48, 0);
-    lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(head, LV_OBJ_FLAG_CLICKABLE);
+    BuildReadingSheetHeader(head, picking ? Lang::Strings::BOOK_TAP_ZONES_PICK : Lang::Strings::BOOK_TAP_ZONES_TITLE,
+                            picking ? OnTapZonePickBack : OnTapZoneClose, true);
     if (!picking) {
-        auto* reset = make_action(head, Lang::Strings::BOOK_TAP_ZONES_RESET, OnTapZoneReset, 0);
-        // 边框设在固定高度按钮上，避免子对象超高时被裁剪。
-        lv_obj_set_height(reset, 42);
-        lv_obj_set_style_border_width(reset, 1, 0);
-        lv_obj_set_style_border_color(reset, lv_color_black(), 0);
-        lv_obj_set_style_radius(reset, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_pad_hor(reset, 12, 0);
-        auto* wrap = lv_obj_get_child(reset, 0);
-        lv_obj_set_style_border_width(wrap, 0, 0);
-        lv_obj_set_style_pad_all(wrap, 0, 0);
-        lv_obj_align(reset, LV_ALIGN_RIGHT_MID, 0, 0);
+        CreateReadingResetButton(head, OnTapZoneReset);
     }
 
+    auto* body = lv_obj_create(st.tap.tap_zone_sheet);
+    lv_obj_remove_style_all(body);
+    lv_obj_set_size(body, lv_pct(100), 0);
+    lv_obj_set_flex_grow(body, 1);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_hor(body, UiSx(16), 0);
+    lv_obj_set_style_pad_top(body, UiSy(4), 0);
+    lv_obj_set_style_pad_bottom(body, UiSy(12), 0);
+    Book_DisableScroll(body);
+    lv_obj_clear_flag(body, LV_OBJ_FLAG_CLICKABLE);
     if (picking) {
         const int cell = st.tap.tap_zone_pick_cell;
         const BookTapZoneAction cur =
@@ -157,7 +106,9 @@ void TapZonesRebuildContent() {
             lv_obj_t* row = lv_obj_create(parent);
             lv_obj_remove_style_all(row);
             lv_obj_set_width(row, lv_pct(100));
-            lv_obj_set_height(row, kTapZoneRowH);
+            lv_obj_set_height(row, 0);
+            lv_obj_set_flex_grow(row, 1);
+            lv_obj_set_style_radius(row, 8, 0);
             lv_obj_set_style_border_width(row, 2, 0);
             lv_obj_set_style_border_color(row, lv_color_black(), 0);
             lv_obj_set_style_bg_color(row, selected ? lv_color_black() : lv_color_white(), 0);
@@ -178,13 +129,16 @@ void TapZonesRebuildContent() {
             lv_obj_set_style_text_font(name, Book_ItemFont(), 0);
             lv_obj_set_style_text_color(name, selected ? lv_color_white() : lv_color_black(), 0);
             lv_obj_clear_flag(name, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_update_layout(row);
+            ScreenFitLabel(name, lv_obj_get_content_width(row), std::max<int>(1, lv_obj_get_content_height(row)));
         };
         const int choice_n = static_cast<int>(sizeof(kChoices) / sizeof(kChoices[0]));
-        if (DisplayUiIsLandscape()) {
-            lv_obj_t* cols = lv_obj_create(st.tap.tap_zone_sheet);
+        {
+            lv_obj_t* cols = lv_obj_create(body);
             lv_obj_remove_style_all(cols);
             lv_obj_set_width(cols, lv_pct(100));
-            lv_obj_set_height(cols, LV_SIZE_CONTENT);
+            lv_obj_set_height(cols, 0);
+            lv_obj_set_flex_grow(cols, 1);
             lv_obj_set_flex_flow(cols, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(cols, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
                                   LV_FLEX_ALIGN_START);
@@ -194,7 +148,7 @@ void TapZonesRebuildContent() {
             auto make_col = [&]() {
                 lv_obj_t* col = lv_obj_create(cols);
                 lv_obj_remove_style_all(col);
-                lv_obj_set_height(col, LV_SIZE_CONTENT);
+                lv_obj_set_height(col, lv_pct(100));
                 lv_obj_set_flex_grow(col, 1);
                 lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
                 lv_obj_set_style_pad_row(col, 6, 0);
@@ -203,7 +157,6 @@ void TapZonesRebuildContent() {
                 return col;
             };
             lv_obj_t* left = make_col();
-            lv_obj_t* rule = Book_AddColRule(cols);
             lv_obj_t* right = make_col();
             const int mid = (choice_n + 1) / 2;
             for (int i = 0; i < mid; ++i) {
@@ -212,29 +165,12 @@ void TapZonesRebuildContent() {
             for (int i = mid; i < choice_n; ++i) {
                 add_choice(right, kChoices[i]);
             }
-            Book_FinishColRule(cols, rule);
-        } else {
-            auto* choices = lv_obj_create(st.tap.tap_zone_sheet);
-            lv_obj_remove_style_all(choices);
-            lv_obj_set_width(choices, lv_pct(100));
-            lv_obj_set_height(choices, 0);
-            lv_obj_set_flex_grow(choices, 1);
-            lv_obj_set_flex_flow(choices, LV_FLEX_FLOW_COLUMN);
-            lv_obj_set_style_pad_row(choices, 6, 0);
-            lv_obj_add_flag(choices, LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_clear_flag(choices, LV_OBJ_FLAG_SCROLL_ELASTIC);
-            lv_obj_clear_flag(choices, LV_OBJ_FLAG_SCROLL_MOMENTUM);
-            lv_obj_set_scroll_dir(choices, LV_DIR_VER);
-            lv_obj_set_scrollbar_mode(choices, LV_SCROLLBAR_MODE_AUTO);
-            for (int i = 0; i < choice_n; ++i) {
-                add_choice(choices, kChoices[i]);
-            }
+
         }
-        ApplyReadingPanelRules(st.tap.tap_zone_sheet);
         return;
     }
 
-    lv_obj_t* grid = lv_obj_create(st.tap.tap_zone_sheet);
+    lv_obj_t* grid = lv_obj_create(body);
     lv_obj_remove_style_all(grid);
     lv_obj_set_width(grid, lv_pct(100));
     lv_obj_set_flex_grow(grid, 1);
@@ -276,7 +212,17 @@ void TapZonesRebuildContent() {
             lv_obj_clear_flag(lab, LV_OBJ_FLAG_CLICKABLE);
         }
     }
-    ApplyReadingPanelRules(st.tap.tap_zone_sheet);
+}
+
+static void SizeTapZoneSheet() {
+    auto& st = Book_State();
+    lv_obj_update_layout(st.settings.settings_sheet);
+    auto* sheet = st.settings.settings_sheet;
+    const int nav = ReadingSheetNavReserve();
+    const int border = lv_obj_get_style_border_width(sheet, LV_PART_MAIN);
+    const int height = std::max(1, static_cast<int>(lv_obj_get_height(sheet)) - nav);
+    lv_obj_set_size(st.tap.tap_zone_sheet, lv_obj_get_width(sheet), height);
+    lv_obj_align(st.tap.tap_zone_sheet, LV_ALIGN_TOP_LEFT, -border, -border);
 }
 
 void TapZonesEnsurePanel() {
@@ -287,10 +233,8 @@ void TapZonesEnsurePanel() {
     if (st.tap.tap_zone_ui == BookUiState::TapZoneUi::kClosed) {
         st.tap.tap_zone_ui = BookUiState::TapZoneUi::kGrid;
     }
-    lv_obj_update_layout(st.settings.settings_sheet);
     if (st.tap.tap_zone_sheet != nullptr && lv_obj_is_valid(st.tap.tap_zone_sheet)) {
-        lv_obj_set_size(st.tap.tap_zone_sheet, lv_pct(100), lv_pct(100));
-        lv_obj_align(st.tap.tap_zone_sheet, LV_ALIGN_TOP_LEFT, 0, 0);
+        SizeTapZoneSheet();
         lv_obj_move_foreground(st.tap.tap_zone_sheet);
         TapZonesRebuildContent();
         return;
@@ -298,13 +242,13 @@ void TapZonesEnsurePanel() {
     st.tap.tap_zone_sheet = lv_obj_create(st.settings.settings_sheet);
     lv_obj_remove_style_all(st.tap.tap_zone_sheet);
     lv_obj_add_flag(st.tap.tap_zone_sheet, LV_OBJ_FLAG_FLOATING);
-    lv_obj_set_size(st.tap.tap_zone_sheet, lv_pct(100), lv_pct(100));
-    lv_obj_align(st.tap.tap_zone_sheet, LV_ALIGN_TOP_LEFT, 0, 0);
+    SizeTapZoneSheet();
     lv_obj_set_style_bg_color(st.tap.tap_zone_sheet, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(st.tap.tap_zone_sheet, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(st.tap.tap_zone_sheet, 12, 0);
-    lv_obj_set_style_pad_all(st.tap.tap_zone_sheet, 16, 0);
-    lv_obj_set_style_pad_row(st.tap.tap_zone_sheet, 18, 0);
+    // 外框由主阅读卡片统一绘制，浮层仅覆盖内容。
+    lv_obj_set_style_radius(st.tap.tap_zone_sheet, UiSx(12), 0);
+    lv_obj_set_style_pad_all(st.tap.tap_zone_sheet, 0, 0);
+    lv_obj_set_style_pad_row(st.tap.tap_zone_sheet, 0, 0);
     lv_obj_set_flex_flow(st.tap.tap_zone_sheet, LV_FLEX_FLOW_COLUMN);
     lv_obj_add_flag(st.tap.tap_zone_sheet, LV_OBJ_FLAG_CLICKABLE);
     Book_DisableScroll(st.tap.tap_zone_sheet);
@@ -385,6 +329,7 @@ void OnTapZoneReset(lv_event_t* e) {
 void OnTapZoneClose(lv_event_t* e) {
     lv_event_stop_bubbling(e);
     TapZonesPanelClose();
+    RequestSettingsSheetPaint();
 }
 
 void OnTapZonePickBack(lv_event_t* e) {

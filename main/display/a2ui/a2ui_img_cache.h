@@ -2,20 +2,13 @@
 
 /**
  * @file a2ui_img_cache.h
- * @brief Session-scoped A2I1/A2L8 blob cache on SD card (optional).
+ * @brief SD 卡上的 A2I1/A2L8 会话图片缓存
  *
- * Architecture
- * ------------
- * - Ownership: storage only (dir setup / boot wipe / keyed blob IO). Display & HTTP
- *   stay in a2ui_image.cc — this module never touches LVGL or the network.
- * - Backend: FatFS under `SD_PATH_A2UI_CACHE` (`/sdcard/metalio/e-ink/a2ui_cache`).
- *   No SD → cache disabled (HTTP-only). Has SD → boot wipe then ready.
- * - Key: FNV-1a of the *resolved* image URL (same string a2ui_image downloads).
- * - Capacity: soft budget + file-count; if the next image cannot fit, wipe the whole
- *   cache directory then write (no piecemeal eviction).
- * - Failure policy: never fatal to boot or UI.
- *
- * Threading: mutex-protected. Typical caller is the single a2ui_img download task.
+ * 仅负责目录、启动清理和按键读写；显示与 HTTP 下载由 a2ui_image.cc 处理。
+ * 目录由 SD_PATH_A2UI_CACHE 定义；无 SD 卡时禁用缓存，有卡时开机清空。
+ * 缓存键为解析后图片 URL 的 FNV-1a，与下载时使用的地址一致。
+ * 达到容量或文件数上限时清空缓存后再写入，失败不阻止启动和界面运行。
+ * 访问通过互斥锁保护，通常由图片下载任务调用。
  */
 
 #include <stddef.h>
@@ -28,32 +21,31 @@
 extern "C" {
 #endif
 
-/** POSIX directory for A2UI image session cache (under SD app root). */
-#define A2UI_IMG_CACHE_BASE_PATH SD_PATH_A2UI_CACHE
+#define A2UI_IMG_CACHE_BASE_PATH SD_PATH_A2UI_CACHE // 图片会话缓存目录
 
 /**
- * If SD is mounted: ensure cache dirs exist, wipe previous session files, mark ready.
- * If no SD: returns ESP_ERR_NOT_FOUND and leaves cache disabled.
- * Idempotent; never fatal to boot.
+ * @brief 初始化缓存目录并清空上次启动的会话文件
+ * @return 无 SD 卡时返回 ESP_ERR_NOT_FOUND；重复调用不重复初始化
  */
 esp_err_t a2ui_img_cache_init(void);
 
+/** @brief 查询图片缓存是否可用 */
 bool a2ui_img_cache_is_ready(void);
 
 /**
- * Load cached blob for url into a heap buffer (SPIRAM preferred).
- * On success *out_buf is owned by caller (heap_caps_free / free).
- * ESP_ERR_NOT_FOUND = miss.
+ * @brief 按图片地址读取缓存，优先使用 SPIRAM 分配输出缓冲区
+ * @note 成功时由调用方通过 heap_caps_free 或 free 释放输出缓冲区
+ * @return 未命中时返回 ESP_ERR_NOT_FOUND
  */
 esp_err_t a2ui_img_cache_load(const char *url, uint8_t **out_buf, size_t *out_len);
 
 /**
- * Store a validated A2I1/A2L8 payload for url. Best-effort.
- * If soft budget cannot hold this blob, wipe cache dir then write.
+ * @brief 保存已校验的 A2I1/A2L8 图片数据
+ * @note 超出缓存预算时先清空缓存，写入失败不影响界面运行
  */
 esp_err_t a2ui_img_cache_store(const char *url, const uint8_t *data, size_t len);
 
-/** Remove one entry (e.g. after parse failure on a hit). */
+/** @brief 移除指定图片的缓存，供缓存解析失败时重新下载 */
 void a2ui_img_cache_invalidate(const char *url);
 
 #ifdef __cplusplus

@@ -10,6 +10,8 @@
 #include <cstring>
 #include <string>
 #include <strings.h>
+#include <mutex>
+#include <new>
 
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -30,7 +32,6 @@ static constexpr const char* kNvsShelfViewKey = "shelf_view";
 static constexpr const char* kNvsShelfPctKey = "shelf_pct";
 static constexpr const char* kNvsOrientKey = "orient";
 static constexpr const char* kNvsTextDirectionKey = "text_dir";
-static constexpr const char* kDefaultFile = "misans_40_2.ef"; // SD 现网默认 40px/2bpp
 static constexpr size_t kMaxFileLen = SD_FILE_NAME_MAX_BYTES;
 static constexpr int kDefaultSpacingPreset = 1;  // 标准
 static constexpr int kDefaultParaGapPreset = 1; // 标准，56px
@@ -74,6 +75,12 @@ static int s_shelf_view = kDefaultShelfView;
 static int s_shelf_pct = kDefaultShelfPct;
 static int s_orient = kBookReaderOrientPortrait;
 static bool s_ready = false;
+static constexpr int kTextOptionCount = static_cast<int>(BookTextOption::Count);
+static constexpr const char* kTextKeys[] = {"para_px", "letter_px", "line_px", "margin_px", "indent_ch", "ul_offset", "aa_strength"};
+static constexpr int kTextDefaults[] = {-1, 0, -1, -1, 2, 0, 1};
+static constexpr int kTextMin[] = {0, -2, 0, 0, 0, -12, 0};
+static constexpr int kTextMax[] = {104, 12, 48, 64, 3, 12, 2};
+static int s_text_values[kTextOptionCount] = {-1, 0, -1, -1, 2, 0, 1};
 
 
 static bool IsSafeBasename(const char* name) {
@@ -131,11 +138,11 @@ static int ClampOrient(int orient) {
 
 static void LoadFromNvs() {
     Settings settings(kNvsNs, false);
-    const std::string v = settings.GetString(kNvsFontKey, kDefaultFile);
+    const std::string v = settings.GetString(kNvsFontKey, kBookReaderDefaultFontFile);
     if (IsSafeBasename(v.c_str())) {
         std::snprintf(s_font_file, sizeof(s_font_file), "%s", v.c_str());
     } else {
-        std::snprintf(s_font_file, sizeof(s_font_file), "%s", kDefaultFile);
+        std::snprintf(s_font_file, sizeof(s_font_file), "%s", kBookReaderDefaultFontFile);
     }
     s_font_size = IsTtfName(s_font_file) ?
         std::clamp<int>(settings.GetInt(kNvsFontSizeKey, 40), 20, 80) : 0;
@@ -163,12 +170,16 @@ static void LoadFromNvs() {
     s_shelf_view = ClampShelfView(settings.GetInt(kNvsShelfViewKey, kDefaultShelfView));
     s_shelf_pct = settings.GetInt(kNvsShelfPctKey, kDefaultShelfPct) != 0 ? 1 : 0;
     s_orient = ClampOrient(settings.GetInt(kNvsOrientKey, kBookReaderOrientPortrait));
+    for (int i = 0; i < kTextOptionCount; ++i) {
+        const int value = settings.GetInt(kTextKeys[i], kTextDefaults[i]);
+        s_text_values[i] = value == kTextDefaults[i] ? value : std::clamp(value, kTextMin[i], kTextMax[i]);
+    }
     EpdSetReaderAaEnabled(false);
     s_ready = true;
     ESP_LOGI(TAG,
-             "nvs load font=%s spacing=%d margin=%d foot_msk=0x%x aa=%d underline=%d shelf_view=%d "
+             "nvs load spacing=%d margin=%d foot_msk=0x%x aa=%d underline=%d shelf_view=%d "
              "shelf_pct=%d orient=%d",
-             s_font_file, s_spacing_preset, s_margin_preset, s_footer_mask, s_aa, s_underline,
+             s_spacing_preset, s_margin_preset, s_footer_mask, s_aa, s_underline,
              s_shelf_view, s_shelf_pct, s_orient);
 }
 
@@ -188,28 +199,34 @@ enum class BookPrefsPersistKind : uint8_t {
     kAutoTurnSeconds = 12,
     kTextDirection = 13,
     kParaGap = 14,
+    kTextValues = 15,
 };
 
 struct BookPrefsPersistArg {
     BookPrefsPersistKind kind = BookPrefsPersistKind::kFont;
     char file[kMaxFileLen + 1] = {};
     int ival = 0;
+    int values[kTextOptionCount] = {};
 };
 
-// 异步落盘：LVGL 栈常在 PSRAM，禁止在此线程直接 nvs_*（对齐 397 PersistTask）
-static void PersistTask(void* arg) {
-    auto* p = static_cast<BookPrefsPersistArg*>(arg);
-    if (p == nullptr) {
-        vTaskDelete(nullptr);
-        return;
-    }
+static BookPrefsPersistArg* NewPersistArg(BookPrefsPersistKind kind) {
+    auto* arg = new(std::nothrow) BookPrefsPersistArg;
+    if (arg) arg->kind = kind;
+    else ESP_LOGE(TAG, "preference allocation failed kind=%u", static_cast<unsigned>(kind));
+    return arg;
+}
+
+static void PersistOne(BookPrefsPersistArg* p) {
     {
         Settings settings(kNvsNs, true);
         switch (p->kind) {
+            case BookPrefsPersistKind::kTextValues:
+                for (int i = 0; i < kTextOptionCount; ++i) settings.SetInt(kTextKeys[i], p->values[i]);
+                break;
             case BookPrefsPersistKind::kFont:
                 settings.SetString(kNvsFontKey, p->file);
                 settings.SetInt(kNvsFontSizeKey, p->ival);
-                ESP_LOGI(TAG, "nvs save font=%s", p->file);
+                ESP_LOGI(TAG, "font preference saved");
                 break;
             case BookPrefsPersistKind::kSpacing:
                 settings.SetInt(kNvsSpacingKey, p->ival);
@@ -265,22 +282,42 @@ static void PersistTask(void* arg) {
                 break;
         }
     }
-    delete p;
+}
+
+static std::mutex s_persist_mutex; // 串行交接，避免旧快照晚于新快照写入
+static BookPrefsPersistArg* s_pending[static_cast<unsigned>(BookPrefsPersistKind::kTextValues) + 1] = {}; // 每类偏好仅保留最新快照
+static bool s_persist_running = false; // 无待写参数时退出任务
+
+static void PersistTask(void*) {
+    for (;;) {
+        BookPrefsPersistArg* next = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(s_persist_mutex);
+            for (auto& pending : s_pending) {
+                if (pending) { next = pending; pending = nullptr; break; }
+            }
+            if (!next) { s_persist_running = false; break; }
+        }
+        PersistOne(next);
+        delete next;
+    }
     vTaskDelete(nullptr);
 }
 
 static bool StartPersist(BookPrefsPersistArg* arg) {
-    if (arg == nullptr) {
-        return false;
-    }
-    // 对齐 397：普通 xTaskCreate，栈可走 PSRAM（ALLOW_STACK_EXTERNAL）。
-    // 勿 WithCaps(INTERNAL)：S31 内部堆常 <4KB，建任务失败且偏好落不了盘。
-    if (xTaskCreate(PersistTask, "book_prefs_nvs", 4096, arg, 5, nullptr) != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate(book_prefs_nvs) failed");
-        delete arg;
-        return false;
-    }
-    return true;
+    if (!arg) { ESP_LOGE(TAG, "preference allocation failed"); return false; }
+    std::lock_guard<std::mutex> lock(s_persist_mutex);
+    const auto slot = static_cast<unsigned>(arg->kind);
+    delete s_pending[slot];
+    s_pending[slot] = arg;
+    if (s_persist_running) return true;
+    s_persist_running = true;
+    if (xTaskCreate(PersistTask, "book_prefs_nvs", 4096, nullptr, 5, nullptr) == pdPASS) return true;
+    s_persist_running = false;
+    s_pending[slot] = nullptr;
+    delete arg;
+    ESP_LOGE(TAG, "preference task creation failed");
+    return false;
 }
 
 
@@ -292,7 +329,7 @@ void BookReaderPrefsEnsureLoaded(void) {
 
 const char* BookReaderPrefsFontFile(void) {
     BookReaderPrefsEnsureLoaded();
-    return s_font_file[0] != '\0' ? s_font_file : kDefaultFile;
+    return s_font_file[0] != '\0' ? s_font_file : kBookReaderDefaultFontFile;
 }
 
 void BookReaderPrefsSetFontFile(const char* filename, int size_px) {
@@ -306,8 +343,8 @@ void BookReaderPrefsSetFontFile(const char* filename, int size_px) {
     s_font_size = IsTtfName(filename) ? size_px : 0;
     s_ready = true;
 
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kFont;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kFont);
+    if (!arg) return;
     std::snprintf(arg->file, sizeof(arg->file), "%s", s_font_file);
     arg->ival = s_font_size;
     StartPersist(arg);
@@ -344,8 +381,8 @@ void BookReaderPrefsSetSpacingPreset(int preset) {
     BookReaderPrefsEnsureLoaded();
     s_spacing_preset = preset;
     s_ready = true;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kSpacing;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kSpacing);
+    if (!arg) return;
     arg->ival = s_spacing_preset;
     StartPersist(arg);
 }
@@ -382,14 +419,15 @@ void BookReaderPrefsSetParaGapPreset(int preset) {
     BookReaderPrefsEnsureLoaded();
     if (s_para_gap_preset == preset) return;
     s_para_gap_preset = preset;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kParaGap;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kParaGap);
+    if (!arg) return;
     arg->ival = s_para_gap_preset;
     StartPersist(arg);
 }
 
 int BookReaderPrefsParaGap(void) {
-    return kParaGapTable[BookReaderPrefsParaGapPreset()];
+    const int custom = BookReaderPrefsTextValue(BookTextOption::ParaGap);
+    return custom >= 0 ? custom : kParaGapTable[BookReaderPrefsParaGapPreset()];
 }
 
 int BookReaderPrefsMarginPreset(void) {
@@ -405,8 +443,8 @@ void BookReaderPrefsSetMarginPreset(int preset) {
     BookReaderPrefsEnsureLoaded();
     s_margin_preset = preset;
     s_ready = true;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kMargin;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kMargin);
+    if (!arg) return;
     arg->ival = s_margin_preset;
     StartPersist(arg);
 }
@@ -427,7 +465,8 @@ const char* BookReaderPrefsMarginLabel(int preset) {
 }
 
 void BookReaderPrefsMarginBox(int preset, int* left, int* right, int* top, int* bottom) {
-    const BookMarginPreset& m = kMarginTable[ClampMargin(preset)];
+    const int custom = BookReaderPrefsTextValue(BookTextOption::Margin);
+    const BookMarginPreset m = custom >= 0 ? BookMarginPreset{custom, custom, custom, custom} : kMarginTable[ClampMargin(preset)];
     if (left != nullptr) {
         *left = m.left;
     }
@@ -489,8 +528,8 @@ void BookReaderPrefsSetFooterMask(int mask) {
     BookReaderPrefsEnsureLoaded();
     s_footer_mask = ClampFooterMask(mask);
     s_ready = true;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kFooterMask;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kFooterMask);
+    if (!arg) return;
     arg->ival = s_footer_mask;
     StartPersist(arg);
 }
@@ -514,8 +553,8 @@ void BookReaderPrefsSetAntialias(int enabled) {
     BookReaderPrefsEnsureLoaded();
     s_aa = enabled != 0 ? 1 : 0;
     s_ready = true;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kAntialias;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kAntialias);
+    if (!arg) return;
     arg->ival = s_aa;
     StartPersist(arg);
 }
@@ -542,8 +581,8 @@ void BookReaderPrefsSetUnderlineMode(int mode) {
     BookReaderPrefsEnsureLoaded();
     s_underline = mode;
     s_ready = true;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kUnderline;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kUnderline);
+    if (!arg) return;
     arg->ival = s_underline;
     StartPersist(arg);
 }
@@ -557,8 +596,8 @@ void BookReaderPrefsSetShelfView(int view) {
     BookReaderPrefsEnsureLoaded();
     s_shelf_view = ClampShelfView(view);
     s_ready = true;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kShelfView;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kShelfView);
+    if (!arg) return;
     arg->ival = s_shelf_view;
     StartPersist(arg);
 }
@@ -581,8 +620,8 @@ void BookReaderPrefsSetOrient(int orient) {
     BookReaderPrefsEnsureLoaded();
     s_orient = orient;
     s_ready = true;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kOrient;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kOrient);
+    if (!arg) return;
     arg->ival = s_orient;
     StartPersist(arg);
 }
@@ -591,14 +630,22 @@ void BookReaderPrefsSetShowShelfProgress(int enabled) {
     BookReaderPrefsEnsureLoaded();
     s_shelf_pct = enabled != 0 ? 1 : 0;
     s_ready = true;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kShelfPct;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kShelfPct);
+    if (!arg) return;
     arg->ival = s_shelf_pct;
     StartPersist(arg);
 }
 
 int BookReaderPrefsBackground() { BookReaderPrefsEnsureLoaded(); return s_background; }
-void BookReaderPrefsSetBackground(int mode) { if (mode < 0 || mode > 3) return; BookReaderPrefsEnsureLoaded(); s_background=mode; auto* arg=new BookPrefsPersistArg{}; arg->kind=BookPrefsPersistKind::kBackground; arg->ival=mode; StartPersist(arg); }
+void BookReaderPrefsSetBackground(int mode) {
+    if (mode < 0 || mode > 3) return;
+    BookReaderPrefsEnsureLoaded();
+    s_background = mode;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kBackground);
+    if (!arg) return;
+    arg->ival = mode;
+    StartPersist(arg);
+}
 
 int BookReaderPrefsPageTurn() {
     BookReaderPrefsEnsureLoaded();
@@ -608,8 +655,8 @@ void BookReaderPrefsSetPageTurn(int mode) {
     if (mode != kBookReaderPageTurnSlide && mode != kBookReaderPageTurnWipe) return;
     BookReaderPrefsEnsureLoaded();
     s_page_turn = mode;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kPageTurn;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kPageTurn);
+    if (!arg) return;
     arg->ival = mode;
     StartPersist(arg);
 }
@@ -622,8 +669,8 @@ void BookReaderPrefsSetWritingMode(int mode) {
     if (mode != kBookReaderWritingHorizontal && mode != kBookReaderWritingVertical) return;
     BookReaderPrefsEnsureLoaded();
     s_writing_mode = mode;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kWritingMode;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kWritingMode);
+    if (!arg) return;
     arg->ival = mode;
     StartPersist(arg);
 }
@@ -638,8 +685,8 @@ void BookReaderPrefsSetTextDirection(int direction) {
     BookReaderPrefsEnsureLoaded();
     if (s_text_direction == direction) return;
     s_text_direction = direction;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kTextDirection;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kTextDirection);
+    if (!arg) return;
     arg->ival = direction;
     StartPersist(arg);
 }
@@ -653,8 +700,60 @@ void BookReaderPrefsSetAutoTurnSeconds(int seconds) {
     seconds = std::max(5, std::min(45, seconds));
     if (s_auto_turn_seconds == seconds) return;
     s_auto_turn_seconds = seconds;
-    auto* arg = new BookPrefsPersistArg{};
-    arg->kind = BookPrefsPersistKind::kAutoTurnSeconds;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kAutoTurnSeconds);
+    if (!arg) return;
     arg->ival = seconds;
     StartPersist(arg);
+}
+
+int BookReaderPrefsTextValue(BookTextOption option) {
+    BookReaderPrefsEnsureLoaded();
+    const int index = static_cast<int>(option);
+    return index >= 0 && index < kTextOptionCount ? s_text_values[index] : 0;
+}
+
+static void SaveTextValues() {
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kTextValues);
+    if (!arg) return;
+    std::copy_n(s_text_values, kTextOptionCount, arg->values);
+    StartPersist(arg);
+}
+
+bool BookReaderPrefsSetTextValue(BookTextOption option, int value) {
+    BookReaderPrefsEnsureLoaded();
+    const int index = static_cast<int>(option);
+    if (index < 0 || index >= kTextOptionCount || value < kTextMin[index] || value > kTextMax[index]) return false;
+    if (s_text_values[index] == value) return false;
+    s_text_values[index] = value;
+    SaveTextValues();
+    return true;
+}
+
+reader::TextStyle BookReaderPrefsTextStyle() {
+    BookReaderPrefsEnsureLoaded();
+    reader::TextStyle style;
+    style.line_gap = s_text_values[2];
+    style.letter_gap = s_text_values[1];
+    style.indent_chars = s_text_values[4];
+    style.underline_offset = s_text_values[5];
+    style.aa_strength = s_text_values[6];
+    return style;
+}
+
+void BookReaderPrefsResetReading() {
+    BookReaderPrefsEnsureLoaded();
+    std::copy_n(kTextDefaults, kTextOptionCount, s_text_values);
+    SaveTextValues();
+    BookReaderPrefsSetSpacingPreset(kDefaultSpacingPreset);
+    BookReaderPrefsSetParaGapPreset(kDefaultParaGapPreset);
+    BookReaderPrefsSetMarginPreset(kDefaultMarginPreset);
+    BookReaderPrefsSetFooterMask(kBookReaderFooterDefault);
+    BookReaderPrefsSetAntialias(0);
+    BookReaderPrefsSetUnderlineMode(0);
+    BookReaderPrefsSetOrient(kBookReaderOrientPortrait);
+    BookReaderPrefsSetBackground(0);
+    BookReaderPrefsSetWritingMode(kBookReaderWritingHorizontal);
+    BookReaderPrefsSetTextDirection(kBookReaderTextLeftToRight);
+    BookReaderPrefsSetPageTurn(kBookReaderPageTurnSlide);
+    BookReaderPrefsSetAutoTurnSeconds(10);
 }

@@ -26,7 +26,8 @@ extern const char cloudzao_path_push_resources_next[]; // 下一条推送
 extern const char cloudzao_path_push_resources[]; // 推送队列删除
 extern const char cloudzao_path_library_sync[]; // 书库同步
 extern const char cloudzao_path_device_location_wifi[]; // WiFi 定位上报
-extern const char cloudzao_path_vision_upload[];// 视觉上传
+extern const char cloudzao_vision_upload_host[]; // 视觉上传基址
+extern const char cloudzao_path_vision_upload[]; // 视觉上传路径
 
 extern const char cloudzao_workbuddy_host[]; // WorkBuddy 服务配置
 extern const char cloudzao_path_workbuddy_authorization[]; // WorkBuddy 设备授权

@@ -11,6 +11,7 @@
 #include "sd_paths.h"
 #include "sd_access.h"
 
+#include <algorithm>
 #include <atomic>
 #include <new>
 #include <esp_log.h>
@@ -30,6 +31,7 @@ struct Work {
     int width = 0, height = 0, underline = 0; // 分页视口和下划线模式
     int background = 0, text_left = 0, text_top = 0; // 背景模式与正文屏幕坐标
     int screen_width = 0, screen_height = 0; // 整页背景尺寸
+    reader::TextStyle style; // 布局快照及本次绘制的装饰参数
     std::shared_ptr<reader::RasterImage> background_image; // 页面准备期间保持背景存活
     bool antialias = false, vertical = false, rtl = false; // 抗锯齿、竖排和列方向
 };
@@ -77,15 +79,18 @@ void PreparePage(void* data) {
             const auto* page = result.cursor->CurrentPageData();
             const bool warmed = PrewarmPageFont(page, &cancelled);
             result.ok = !cancelled.load();
-            if (warmed && result.ok && page && !result.cursor->IsPageImagesMode() && reader::PageIsTextOnly(*page) &&
+            const bool has_text = page && std::any_of(page->items.begin(), page->items.end(),
+                [](const reader::PageItem& item) { return item.kind == reader::ContentKind::kText && !item.text.empty(); });
+            if (warmed && result.ok && has_text && !result.cursor->IsPageImagesMode() &&
                 work->font && work->width > 40 && work->height > 40) {
                 result.column_width = work->vertical ? work->width
-                    : reader::PageTextColumnWidth(*page, work->font, work->width);
-                const bool raster_ok = work->vertical
+                    : reader::PageTextColumnWidth(*page, work->font, work->width, result.cursor->Style());
+                const bool raster_ok = work->vertical && reader::PageIsTextOnly(*page)
                     ? reader::RasterPageVerticalTextToL8(*page, work->font, result.cursor->LineSpacingPercent(), result.cursor->ParaGap(),
-                        result.column_width, work->height, work->underline, result.raster, work->antialias, work->rtl)
+                        result.column_width, work->height, work->underline, result.raster, work->antialias, work->rtl, work->style)
                     : reader::RasterPageTextToL8(*page, work->font, result.cursor->LineSpacingPercent(), result.cursor->ParaGap(),
-                        result.column_width, work->height, work->underline, result.raster, work->antialias);
+                        result.column_width, work->height, work->underline, result.raster, work->antialias, &result.image_tops, work->style);
+                if (!raster_ok) { result.raster.Reset(); result.image_tops.clear(); }
                 if (raster_ok) result.ink_height = result.raster.height;
                 if (raster_ok && result.background) {
                     const auto& background = *result.background;
@@ -120,6 +125,9 @@ bool StartReaderPageWork(std::unique_ptr<ReaderPageResult> result) {
     cancelled.store(false);
     const auto& st = Book_State();
     work->font = BookFont();
+    work->style = work->result->cursor->Style();
+    work->style.underline_offset = BookReaderPrefsTextValue(BookTextOption::UnderlineOffset);
+    work->style.aa_strength = BookReaderPrefsTextValue(BookTextOption::AaStrength);
     work->width = st.reader.viewport_w; work->height = st.reader.viewport_h;
     work->vertical = st.reader.session->VerticalWriting();
     work->rtl = BookReaderPrefsTextDirection() == kBookReaderTextRightToLeft;

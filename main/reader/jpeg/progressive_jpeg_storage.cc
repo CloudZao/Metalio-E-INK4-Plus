@@ -1,11 +1,12 @@
 #include "progressive_jpeg_priv.h"
 #include "sd_paths.h"
+#include "sd_data_layout.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <climits>
 #include <cstring>
-#include <dirent.h>
+#include <mutex>
 #include <fcntl.h>
 #include <new>
 #include <unistd.h>
@@ -25,34 +26,20 @@ bool Position(FILE* file, uint32_t offset) {
         (std::ftell(file) == static_cast<long>(offset) || std::fseek(file, offset, SEEK_SET) == 0);
 }
 
-void CleanAbandonedWork() {
-    static bool cleaned = false;
-    if (cleaned) return;
-    DIR* directory = opendir(SD_PATH_WALLPAPER_TEMP);
-    if (!directory) return;
-    cleaned = true;
-    while (const dirent* entry = readdir(directory)) {
-        const char* name = entry->d_name;
-        if (std::strlen(name) != 15 || std::memcmp(name, "pj-", 3) || std::strcmp(name + 11, ".tmp")) continue;
-        bool owned = true;
-        for (unsigned i = 3; i < 11; ++i)
-            if (!((name[i] >= '0' && name[i] <= '9') || (name[i] >= 'a' && name[i] <= 'f'))) owned = false;
-        if (!owned) continue;
-        char path[128];
-        std::snprintf(path, sizeof(path), "%s/%.15s", SD_PATH_WALLPAPER_TEMP, name);
-        if (unlink(path) != 0) ESP_LOGW("ProgressiveJpeg", "abandoned work cleanup failed: %s", path);
-    }
-    closedir(directory);
-}
-
 bool OpenWork(DecodeContext& ctx) {
     if (ctx.work) return true;
     ctx.transaction.emplace();
-    if (!*ctx.transaction || !SdEnsureDir(SD_PATH_TEMP) || !SdEnsureDir(SD_PATH_WALLPAPER_TEMP)) {
+    if (!*ctx.transaction || !SdEnsureDir(SD_PATH_TEMP) || !SdEnsureDir(SD_PATH_WALLPAPER_APP_TEMP) || !SdEnsureDir(SD_PATH_WALLPAPER_TEMP)) {
         ctx.Fail(ImageDecodeError::kFileIo);
         return false;
     }
-    CleanAbandonedWork();
+    static std::mutex cleanup_mutex;
+    static bool cleaned = false;
+    {
+        std::lock_guard<std::mutex> lock(cleanup_mutex);
+        if (!cleaned) cleaned = sd_data::CleanWorkFiles(SD_PATH_WALLPAPER_TEMP, "pj-");
+        if (!cleaned) { ctx.Fail(ImageDecodeError::kFileIo); return false; }
+    }
     for (unsigned attempt = 0; attempt < 8; ++attempt) {
         std::snprintf(ctx.work_path, sizeof(ctx.work_path), "%s/pj-%08lx.tmp",
                       SD_PATH_WALLPAPER_TEMP, static_cast<unsigned long>(esp_random()));

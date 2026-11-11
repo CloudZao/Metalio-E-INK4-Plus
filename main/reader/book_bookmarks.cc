@@ -1,4 +1,5 @@
 #include "book_bookmarks.h"
+#include "book_storage_paths.h"
 #ifndef EBOOK_EMULATOR
 #include "assets/lang_config.h"
 #endif
@@ -83,7 +84,7 @@ bool Read(const std::string& path,uint64_t size,int64_t mtime,uint32_t format,
 }
 }
 void BookBookmarkStore::Load(const std::string& book_path,uint64_t size,int64_t mtime,uint32_t format) {
-    path_=book_path+".bmk";file_size_=size;mtime_=mtime;format_=format;entries_.clear();error_.clear();
+    path_=BookStoragePath(book_path.c_str(),".bmk");file_size_=size;mtime_=mtime;format_=format;entries_.clear();error_.clear();
     try {
         bool missing=false;
         if(Read(path_,size,mtime,format,entries_,error_,missing)) { error_.clear();return; }

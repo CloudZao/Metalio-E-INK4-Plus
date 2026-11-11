@@ -119,9 +119,9 @@ static void wipe_all_unlocked(void)
     closedir(d);
     s_next_seq = 1;
     if (n > 0) {
-        ESP_LOGI(TAG, "wiped %d file(s) under %s", n, ASSISTANT_CHAT_STORE_BASE_PATH);
+        ESP_LOGI(TAG, "history cleared files=%d", n);
     } else {
-        ESP_LOGI(TAG, "wipe: dir empty %s", ASSISTANT_CHAT_STORE_BASE_PATH);
+        ESP_LOGD(TAG, "history already empty");
     }
 }
 
@@ -275,7 +275,7 @@ esp_err_t assistant_chat_store_init(void)
         goto out;
     }
     if (!ensure_tree()) {
-        ESP_LOGW(TAG, "cannot create %s — chat history disabled", ASSISTANT_CHAT_STORE_BASE_PATH);
+        ESP_LOGW(TAG, "history directory unavailable; using RAM only");
         ret = ESP_FAIL;
         goto out;
     }
@@ -283,8 +283,8 @@ esp_err_t assistant_chat_store_init(void)
     wipe_all_unlocked();
     s_next_seq = 1;
     s_ready = true;
-    ESP_LOGI(TAG, "ready path=%s cap: %d files / %uB/file / %uB total (boot wipe)",
-             ASSISTANT_CHAT_STORE_BASE_PATH, CHAT_MAX_FILES, (unsigned)CHAT_MAX_RECORD,
+    ESP_LOGI(TAG, "history ready cap: %d files / %uB/file / %uB total (boot wipe)",
+             CHAT_MAX_FILES, (unsigned)CHAT_MAX_RECORD,
              (unsigned)CHAT_MAX_TOTAL_BYTES);
     ret = ESP_OK;
 
@@ -341,12 +341,14 @@ esp_err_t assistant_chat_store_append(const char *json, size_t len)
         err = write_file_unlocked(final_path, tmp_path, json, len);
         if (err == ESP_OK) {
             s_next_seq = seq + 1;
-            ScanOut sc{};
-            scan_unlocked(&sc);
-            ESP_LOGI(TAG, "APPEND seq=%lu len=%u files=%d used=%u", (unsigned long)seq,
-                     (unsigned)len, sc.files, (unsigned)sc.bytes);
+            if (ESP_LOG_ENABLED(ESP_LOG_DEBUG) && esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+                ScanOut sc{};
+                scan_unlocked(&sc);
+                ESP_LOGD(TAG, "APPEND seq=%lu len=%u files=%d used=%u", (unsigned long)seq,
+                         (unsigned)len, sc.files, (unsigned)sc.bytes);
+            }
         } else {
-            ESP_LOGW(TAG, "append write fail seq=%lu len=%u", (unsigned long)seq, (unsigned)len);
+            ESP_LOGE(TAG, "append write fail seq=%lu len=%u", (unsigned long)seq, (unsigned)len);
         }
     }
 
@@ -392,7 +394,7 @@ esp_err_t assistant_chat_store_for_each(assistant_chat_store_visit_fn fn, void *
         int n = 0;
         DIR *d = opendir(ASSISTANT_CHAT_STORE_BASE_PATH);
         if (!d) {
-            ESP_LOGI(TAG, "for_each: no dir");
+            ESP_LOGD(TAG, "history directory absent");
             goto out;
         }
         struct dirent *e;
@@ -468,7 +470,7 @@ esp_err_t assistant_chat_store_for_each(assistant_chat_store_visit_fn fn, void *
             ok_n++;
             vTaskDelay(1);
             if (!keep) {
-                ESP_LOGW(TAG, "LOAD aborted by visitor after seq=%lu", (unsigned long)seqs[i]);
+                ESP_LOGD(TAG, "LOAD stopped by visitor after seq=%lu", (unsigned long)seqs[i]);
                 break;
             }
         }

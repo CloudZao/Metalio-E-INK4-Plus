@@ -11,6 +11,7 @@
 
 #include "ebook_document.h"
 #include "book_disk_cache.h"
+#include "book_toc.h"
 #include "epub_document.h"
 #include "lvgl.h"
 #include "reader_types.h"
@@ -29,7 +30,7 @@ namespace reader {
 // - 顶格章节 TOC（第N章/第N回/数字短章名）与分页同趟扫描，写入 .idx
 // - 换参：当前页即时预览 + 后台全量建索引；预览态可邻页流式翻页（短历史回退）
 // - 索引可缓存到 SD：与 txt 同目录 `<书名>.txt.idx`（书库在 /sdcard/metalio/e-ink/books）
-// - 阅读状态：同目录 <书名>.*.pos（POS3 及可选 TXT 字节锚点），下次打开续读
+// - 阅读状态：settings/books 下按书籍相对路径标识保存 .pos（POS3 及可选 TXT 字节锚点），下次打开续读
 //   兼容读 POS1/POS2；写出始终 POS3
 //
 // EBOOK：按章 fseek + 分块 zlib；章内图文以 ContentBlock 分页（与 EPUB 同路径）。
@@ -54,7 +55,14 @@ public:
     BookSession(const BookSession&) = delete;
     BookSession& operator=(const BookSession&) = delete;
 
-    void SetFont(const lv_font_t* font) { font_ = font; }
+    /**
+     * @brief 设置分页步进字体及用于安全字距判断的绘制字体
+     * @param glyph_font 完整字形字体；为空时使用分页字体，调用方保证字体在会话使用期间有效
+     */
+    void SetFont(const lv_font_t* font, const lv_font_t* glyph_font = nullptr) {
+        font_ = font;
+        glyph_font_ = glyph_font ? glyph_font : font;
+    }
     void SetVerticalWriting(bool vertical) {
         vertical_writing_ = vertical && !page_images_mode_;
         SetViewport(physical_w_, physical_h_);
@@ -75,6 +83,10 @@ public:
         line_spacing_percent_ = page_images_mode_ ? 0 : std::clamp(spacing_percent, 0, 100);
         para_gap_ = page_images_mode_ ? 0 : std::max<lv_coord_t>(0, para_gap);
     }
+    /** @brief 设置分页和绘制共享的连续排版参数。 */
+    void SetTextStyle(const TextStyle& style) { text_style_ = style; }
+    /** @brief 获取当前会话的排版与绘制参数快照。 */
+    const TextStyle& Style() const { return text_style_; }
     int LineSpacingPercent() const { return line_spacing_percent_; }
     lv_coord_t ParaGap() const { return para_gap_; }
 
@@ -86,6 +98,10 @@ public:
     }
 
     bool Open(const BookInfo& info);
+    #ifndef EBOOK_EMULATOR
+    /** @brief 删除书籍及关联数据并更新阅读统计；正在打开或阅读时拒绝删除。 */
+    static bool DeleteFile(const char* book);
+    #endif
     void Close();
     /** @brief 停钟并提交最终进度快照，避免延迟析构覆盖新会话的进度。 */
     bool PrepareClose();
@@ -164,6 +180,10 @@ public:
     // 统一目录（TXT 解析 TOC / EPUB·EBOOK 章表）。无目录时 Count=0。
     int TocCount() const;
     const TocEntry* TocAt(int index) const;
+    /** @brief 判断首个目录目标是否位于全书第一页之后 */
+    bool TocStartsAfterFirstPage() const;
+    /** @brief 按书籍语言获取目录首页入口标题，缺少语言声明时按目录文字判断 */
+    const char* TocHomeTitle() const;
     // 当前阅读位置对应的目录项；无则 -1。
     int CurrentTocIndex() const;
     // 跳到目录项起始页（TXT）或 spine/ebook 章。
@@ -315,7 +335,8 @@ private:
     bool OpenEpub(const char* path);
     bool OpenEbook(const char* path);
     bool PaginateChapter(int chapter, BookPageStore& built, const LayoutAnchor* preview = nullptr,
-                         const std::atomic<bool>* cancelled = nullptr) const;
+                         const std::atomic<bool>* cancelled = nullptr,
+                         std::vector<BookSourcePosition>* epub_positions = nullptr) const;
     bool CountChapterPages(int chapter, int& out_pages) const;
     bool RebuildChapterPageTable();
     static std::string ChapterPageCachePath(const char* book_path);
@@ -386,6 +407,7 @@ private:
     std::string display_title_;
     std::string display_author_;
     const lv_font_t* font_ = nullptr;
+    const lv_font_t* glyph_font_ = nullptr; // 与绘制一致的完整字形边界，步进仍使用分页字体
     bool vertical_writing_ = false;
     lv_coord_t physical_w_ = 440;
     lv_coord_t physical_h_ = 700;
@@ -397,6 +419,7 @@ private:
     lv_coord_t viewport_h_ = 700;
     int line_spacing_percent_ = kReaderLineSpacingPercentDefault;
     lv_coord_t para_gap_ = kReaderParaGapDefault;
+    TextStyle text_style_; // 导航游标复制的排版快照
 
     std::unique_ptr<EpubDocument> epub_;
     std::unique_ptr<EbookDocument> ebook_;
@@ -460,8 +483,9 @@ private:
     // 后台计页与翻页 LoadChapter 串行，避免 ebook/epub 文件句柄竞态
     mutable std::mutex chapter_io_mu_;
 
-    // TXT 解析目录；EPUB/EBOOK 打开时填章标题（first_page 未用）
+    // TXT 解析目录；EPUB 保存原生目录，首项目标页用于首页入口判断；EBOOK 保存章标题。
     std::vector<TocEntry> toc_;
+    std::vector<BookSourcePosition> epub_toc_positions_; // 原生目录映射到稳定正文块，随导航游标发布
 
     RasterImage cover_;
     bool cover_tried_ = false;

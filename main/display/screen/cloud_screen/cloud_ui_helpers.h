@@ -66,7 +66,7 @@ bool OpStillValid(uint32_t op_gen);
 /** @brief 同步是否忙碌 */
 bool SyncBusy();
 /** @brief 分块下载封面到共享临时文件 */
-std::shared_ptr<reader::HttpTempFile> Cloud_DownloadCover(const char* url);
+std::shared_ptr<reader::HttpTempFile> Cloud_DownloadCover(const char* url, reader::HttpCacheApp app = reader::HttpCacheApp::Transfer);
 /** @brief 列表总页数 */
 int PageCount();
 /** @brief 钳制页码 */

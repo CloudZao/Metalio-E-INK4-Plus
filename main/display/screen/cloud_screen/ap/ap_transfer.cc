@@ -1,3 +1,4 @@
+#include "sd_data_layout.h"
 #include "assets/lang_screen.h"
 #include "assets/lang_network.h"
 #include "ap_transfer.h"
@@ -6,6 +7,8 @@
 #include "sd_paths.h"
 #include "SdCardManager.hpp"
 #include "reader/book_library.h"
+#include "reader/book_session.h"
+#include "reader/image_file_write.h"
 
 #include "assets/lang_config.h"
 #include "power_policy.h"
@@ -972,15 +975,27 @@ bool DeleteTree(char* path, size_t capacity, bool recursive, uint32_t* deleted) 
                 if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0) continue;
                 const size_t n = std::strlen(entry->d_name);
                 if (len + 1 + n >= capacity) { valid = false; break; }
-                path[len] = '/'; std::memcpy(path + len + 1, entry->d_name, n + 1);
-                child = true; break;
+                const bool book = std::strncmp(path, SD_PATH_BOOKS "/", sizeof(SD_PATH_BOOKS)) == 0 &&
+                    reader::DetectFormatByPath(entry->d_name) != reader::BookFormat::kUnknown;
+                if (!child || book) {
+                    path[len] = '/'; std::memcpy(path + len + 1, entry->d_name, n + 1);
+                    child = true;
+                }
+                if (book) break;
             }
             if (!child && errno != 0) valid = false;
             if (closedir(dir) != 0) valid = false;
             if (!valid) return false;
             if (child) continue;
         }
-        if ((S_ISDIR(st.st_mode) ? rmdir(path) : unlink(path)) != 0) return false;
+        if (S_ISDIR(st.st_mode)) {
+            if (rmdir(path)) return false;
+        } else if (std::strncmp(path, SD_PATH_BOOKS "/", sizeof(SD_PATH_BOOKS)) == 0 &&
+                   reader::DetectFormatByPath(path) != reader::BookFormat::kUnknown) {
+            if (!reader::BookSession::DeleteFile(path)) return false;
+        } else if (std::strncmp(path, SD_PATH_WALLPAPER "/", sizeof(SD_PATH_WALLPAPER)) == 0) {
+            if (!reader::DeleteWallpaperFile(path)) return false;
+        } else if (unlink(path)) return false;
         ++*deleted;
         if (std::strlen(path) == root_len) return true;
         *std::strrchr(path, '/') = '\0';
@@ -1042,6 +1057,11 @@ esp_err_t HandleRename(httpd_req_t* req) {
     if (rename(from, to) != 0) {
         return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_RENAME_FAILED);
     }
+    if (!sd_data::Relocate(from, to)) {
+        if (rename(to, from) != 0 || !sd_data::Relocate(to, from))
+            ESP_LOGE(TAG, "auxiliary relocation rollback failed errno=%d", errno);
+        return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_RENAME_FAILED);
+    }
     reader::InvalidateBookLibraryCache();
     return SendText(req, nullptr, "ok");
 }
@@ -1080,6 +1100,11 @@ esp_err_t HandleMove(httpd_req_t* req) {
     if (rename(from, dest) != 0) {
         return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_MOVE_FAILED);
     }
+    if (!sd_data::Relocate(from, dest)) {
+        if (rename(dest, from) != 0 || !sd_data::Relocate(dest, from))
+            ESP_LOGE(TAG, "auxiliary relocation rollback failed errno=%d", errno);
+        return SendText(req, "500 Internal Server Error", Lang::Strings::TRANSFER_MOVE_FAILED);
+    }
     reader::InvalidateBookLibraryCache();
     return SendText(req, nullptr, "ok");
 }
@@ -1115,7 +1140,7 @@ bool StartHttp() {
     if (!s_upload_slots) s_upload_slots = xSemaphoreCreateCountingStatic(ApRequestWorker::kMaxClients, ApRequestWorker::kMaxClients, &s_upload_slots_storage);
     if (!s_file_lock || !s_clients_lock || !s_upload_slots) return false;
     s_http_stopping.store(false);
-    if (!s_upload_worker.Start("ap_upload") || !s_file_worker.Start("ap_files")) return false;
+    if (!s_upload_worker.Start("ap_upload") || !s_file_worker.Start("ap_files", true)) return false;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.max_uri_handlers = 11;

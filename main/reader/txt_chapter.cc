@@ -162,34 +162,39 @@ size_t ConsumeRoman(const uint8_t* data, size_t len, size_t i) {
     return i - start;
 }
 
-bool MatchAsciiKeyword(const uint8_t* data, size_t len, const char* kw) {
+static size_t AsciiKeywordPrefixLen(const uint8_t* data, size_t len, const char* kw) {
     size_t i = 0;
-    for (; kw[i] != '\0'; ++i) {
-        if (i >= len || AsciiLower(data[i]) != kw[i]) return false;
-    }
+    for (; kw[i] != '\0'; ++i) if (i >= len || AsciiLower(data[i]) != kw[i]) return 0;
     uint32_t cp = 0;
-    if (i >= len || Utf8Next(data + i, len - i, &cp) == 0 || !IsWs(cp)) return false;
+    if (i >= len || Utf8Next(data + i, len - i, &cp) == 0 || !IsWs(cp)) return 0;
     i = SkipWs(data, len, i);
     const size_t start = i;
     if (i < len && IsAsciiDigit(data[i])) {
         while (i < len && IsAsciiDigit(data[i])) ++i;
-        if (i - start > 4) return false;
-    } else {
-        i += ConsumeRoman(data, len, i);
-    }
-    if (i == start) return false;
-    if (i == len) return true;
-    // 编号必须完整结束，拒绝 Introduction、IVory、1st 等普通单词。
+        if (i - start > 4) return 0;
+    } else i += ConsumeRoman(data, len, i);
+    if (i == start) return 0;
+    if (i == len) return i;
     Utf8Next(data + i, len - i, &cp);
-    return IsNameSep(cp) || cp == '.';
+    if (cp == '.') return i + 1;
+    return IsNameSep(cp) ? i : 0;
 }
 
-bool MatchEnglishHeading(const uint8_t* data, size_t len) {
+static size_t RomanHeadingPrefixLen(const uint8_t* data, size_t len) {
+    const size_t count = ConsumeRoman(data, len, 0);
+    if (!count || count >= len || data[count] != '.') return 0;
+    for (size_t i = 0; i < count; ++i) if (data[i] < 'A' || data[i] > 'Z') return 0;
+    if (count + 1 == len) return count + 1;
+    return SkipWs(data, len, count + 1) == len ? count + 1 : 0;
+}
+
+static size_t EnglishHeadingPrefixLen(const uint8_t* data, size_t len) {
     static const char* kWords[] = {"chapter", "part", "volume", "book", "act", "section"};
     for (const char* word : kWords) {
-        if (MatchAsciiKeyword(data, len, word)) return true;
+        const size_t prefix = AsciiKeywordPrefixLen(data, len, word);
+        if (prefix) return prefix;
     }
-    return false;
+    return RomanHeadingPrefixLen(data, len);
 }
 
 // 序章/楔子/番外…（整词前缀，后可接短副标题）
@@ -368,11 +373,9 @@ bool IsTxtChapterTitleLine(const char* utf8, size_t len) {
         return true;
     }
     if (MatchJuanN(data, n)) return true;
+    if (EnglishHeadingPrefixLen(data, n)) return true;
     if (prose_punctuation) return false;
     if (MatchSpecialHeading(data, n)) {
-        return true;
-    }
-    if (MatchEnglishHeading(data, n)) {
         return true;
     }
     // 数字短章名（如「1清和宫上」）
@@ -398,9 +401,8 @@ bool SplitChapterHeading(const std::string& title, std::string& ordinal, std::st
     if (prefix == 0) {
         prefix = JuanNPrefixLen(data, n);
     }
-    if (prefix == 0) {
-        return false;
-    }
+    if (prefix == 0) prefix = EnglishHeadingPrefixLen(data, n);
+    if (prefix == 0) return false;
     ordinal.assign(reinterpret_cast<const char*>(data), prefix);
     size_t i = prefix;
     while (i < n) {
@@ -431,6 +433,98 @@ std::string FormatChapterHeadingDisplay(const std::string& title) {
         return ordinal;
     }
     return ordinal + "\n" + name;
+}
+
+static std::string HeadingKey(const std::string& text) {
+    std::string key;
+    for (unsigned char c : text) {
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            if (!key.empty() && key.back() != ' ') key += ' ';
+        } else key += static_cast<char>(AsciiLower(c));
+    }
+    while (!key.empty() && (key.back() == ' ' || key.back() == '.')) key.pop_back();
+    return key;
+}
+
+static bool EnglishSubtitle(const std::string& text) {
+    size_t letters = 0, characters = 0;
+    bool capitals = true, title_case = true;
+    const auto* bytes = reinterpret_cast<const uint8_t*>(text.data());
+    for (size_t i = 0; i < text.size();) {
+        uint32_t cp = 0; i += Utf8Next(bytes + i, text.size() - i, &cp);
+        if (++characters > kMaxTxtChapterTitleChars) return false;
+        if (cp == ';' || cp == 0x3002 || cp == 0xFF1B) return false;
+    }
+    for (size_t i = 0; i < text.size();) {
+        if (!((text[i] >= 'A' && text[i] <= 'Z') || (text[i] >= 'a' && text[i] <= 'z'))) { ++i; continue; }
+        const size_t start = i;
+        while (i < text.size() && ((text[i] >= 'A' && text[i] <= 'Z') || (text[i] >= 'a' && text[i] <= 'z'))) {
+            capitals = capitals && !(text[i] >= 'a' && text[i] <= 'z'); ++letters; ++i;
+        }
+        if (text[start] >= 'a' && text[start] <= 'z') {
+            const std::string word = text.substr(start, i - start);
+            static const char* kSmallWords[] = {"a", "an", "the", "of", "to", "in", "and", "for", "with", "on"};
+            bool small = false;
+            for (const char* allowed : kSmallWords) if (word == allowed) small = true;
+            title_case = title_case && small;
+        }
+    }
+    return letters >= 2 && (capitals || title_case);
+}
+
+bool TxtChapterDetector::MayStart(uint32_t cp) const {
+    if (collecting_ || subtitle_pending_) return true;
+    if (cp < 128) {
+        const uint8_t first = AsciiLower(static_cast<uint8_t>(cp));
+        if ((first >= '0' && first <= '9') || std::strchr("cpvbasixldm", first) || first == '(') return true;
+        for (const auto& hint : contents_) if (!hint.empty() && hint.front() == first) return true;
+        return false;
+    }
+    static const uint32_t kStarts[] = {0x7B2C,0x5377,0x5E8F,0x6954,0x5F15,0x524D,0x7EEA,0x540E,0x5C3E,0x7EC8,0x756A,0x5916,0x9644,0x5BFC,0x5185,0x8DCB,0x3010,0x300C,0x300E,0xFF08};
+    for (uint32_t start : kStarts) if (cp == start) return true;
+    return false;
+}
+
+void TxtChapterDetector::BlankLine() {
+    blank_before_ = true; subtitle_pending_ = false;
+    if (collecting_ && ++blank_count_ >= 2) collecting_ = false;
+}
+
+TxtHeadingKind TxtChapterDetector::Classify(const std::string& text, bool indented, uint32_t source_offset, bool complete) {
+    const bool subtitle = subtitle_pending_, blank_before = blank_before_;
+    subtitle_pending_ = false; blank_before_ = false; blank_count_ = 0;
+    if (!complete || text.empty() || text.size() > kMaxTxtChapterTitleBytes) { collecting_ = false; return TxtHeadingKind::kNone; }
+    size_t characters = 0;
+    const auto* utf8 = reinterpret_cast<const uint8_t*>(text.data());
+    for (size_t i = 0; i < text.size();) {
+        i += Utf8Next(utf8 + i, text.size() - i, nullptr);
+        if (++characters > kMaxTxtChapterTitleChars) { collecting_ = false; return TxtHeadingKind::kNone; }
+    }
+    const std::string key = HeadingKey(text);
+    if (source_offset < 64 * 1024 && (key == "contents" || key == "table of contents")) { collecting_ = true; return TxtHeadingKind::kNone; }
+    if (collecting_) {
+        std::string hint = text;
+        size_t end = hint.size(); while (end && hint[end - 1] == ' ') --end;
+        size_t number = end; while (number && hint[number - 1] >= '0' && hint[number - 1] <= '9') --number;
+        if (number < end && number && (hint[number - 1] == ' ' || hint[number - 1] == '\t' || hint[number - 1] == '.')) hint.resize(number);
+        else if (!EnglishHeadingPrefixLen(reinterpret_cast<const uint8_t*>(hint.data()), hint.size())) return TxtHeadingKind::kNone;
+        hint = HeadingKey(hint);
+        if (!hint.empty() && contents_.size() < 128) {
+            bool duplicate = false; for (const auto& old : contents_) duplicate = duplicate || old == hint;
+            if (!duplicate) contents_.push_back(std::move(hint));
+        }
+        return TxtHeadingKind::kNone;
+    }
+    const auto* data = reinterpret_cast<const uint8_t*>(text.data());
+    const size_t english = EnglishHeadingPrefixLen(data, text.size());
+    if ((!indented || english) && IsTxtChapterTitleLine(text) &&
+        (!RomanHeadingPrefixLen(data, text.size()) || blank_before)) {
+        subtitle_pending_ = english && SkipWs(data, text.size(), english) == text.size();
+        return TxtHeadingKind::kChapter;
+    }
+    if (subtitle && EnglishSubtitle(text)) return TxtHeadingKind::kSubtitle;
+    for (const auto& hint : contents_) if (key == hint) return TxtHeadingKind::kChapter;
+    return TxtHeadingKind::kNone;
 }
 
 }  // namespace reader

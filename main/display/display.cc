@@ -69,7 +69,7 @@ bool Display::AllowsIdleStatusClock() const {
 }
 
 void Display::SetStatus(const char* status) {
-    ESP_LOGW(TAG, "SetStatus: %s", status);
+    ESP_LOGD(TAG, "SetStatus bytes=%u", status != nullptr ? static_cast<unsigned>(std::strlen(status)) : 0);
 }
 
 void Display::ShowNotification(const std::string &notification, int duration_ms) {
@@ -77,7 +77,8 @@ void Display::ShowNotification(const std::string &notification, int duration_ms)
 }
 
 void Display::ShowNotification(const char* notification, int duration_ms) {
-    ESP_LOGW(TAG, "ShowNotification: %s", notification);
+    ESP_LOGD(TAG, "ShowNotification bytes=%u duration_ms=%d",
+             notification != nullptr ? static_cast<unsigned>(std::strlen(notification)) : 0, duration_ms);
 }
 
 void Display::UpdateStatusBar(bool update_all) {
@@ -85,12 +86,14 @@ void Display::UpdateStatusBar(bool update_all) {
 
 
 void Display::SetEmotion(const char* emotion) {
-    ESP_LOGW(TAG, "SetEmotion: %s", emotion);
+    ESP_LOGD(TAG, "SetEmotion provided=%d", emotion != nullptr);
 }
 
 void Display::SetChatMessage(const char* role, const char* content) {
-    ESP_LOGW(TAG, "Role:%s", role);
-    ESP_LOGW(TAG, "     %s", content);
+    ESP_LOGD(TAG, "SetChatMessage user=%d assistant=%d bytes=%u",
+             role != nullptr && std::strcmp(role, "user") == 0,
+             role != nullptr && std::strcmp(role, "assistant") == 0,
+             content != nullptr ? static_cast<unsigned>(std::strlen(content)) : 0);
 }
 
 void Display::SetTheme(Theme* theme) {

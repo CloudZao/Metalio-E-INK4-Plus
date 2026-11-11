@@ -94,7 +94,8 @@ void SyncReaderAaForImmersion(bool text_visible) {
 void BindSessionLayoutPrefs(reader::BookSession& session) {
     BookReaderPrefsEnsureLoaded();
     BookTapZonesEnsureLoaded();
-    session.SetFont(BookLayoutFont());
+    session.SetFont(BookLayoutFont(), BookFont());
+    session.SetTextStyle(BookReaderPrefsTextStyle());
     session.SetVerticalWriting(BookReaderPrefsWritingMode() == kBookReaderWritingVertical &&
                                !ReaderPageImagesHint());
     session.SetLineSpacing(BookReaderPrefsLineSpacingPercent(),

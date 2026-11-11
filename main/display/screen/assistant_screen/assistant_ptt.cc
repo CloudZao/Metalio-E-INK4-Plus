@@ -35,10 +35,10 @@ bool Assistant_IsPttWaveWanted() {
 void Assistant_StopListeningIfNoPttHeld(const char* why) {
     Assistant_RequestSyncPttOverlay();
     if (Assistant_IsAnyPttHeld()) {
-        ESP_LOGI(TAG, "%s: other PTT still held, keep listening", why);
+        ESP_LOGD(TAG, "%s: other PTT still held, keep listening", why);
         return;
     }
-    ESP_LOGI(TAG, "%s -> StopListening", why);
+    ESP_LOGD(TAG, "%s -> StopListening", why);
     Application::GetInstance().StopListening();
 }
 
@@ -54,8 +54,10 @@ void Assistant_ResetTouchPttState() {
     Assistant_CancelTouchPttArmTimer();
     Assistant_State().ptt.ptt_connecting_hint_shown = false;
     Assistant_State().ptt.touch_ptt_finger_down = false;
-    Assistant_State().ptt.touch_suppress_click = false;
     Assistant_State().ptt.touch_ptt_held.store(false, std::memory_order_release);
+    if (Assistant_State().ptt.touch_ptt_label) {
+        lv_label_set_text(Assistant_State().ptt.touch_ptt_label, Lang::Strings::SETTINGS_TEST_AUDIO_HOLD);
+    }
 }
 
 void ArmTouchPttFromTimer(lv_timer_t* /*t*/) {
@@ -66,16 +68,16 @@ void ArmTouchPttFromTimer(lv_timer_t* /*t*/) {
     }
     // 重绘堵住 LVGL 时 timer 可能迟到：抬起已进 touch_feed 则丢弃
     if (!TouchUiFingerIsDown()) {
-        ESP_LOGI(TAG, "touch PTT arm ignored: finger already up");
+        ESP_LOGD(TAG, "touch PTT arm ignored: finger already up");
         Assistant_State().ptt.touch_ptt_finger_down = false;
         return;
     }
+    if (!Assistant_AllowListening()) return;
     if (Assistant_State().ptt.touch_ptt_held.exchange(true, std::memory_order_acq_rel)) {
         return;  // 已臂听（重复 timer 不应发生）
     }
-    Assistant_State().ptt.touch_suppress_click = true;
     // 按下已由 HapticAttachClick 早震，臂听不再二次震（与阅读长按出浮层同）
-    ESP_LOGI(TAG, "touch long-press (%ums) -> StartListening (same as BOOT PTT)",
+    ESP_LOGD(TAG, "touch long-press (%ums) -> StartListening (same as BOOT PTT)",
              static_cast<unsigned>(kTouchPttLongPressMs));
     Assistant_RequestSyncPttOverlay();
     Application::GetInstance().StartListening();
@@ -101,7 +103,7 @@ void OnTouchPttReleased(const char* why) {
     Assistant_State().ptt.touch_ptt_finger_down = false;
     Assistant_CancelTouchPttArmTimer();
     if (!Assistant_State().ptt.touch_ptt_held.exchange(false, std::memory_order_acq_rel)) {
-        return;  // 未满阈值抬起：由 CLICKED 处理翻页
+        return;  // 未满阈值抬起，不开始录音。
     }
     Assistant_StopListeningIfNoPttHeld(why);
 }
@@ -133,11 +135,11 @@ bool Assistant_TurnPage(int dir) {
                 return false;
             }
             --Assistant_State().layout.page_index;
-            ESP_LOGI(TAG, "page turn -> %d/%d", Assistant_State().layout.page_index + 1, static_cast<int>(Assistant_State().layout.pages.size()));
+            ESP_LOGD(TAG, "page turn -> %d/%d", Assistant_State().layout.page_index + 1, static_cast<int>(Assistant_State().layout.pages.size()));
         } else if (dir > 0) {
             if (Assistant_State().layout.page_index + 1 < static_cast<int>(Assistant_State().layout.pages.size())) {
                 ++Assistant_State().layout.page_index;
-                ESP_LOGI(TAG, "page turn -> %d/%d", Assistant_State().layout.page_index + 1, static_cast<int>(Assistant_State().layout.pages.size()));
+                ESP_LOGD(TAG, "page turn -> %d/%d", Assistant_State().layout.page_index + 1, static_cast<int>(Assistant_State().layout.pages.size()));
             } else {
                 return true;
             }
@@ -150,13 +152,6 @@ bool Assistant_TurnPage(int dir) {
 }
 
 void OnTouchPageClicked(lv_event_t* e) {
-    if (lv_event_get_target(e) != Assistant_State().ptt.touch_ptt_hit) {
-        return;
-    }
-    if (Assistant_State().ptt.touch_suppress_click) {
-        Assistant_State().ptt.touch_suppress_click = false;
-        return;
-    }
     if (!Assistant_State().layout.has_a2ui_content || Assistant_State().layout.pages.empty()) {
         return;
     }
@@ -183,25 +178,27 @@ void OnTouchPttEvent(lv_event_t* e) {
 }
 
 lv_obj_t* Assistant_CreateTouchPttHitLayer(lv_obj_t* scr) {
-    // 全屏透明 hit：叠在内容之上吃 pointer；非 clickable 的顶栏字/波形仍可穿透到本层。
-    // 盖板虚拟键在 touch_feed 坐标命中，不走 LVGL hit，故不受本层影响。
+    // 底栏独立录音热区，不拦截正文和图片点击。
     lv_obj_t* hit = lv_obj_create(scr);
-    lv_obj_set_size(hit, LV_HOR_RES, LV_VER_RES);
+    lv_obj_remove_style_all(hit);
+    lv_obj_set_size(hit, LV_HOR_RES, kFooterH);
     lv_obj_set_pos(hit, 0, 0);
     lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(hit, 0, 0);
     lv_obj_set_style_pad_all(hit, 0, 0);
     lv_obj_set_style_radius(hit, 0, 0);
     lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(hit, LV_OBJ_FLAG_GESTURE_BUBBLE);
     Assistant_DisableScroll(hit);
-    // 页内热区：touch_feed 按下早震；短按翻页 / 长按 PTT 业务侧勿再 Pulse
+    // 按下早震，长按开听时不重复震动。
     HapticAttachClick(hit);
     lv_obj_add_event_cb(hit, OnTouchPttEvent, LV_EVENT_PRESSED, nullptr);
     lv_obj_add_event_cb(hit, OnTouchPttEvent, LV_EVENT_RELEASED, nullptr);
     lv_obj_add_event_cb(hit, OnTouchPttEvent, LV_EVENT_PRESS_LOST, nullptr);
-    lv_obj_add_event_cb(hit, OnTouchPageClicked, LV_EVENT_CLICKED, nullptr);
+    auto* label = lv_label_create(hit);
+    lv_label_set_text(label, Lang::Strings::SETTINGS_TEST_AUDIO_HOLD);
+    lv_obj_center(label);
+    Assistant_State().ptt.touch_ptt_label = label;
     return hit;
 }
 
@@ -336,6 +333,10 @@ void Assistant_ApplyPttWave(bool show) {
 }
 
 void AsyncSyncPttOverlay(void* /*arg*/) {
+    if (Assistant_State().ptt.touch_ptt_label) {
+        lv_label_set_text(Assistant_State().ptt.touch_ptt_label,
+            Assistant_IsPttWaveWanted() ? Lang::Strings::ASSISTANT_RELEASE_SEND : Lang::Strings::SETTINGS_TEST_AUDIO_HOLD);
+    }
     const bool connecting = AssistantScreen::IsActive() && Assistant_IsAnyPttHeld() &&
         Application::GetInstance().GetDeviceState() == kDeviceStateConnecting;
     if (connecting && !Assistant_State().ptt.ptt_connecting_hint_shown) {

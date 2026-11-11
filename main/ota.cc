@@ -11,6 +11,7 @@
 #include "api_http.h"
 #include "system_info.h"
 #include "settings.h"
+#include "ntp_server.h"
 #include "assets/lang_config.h"
 
 #include <cJSON.h>
@@ -28,6 +29,8 @@
 #endif
 
 #include <cstdio>
+#include <cmath>
+#include <cerrno>
 #include <esp_heap_caps.h>
 #include <cstring>
 #include <vector>
@@ -284,14 +287,21 @@ esp_err_t Ota::CheckResponseOnce(bool chat_only, int64_t deadline_us) {
                 struct timeval tv;
                 double ts = timestamp->valuedouble;
             
-                // 如果有时区偏移，计算本地时间
+                // 云端时间戳保持 UTC，时区偏移单独用于当地时间显示。
                 if (cJSON_IsNumber(timezone_offset)) {
-                    ts += (timezone_offset->valueint * 60 * 1000); // 转换分钟为毫秒
+                    const double minutes = timezone_offset->valuedouble;
+                    if (std::isfinite(minutes) && minutes >= -840 && minutes <= 840 &&
+                        std::trunc(minutes) == minutes) {
+                        NtpServer::GetInstance().SetTimezone(static_cast<int>(minutes) * 60);
+                    } else {
+                        ESP_LOGW(TAG, "Server timezone offset invalid; retaining cached timezone");
+                    }
                 }
             
                 tv.tv_sec = (time_t)(ts / 1000);  // 转换毫秒为秒
                 tv.tv_usec = (suseconds_t)((long long)ts % 1000) * 1000;  // 剩余的毫秒转换为微秒
                 has_server_time_ = settimeofday(&tv, NULL) == 0;
+                if (!has_server_time_) ESP_LOGE(TAG, "Server time apply failed: errno=%d", errno);
                 #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
                 if (has_server_time_ && !Pcf8563::GetInstance().SyncSystemToRtc()) {
                     ESP_LOGW(TAG, "Server time applied but RTC writeback failed");

@@ -142,6 +142,8 @@ static void publish_ui(bool pressed, int lx, int ly, int raw_x, int raw_y) {
         s_ui_pt.raw_x = raw_x;
         s_ui_pt.raw_y = raw_y;
         if (!s_ui_pressed) {
+            s_ui_pt.start_x = lx;
+            s_ui_pt.start_y = ly;
             // 新按下：清掉上一拍残留回放，等本拍被读或抬起时再排队
             s_ui_seen = false;
             s_replay_press = false;
@@ -369,15 +371,14 @@ bool metalio_touch_read(metalio_touch_point_t* out) {
     bool pressed = false;
     metalio_touch_point_t pt = {};
     portENTER_CRITICAL(&s_mux);
+    pt = s_ui_pt;
     if (s_replay_press) {
         // 刷屏期间错过的短按：先交付一次 PRESSED
         s_replay_press = false;
         pressed = true;
-        pt = s_ui_pt;
     } else if (s_ui_pressed) {
         s_ui_seen = true;
         pressed = true;
-        pt = s_ui_pt;
     } else if (s_replay_release) {
         // 回放的 RELEASED：本拍返回 false，清标志
         s_replay_release = false;
@@ -386,13 +387,10 @@ bool metalio_touch_read(metalio_touch_point_t* out) {
         pressed = false;
     }
     portEXIT_CRITICAL(&s_mux);
-    if (!pressed) {
-        return false;
-    }
     if (out != NULL) {
         *out = pt;
     }
-    return true;
+    return pressed;
 }
 
 bool metalio_touch_ok(void) {

@@ -8,7 +8,7 @@
  * ----
  * - 职责：仅存储（目录 / 开机清空 / 序号文件 / FIFO）。解析与 LVGL 仍在
  *   assistant_screen.cc — 本模块不碰 UI。
- * - 路径：`SD_PATH_CHAT_LOG`（`/sdcard/metalio/e-ink/chat_log`）。
+ * - 路径：`SD_PATH_CHAT_LOG`（`/sdcard/metalio/e-ink/temp/bwchat/messages`）。
  *   无 SD → 禁用（纯 RAM 会话，与原先行为一致）。
  *   有 SD → 开机清空，再追加每条已接受的下行 JSON。
  * - 布局：每轮一文件 `mNNNNN.json`（原始 UTF-8 A2UI 对象）。序号即回放顺序。

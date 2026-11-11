@@ -1155,7 +1155,7 @@ void epd_lcd_set_pixel_clock_MHz(int frequency) {
         line_time_100ns % 10, lcd.line_cycles);
 
     ckv_rmt_build_signal();
-    ESP_LOGI("EpdTiming", "line=%d.%dus CKV high=%d.%dus low=%d.%dus tail=%d clocks RMT=%uHz",
+    ESP_LOGD("EpdTiming", "line=%d.%dus CKV high=%d.%dus low=%d.%dus tail=%d clocks RMT=%uHz",
         line_time_100ns/10,line_time_100ns%10,
         lcd.config.ckv_high_time/10,lcd.config.ckv_high_time%10,
         (line_time_100ns-lcd.config.ckv_high_time)/10,

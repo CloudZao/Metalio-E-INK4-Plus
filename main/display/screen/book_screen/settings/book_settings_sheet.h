@@ -9,9 +9,13 @@ bool DeferComicTextSetting();
 
 /** @brief 重建排版设置卡控件树 */
 void RebuildSettingsSheet();
+/** @brief 按当前内容及屏幕方向调整阅读卡片尺寸。 */
 void ResizeReadingBottomSheet();
+/** @brief 切换阅读卡片页签并关闭当前子面板。 */
 void SelectReadingSheetTab(int tab);
+/** @brief 取消书签多选，返回是否处理了取消操作。 */
 bool CancelBookmarkMultiSelection();
+/** @brief 清空书签多选状态。 */
 void ResetBookmarkSelection();
 /** @brief 书签提示弹窗是否打开。 */
 bool BookmarkMessageVisible();
@@ -21,10 +25,6 @@ bool CloseBookmarkMessage();
 void ClearSettingsSheetWidgetRefs();
 /** @brief 刷新设置卡内容 */
 void RefreshSettingsSheet();
-/** @brief 刷新设置卡字体列表 */
-void RefreshSettingsSheetFontList();
-/** @brief 刷新设置卡边距/行距等调节行 */
-void RefreshSettingsSheetAdj();
 /** @brief 排版后保卡可见；控件已由 coalesce/Rebuild 就绪则不再叠刷 */
 void EnsureSettingsSheetAfterLayout();
 /** @brief 设置卡关键控件是否已建好 */
@@ -69,12 +69,20 @@ void OnSheetOrientMode(lv_event_t* e);
 /** @brief 设置卡「目录」 */
 void OnSheetTocClicked(lv_event_t* e);
 
-/** Shared fixed panel boundaries: 2px, 8px side insets; status bar owns adjoining top edge.
- * bottom_gap reserves the main card's navigation area; subpanels pass zero.
- * Idempotent and independent of padding, scrolling, orientation and card content.
- */
+/** @brief 统一设置阅读卡片外框：顶部及两侧 2px、无底边，导航分隔线只绘制一次。 */
 void ApplyReadingPanelRules(lv_obj_t* panel, int bottom_gap = 0);
+/** @brief 底部四项导航占用的高度，触摸分区浮层需让出这块区域。 */
+int ReadingSheetNavReserve();
 
-// Returns false when tab/layout structure changed and a rebuild is required.
+/** @brief 原地更新阅读卡片；结构变化需要重建时返回 false。 */
 bool RefreshReadingSheetInPlace();
+/** @brief 提交未完成的数值调节并清理阅读卡片控件引用。 */
 void ResetReadingSheetLiveRefs();
+
+/** @brief 获取阅读卡片统一标题栏高度。 */
+int ReadingSheetHeaderHeight();
+/** @brief 创建字体、阅读设置与触摸分区共用的恢复默认按钮。 */
+lv_obj_t* CreateReadingResetButton(lv_obj_t* header, lv_event_cb_t event);
+
+/** @brief 构建共用的阅读卡片标题与返回按钮，统一位置和箭头尺寸。 */
+void BuildReadingSheetHeader(lv_obj_t* header, const char* title, lv_event_cb_t back_event, bool back_arrow);

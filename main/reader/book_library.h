@@ -12,7 +12,7 @@ namespace reader {
 constexpr const char* kDefaultBooksDir = SD_PATH_BOOKS;
 
 // 递归扫描目录下的 .epub / .txt / .ebook（含嵌套子目录）。
-// TXT 分页索引缓存保存在同目录，随书库路径迁移。
+// 设备端新建 TXT 分页索引保存在 temp/books/cache；已有旁路索引沿用原位置。
 bool ScanBookLibrary(const char* dir, std::vector<BookInfo>& out);
 
 // 默认书库列表缓存（仅 kDefaultBooksDir），对初始化和重扫做去重。

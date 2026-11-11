@@ -4,9 +4,10 @@
 
 #include "reader/http_download_file.h"
 #include "reader/image_file_write.h"
+#include "reader/image_util.h"
 #include "sd_paths.h"
+#include "sd_data_layout.h"
 #include "SdCardManager.hpp"
-#include "wallpaper_screen/wallpaper_active.h"
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -50,10 +51,7 @@ std::string MetaPathFor(const char* wallpaper_path) {
     if (wallpaper_path == nullptr || wallpaper_path[0] == '\0') {
         return {};
     }
-    const char* base = std::strrchr(wallpaper_path, '/');
-    base = base != nullptr ? base + 1 : wallpaper_path;
-    // 最长用户文件名追加旧后缀会超出 FAT 单段上限，改用较短元数据后缀。
-    return std::string(wallpaper_path) + (std::strlen(base) > 245 ? ".meta" : ".meta.json");
+    return sd_data::WallpaperMetaPath(wallpaper_path);
 }
 
 
@@ -154,25 +152,7 @@ bool WriteWallpaperMeta(const char* wallpaper_path, const std::string& image_nam
     const std::string body(printed);
     cJSON_free(printed);
 
-    FILE* fp = fopen(meta_path.c_str(), "wb");
-    if (fp == nullptr) {
-        return false;
-    }
-    const bool ok =
-        fwrite(body.data(), 1, body.size(), fp) == body.size() && fflush(fp) == 0 &&
-        fclose(fp) == 0;
-    if (!ok) {
-        fclose(fp);
-        unlink(meta_path.c_str());
-    }
-    return ok;
-}
-
-void DeleteWallpaperMeta(const char* wallpaper_path) {
-    const std::string meta_path = MetaPathFor(wallpaper_path);
-    if (!meta_path.empty()) {
-        unlink(meta_path.c_str());
-    }
+    return WriteFileAtomic(meta_path.c_str(), reinterpret_cast<const uint8_t*>(body.data()), body.size());
 }
 
 std::string BuildWallpaperSaveBasename(const std::string& image_name,
@@ -285,11 +265,6 @@ bool DeleteCloudWallpaperLocal(const CloudWallpaperTask& task, std::string& err_
         err_out = Lang::Strings::CLOUD_DELETE_FAIL;
         return false;
     }
-    DeleteWallpaperMeta(path.c_str());
-    const char* slash = std::strrchr(path.c_str(), '/');
-    const char* base = slash != nullptr ? slash + 1 : path.c_str();
-    Wallpaper_ClearActiveIfMatches(base);
-    ESP_LOGI(TAG, "deleted local cloud wallpaper %s", path.c_str());
     return true;
 }
 

@@ -1,5 +1,6 @@
 #include "epub_document.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 
@@ -54,14 +55,14 @@ std::string XmlAttr(const std::string& tag, const char* attr) {
             }
         }
         size_t j = i + alen;
-        while (j < tag.size() && (tag[j] == ' ' || tag[j] == '\t')) {
+        while (j < tag.size() && std::isspace(static_cast<unsigned char>(tag[j]))) {
             ++j;
         }
         if (j >= tag.size() || tag[j] != '=') {
             continue;
         }
         ++j;
-        while (j < tag.size() && (tag[j] == ' ' || tag[j] == '\t')) {
+        while (j < tag.size() && std::isspace(static_cast<unsigned char>(tag[j]))) {
             ++j;
         }
         if (j >= tag.size()) {
@@ -166,8 +167,10 @@ void EpubDocument::Close() {
     content_base_.clear();
     title_.clear();
     author_.clear();
+    language_.clear();
     cover_href_.clear();
     spine_.clear();
+    toc_.clear();
     manifest_.clear();
     manifest_props_.clear();
 }
@@ -218,59 +221,78 @@ bool EpubDocument::ParseContainer() {
         ESP_LOGE(TAG, "rootfile not found");
         return false;
     }
-    return ParseOpf(opf);
+    return ParseOpf(NormalizeZipPath({}, opf));
 }
 
 bool EpubDocument::ParseOpf(const std::string& opf_path) {
     std::vector<uint8_t> bytes;
     if (!zip_.ReadEntry(opf_path.c_str(), bytes, 512 * 1024)) {
-        ESP_LOGE(TAG, "cannot read opf %s", opf_path.c_str());
+        ESP_LOGE(TAG, "cannot read opf error=%d", static_cast<int>(zip_.Error()));
         return false;
     }
     content_base_ = DirOf(opf_path);
     const std::string xml = BytesToString(bytes);
 
+    // 一次扫描：兼容 <item>/<opf:item>、<itemref>/<opf:itemref>、<meta>/<opf:meta>
+    // （so-novel / EPUB4J 等会给 OPF 元素加 opf: 前缀；旧逻辑只找字面量 <item 会得到 spine=0）
+    std::string cover_id, nav_href, ncx_href, toc_id;
     size_t pos = 0;
-    std::string cover_id;
-    while ((pos = xml.find("<item", pos)) != std::string::npos) {
+    while ((pos = xml.find('<', pos)) != std::string::npos) {
         const size_t tag_end = xml.find('>', pos);
         if (tag_end == std::string::npos) {
             break;
         }
-        if (xml.compare(pos, 8, "<itemref") == 0) {
-            pos = tag_end + 1;
-            continue;
-        }
         const std::string tag = xml.substr(pos, tag_end - pos);
-        const std::string id = XmlAttr(tag, "id");
-        const std::string href = XmlAttr(tag, "href");
-        const std::string props = XmlAttr(tag, "properties");
-        if (!id.empty() && !href.empty()) {
-            manifest_[id] = NormalizeZipPath(content_base_, href);
-            if (!props.empty()) {
-                manifest_props_[id] = props;
-                if (props.find("cover-image") != std::string::npos) {
-                    cover_href_ = manifest_[id];
+        const size_t last = tag.find_last_not_of(" \t\r\n");
+        const bool self_closing = last != std::string::npos && tag[last] == '/';
+        if (TagNameIs(tag, "item")) {
+            const std::string id = XmlAttr(tag, "id");
+            const std::string href = XmlAttr(tag, "href");
+            const std::string props = XmlAttr(tag, "properties");
+            if (XmlAttr(tag, "media-type") == "application/x-dtbncx+xml") ncx_href = NormalizeZipPath(content_base_, href);
+            std::string tokens = props;
+            for (char& c : tokens) if (std::isspace(static_cast<unsigned char>(c))) c = ' ';
+            if ((" " + tokens + " ").find(" nav ") != std::string::npos) nav_href = NormalizeZipPath(content_base_, href);
+            if (!id.empty() && !href.empty()) {
+                manifest_[id] = NormalizeZipPath(content_base_, href);
+                if (!props.empty()) {
+                    manifest_props_[id] = props;
+                    if (props.find("cover-image") != std::string::npos) {
+                        cover_href_ = manifest_[id];
+                    }
                 }
             }
+        } else if (TagNameIs(tag, "spine")) {
+            toc_id = XmlAttr(tag, "toc");
+        } else if (TagNameIs(tag, "itemref")) {
+            const std::string idref = XmlAttr(tag, "idref");
+            auto it = manifest_.find(idref);
+            if (it != manifest_.end()) {
+                EpubSpineItem item;
+                item.id = idref;
+                item.href = it->second;
+                spine_.push_back(std::move(item));
+            }
+        } else if (TagNameIs(tag, "meta")) {
+            const std::string name = XmlAttr(tag, "name");
+            const std::string content = XmlAttr(tag, "content");
+            if (name == "cover" && !content.empty()) {
+                cover_id = content;
+            }
+        } else if (TagNameIs(tag, "title") && title_.empty() && !self_closing) {
+            title_ = TextBetween(xml, tag_end + 1, "title");
+            TrimInPlace(title_);
+        } else if (TagNameIs(tag, "language") && language_.empty() && !self_closing) {
+            language_ = TextBetween(xml, tag_end + 1, "language");
+            TrimInPlace(language_);
+        } else if ((TagNameIs(tag, "creator") || TagNameIs(tag, "author")) && author_.empty() &&
+                   !self_closing) {
+            author_ = TextBetween(xml, tag_end + 1, TagNameIs(tag, "creator") ? "creator" : "author");
+            TrimInPlace(author_);
         }
         pos = tag_end + 1;
     }
 
-    pos = 0;
-    while ((pos = xml.find("<meta", pos)) != std::string::npos) {
-        const size_t tag_end = xml.find('>', pos);
-        if (tag_end == std::string::npos) {
-            break;
-        }
-        const std::string tag = xml.substr(pos, tag_end - pos);
-        const std::string name = XmlAttr(tag, "name");
-        const std::string content = XmlAttr(tag, "content");
-        if (name == "cover" && !content.empty()) {
-            cover_id = content;
-        }
-        pos = tag_end + 1;
-    }
     if (cover_href_.empty() && !cover_id.empty()) {
         auto it = manifest_.find(cover_id);
         if (it != manifest_.end()) {
@@ -278,49 +300,157 @@ bool EpubDocument::ParseOpf(const std::string& opf_path) {
         }
     }
 
-    pos = 0;
-    while ((pos = xml.find('<', pos)) != std::string::npos) {
-        const size_t tag_end = xml.find('>', pos);
-        if (tag_end == std::string::npos) {
-            break;
-        }
-        const std::string open = xml.substr(pos, tag_end - pos);
-        if (TagNameIs(open, "title") && title_.empty() && open.find('/') == std::string::npos) {
-            title_ = TextBetween(xml, tag_end + 1, "title");
-            TrimInPlace(title_);
-        } else if ((TagNameIs(open, "creator") || TagNameIs(open, "author")) && author_.empty() &&
-                   open.find('/') == std::string::npos) {
-            author_ = TextBetween(xml, tag_end + 1, TagNameIs(open, "creator") ? "creator" : "author");
-            TrimInPlace(author_);
-        }
-        pos = tag_end + 1;
-    }
-
-    pos = 0;
-    while ((pos = xml.find("<itemref", pos)) != std::string::npos) {
-        const size_t tag_end = xml.find('>', pos);
-        if (tag_end == std::string::npos) {
-            break;
-        }
-        const std::string tag = xml.substr(pos, tag_end - pos);
-        const std::string idref = XmlAttr(tag, "idref");
-        auto it = manifest_.find(idref);
-        if (it != manifest_.end()) {
-            EpubSpineItem item;
-            item.id = idref;
-            item.href = it->second;
-            spine_.push_back(std::move(item));
-        }
-        pos = tag_end + 1;
-    }
-
     if (title_.empty()) {
         title_ = TitleFromPathFallback(path_);
     }
 
-    ESP_LOGI(TAG, "opf ok title='%s' spine=%d cover='%s'", title_.c_str(), SpineCount(),
-             cover_href_.c_str());
+    const auto ncx = manifest_.find(toc_id);
+    if (ncx != manifest_.end()) ncx_href = ncx->second;
+    if (nav_href.empty() || !ParseNavigation(nav_href, false)) {
+        if (!ncx_href.empty()) ParseNavigation(ncx_href, true);
+    }
+    ESP_LOGI(TAG, "opf ok spine=%d toc=%u", SpineCount(), static_cast<unsigned>(toc_.size()));
     return !spine_.empty();
+}
+
+bool EpubDocument::ParseNavigation(const std::string& href, bool ncx) {
+    struct Node {
+        std::string title; // 目录标签文本
+        std::string link; // 相对导航文档的链接
+        uint16_t depth = 0; // 原生嵌套层级
+    };
+    if (!zip_.OpenEntryStream(href.c_str())) {
+        ESP_LOGW(TAG, "toc open failed format=%s error=%d", ncx ? "ncx" : "nav", static_cast<int>(zip_.Error()));
+        return false;
+    }
+    std::vector<Node> nodes;
+    std::vector<size_t> stack;
+    std::string tag, type_attribute = "epub:type";
+    bool in_tag = false, invalid = false;
+    char quote = 0;
+    int nav_depth = 0, list_depth = 0, span_depth = 0;
+    size_t capture = SIZE_MAX, total = 0;
+    const auto add = [&](const std::string& link, int depth) -> size_t {
+        if (nodes.size() >= 2048 || depth > 64) { invalid = true; return SIZE_MAX; }
+        nodes.push_back({{}, link, static_cast<uint16_t>(std::max(0, depth))}); return nodes.size() - 1;
+    };
+    uint8_t bytes[1024];
+    size_t count = 0;
+    while (!invalid && (count = zip_.EntryStreamRead(bytes, sizeof(bytes))) != 0) {
+        total += count;
+        if (total > 512 * 1024) { invalid = true; break; }
+        for (size_t i = 0; i < count && !invalid; ++i) {
+            const char c = static_cast<char>(bytes[i]);
+            if (!in_tag) {
+                if (c == '<') { tag = "<"; in_tag = true; quote = 0; }
+                else if (capture != SIZE_MAX) {
+                    if (nodes[capture].title.size() >= 1024) { invalid = true; break; }
+                    nodes[capture].title.push_back(c);
+                }
+                continue;
+            }
+            tag.push_back(c);
+            if (tag.size() > 4096) { invalid = true; break; }
+            if (tag.compare(0, 4, "<!--") == 0) {
+                if (tag.size() >= 7 && tag.compare(tag.size() - 3, 3, "-->") == 0) in_tag = false;
+                continue;
+            }
+            if (tag.compare(0, 9, "<![CDATA[") == 0) {
+                if (tag.size() >= 12 && tag.compare(tag.size() - 3, 3, "]]>") == 0) {
+                    if (capture != SIZE_MAX) {
+                        for (char literal : tag.substr(9, tag.size() - 12)) {
+                            if (literal == '&') nodes[capture].title += "&amp;";
+                            else nodes[capture].title += literal;
+                        }
+                        if (nodes[capture].title.size() > 1024) invalid = true;
+                    }
+                    in_tag = false;
+                }
+                continue;
+            }
+            if (quote) { if (c == quote) quote = 0; continue; }
+            if (c == '\'' || c == '"') { quote = c; continue; }
+            if (c != '>') continue;
+            in_tag = false;
+            const bool closing = tag.size() > 1 && tag[1] == '/';
+            const std::string open = closing ? "<" + tag.substr(2) : tag;
+            size_t ns = 0;
+            while ((ns = tag.find("xmlns:", ns)) != std::string::npos) {
+                size_t end = ns + 6;
+                while (end < tag.size() && (std::isalnum(static_cast<unsigned char>(tag[end])) || tag[end] == '_' || tag[end] == '-')) ++end;
+                const std::string key = tag.substr(ns, end - ns);
+                if (XmlAttr(tag, key.c_str()) == "http://www.idpf.org/2007/ops") type_attribute = key.substr(6) + ":type";
+                ns = end;
+            }
+            if (ncx) {
+                if (TagNameIs(open, "navpoint")) {
+                    capture = SIZE_MAX;
+                    if (closing) { if (stack.empty()) invalid = true; else stack.pop_back(); }
+                    else { const size_t index = add({}, stack.size()); if (index != SIZE_MAX) stack.push_back(index); }
+                } else if (TagNameIs(open, "text") && !stack.empty()) capture = closing ? SIZE_MAX : stack.back();
+                else if (!closing && TagNameIs(open, "content") && !stack.empty()) nodes[stack.back()].link = XmlAttr(tag, "src");
+            } else if (TagNameIs(open, "nav")) {
+                if (closing) { if (nav_depth > 0) --nav_depth; capture = SIZE_MAX; }
+                else {
+                    std::string type = XmlAttr(tag, type_attribute.c_str());
+                    for (char& t : type) if (std::isspace(static_cast<unsigned char>(t))) t = ' ';
+                    if (nav_depth > 0 || (" " + type + " ").find(" toc ") != std::string::npos || XmlAttr(tag, "role") == "doc-toc") ++nav_depth;
+                }
+            } else if (nav_depth > 0) {
+                if (TagNameIs(open, "ol")) list_depth += closing ? -1 : 1;
+                else if (TagNameIs(open, "a")) {
+                    if (closing) { capture = SIZE_MAX; span_depth = 0; }
+                    else { capture = add(XmlAttr(tag, "href"), list_depth - 1); span_depth = 0; }
+                } else if (TagNameIs(open, "span")) {
+                    if (!closing && capture == SIZE_MAX) { capture = add({}, list_depth - 1); span_depth = 1; }
+                    else if (!closing && span_depth > 0) ++span_depth;
+                    else if (closing && span_depth > 0 && --span_depth == 0) capture = SIZE_MAX;
+                }
+            }
+        }
+        #ifndef EBOOK_EMULATOR
+        vTaskDelay(1);
+        #endif
+    }
+    const bool failed = invalid || in_tag || quote || zip_.EntryStreamError() || !stack.empty() || nav_depth != 0;
+    zip_.CloseEntryStream();
+    if (failed) {
+        ESP_LOGW(TAG, "toc parse failed format=%s bytes=%u; trying fallback", ncx ? "ncx" : "nav", static_cast<unsigned>(total));
+        return false;
+    }
+    std::vector<EpubTocEntry> parsed;
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        Node& node = nodes[i];
+        if (node.link.empty()) {
+            for (size_t j = i + 1; j < nodes.size() && nodes[j].depth > node.depth; ++j) {
+                if (!nodes[j].link.empty()) { node.link = nodes[j].link; break; }
+            }
+        }
+        std::string title;
+        for (char c : DecodeHtmlEntities(node.title)) {
+            if (std::isspace(static_cast<unsigned char>(c))) { if (!title.empty() && title.back() != ' ') title += ' '; }
+            else title += c;
+        }
+        TrimInPlace(title);
+        if (title.empty() || node.link.empty() || node.link.find(':') != std::string::npos) continue;
+        const size_t hash = node.link.find('#');
+        const std::string path = hash == 0 ? href : NormalizeZipPath(DirOf(href), node.link);
+        const auto item = std::find_if(spine_.begin(), spine_.end(), [&](const EpubSpineItem& s) { return s.href == path; });
+        if (item == spine_.end()) continue;
+        EpubTocEntry entry;
+        entry.title = std::move(title); entry.depth = node.depth; entry.spine_index = item - spine_.begin();
+        if (hash != std::string::npos) {
+            entry.fragment = DecodeUrlComponent(node.link.substr(hash + 1));
+            if (entry.fragment.size() > 1024 || (hash + 1 < node.link.size() && entry.fragment.empty())) continue;
+        }
+        parsed.push_back(std::move(entry));
+    }
+    if (parsed.empty()) {
+        ESP_LOGW(TAG, "toc has no local targets format=%s", ncx ? "ncx" : "nav");
+        return false;
+    }
+    toc_.swap(parsed);
+    return true;
 }
 
 const EpubSpineItem* EpubDocument::SpineItem(int index) const {
@@ -371,16 +501,18 @@ bool EpubDocument::DecodeCoverImageToL8(int max_w, int max_h, RasterImage& out,
     return DecodeItemImageToL8(cover_href_.c_str(), max_w, max_h, out, abort);
 }
 
-bool EpubDocument::StreamChapterBlocks(int spine_index, const ContentBlockSink& sink) {
+bool EpubDocument::StreamChapterBlocks(int spine_index, const ContentBlockSink& sink,
+                                      const HtmlAnchorSink& anchors, const std::atomic<bool>* cancelled) {
     error_ = BookReadError::kInvalidData;
     const auto* item = SpineItem(spine_index);
     if (!item) return false;
     if (!zip_.OpenEntryStream(item->href.c_str())) { error_ = zip_.Error(); return false; }
     struct StreamGuard { ZipReader& zip; ~StreamGuard() { zip.CloseEntryStream(); } } guard{zip_};
-    HtmlBlockParser parser(DirOf(item->href), sink);
+    HtmlBlockParser parser(DirOf(item->href), sink, anchors);
     uint8_t bytes[2048];
     uint64_t total = 0;
     while (!zip_.EntryStreamEof() && !zip_.EntryStreamError()) {
+        if (cancelled && cancelled->load()) { error_ = BookReadError::kCancelled; return false; }
         const size_t got = zip_.EntryStreamRead(bytes, sizeof(bytes));
         total += got;
 #ifndef EBOOK_EMULATOR

@@ -12,12 +12,11 @@
  * | .../文件上传前必读说明.txt | 上传前必读（中文；无则开机生成） |
  * | .../Read_Before_Upload.txt | 上传前必读（英文；无则开机生成） |
  * | .../settings/wificonfig.json | Wi-Fi 配置，与 NVS 同步保存 |
- * | .../recordings | 录音 Ogg Opus |
- * | .../books | 电子书 .epub/.txt/.ebook；同目录 .txt.idx 为分页索引；<stem>.a2i1 为旁路封面 |
+ * | .../books | 电子书 .epub/.txt/.ebook；新建辅助文件另存，兼容保留旧旁路文件 |
  * | .../fonts | 阅读用 .ef 字体（云推送 .ef 亦落此） |
  * | .../fonts_ttf | 阅读用 .ttf/.otf（支持直接加载或转换为 .ef） |
- * | .../a2ui_cache | A2UI 图片会话缓存（开机清空） |
- * | .../chat_log | 百问AI 本机会话 JSON（开机清空；无卡不写） |
+ * | .../temp/bwchat/images | A2UI 图片会话缓存（开机清空） |
+ * | .../temp/bwchat/messages | 百问AI 本机会话 JSON（开机清空；无卡不写） |
  * | .../wallpaper | 壁纸库（关机/待机启用仅 NVS 记文件名；关机无/坏图则用固件内置 bg_shutdown.a2i1） |
  */
 
@@ -72,7 +71,8 @@ static inline size_t SdUtf8PrefixLength(const char* text, size_t max_bytes) {
 #define SD_PATH_SETTINGS SD_APP_ROOT "/settings" // 用户配置
 #define SD_PATH_WIFI_CONFIG SD_PATH_SETTINGS "/wificonfig.json" // 无线网络配置
 
-#define SD_PATH_LOGS SD_APP_ROOT "/logs"
+#define SD_PATH_SYSTEM SD_PATH_SETTINGS "/system" // 系统持久数据
+#define SD_PATH_LOGS SD_PATH_SYSTEM "/logs"
 #define SD_PATH_RUNTIME_LOG SD_PATH_LOGS "/metalio_logs.txt"
 #define SD_PATH_COREDUMP SD_PATH_LOGS "/metalio_coredump.elf"
 
@@ -80,11 +80,20 @@ static inline size_t SdUtf8PrefixLength(const char* text, size_t max_bytes) {
 #define SD_PATH_BOOKS       SD_APP_ROOT "/books"        // 电子书
 #define SD_PATH_FONTS       SD_APP_ROOT "/fonts"        // 阅读 .ef 字体
 #define SD_PATH_FONT_SRC    SD_APP_ROOT "/fonts_ttf"    // 待转换 TTF/OTF
-#define SD_PATH_A2UI_CACHE  SD_APP_ROOT "/a2ui_cache"   // A2UI 图片缓存
-#define SD_PATH_CHAT_LOG    SD_APP_ROOT "/chat_log"     // 百问会话 JSON
+#define SD_PATH_A2UI_CACHE  SD_PATH_BWCHAT_TEMP "/images"   // A2UI 图片缓存
+#define SD_PATH_CHAT_LOG    SD_PATH_BWCHAT_TEMP "/messages"     // 百问会话 JSON
 #define SD_PATH_WALLPAPER    SD_APP_ROOT "/wallpaper"    // 壁纸库
 #define SD_PATH_TEMP SD_APP_ROOT "/temp" // 临时工作文件根目录
-#define SD_PATH_WALLPAPER_TEMP SD_PATH_TEMP "/wallpaper" // 图片解码系数后备文件
+#define SD_PATH_BOOK_STATE SD_PATH_SETTINGS "/books" // 进度、时长与书签
+#define SD_PATH_BOOK_TEMP SD_PATH_TEMP "/books" // 阅读应用缓存
+#define SD_PATH_BOOK_WORK SD_PATH_BOOK_TEMP "/work" // 阅读会话工作文件
+#define SD_PATH_BOOK_CACHE SD_PATH_BOOK_TEMP "/cache" // 可重建的封面和索引
+#define SD_PATH_BWCHAT_TEMP SD_PATH_TEMP "/bwchat" // 百问 AI 会话缓存
+#define SD_PATH_WALLPAPER_APP_TEMP SD_PATH_TEMP "/wallpaper" // 壁纸应用缓存
+#define SD_PATH_WALLPAPER_TEMP SD_PATH_WALLPAPER_APP_TEMP "/work" // 图片解码系数后备文件
+#define SD_PATH_WALLPAPER_META SD_PATH_WALLPAPER_APP_TEMP "/meta" // 壁纸名称元数据
+#define SD_PATH_TRANSFER_TEMP SD_PATH_TEMP "/transfer" // 传输应用缓存
+#define SD_PATH_TRANSFER_WORK SD_PATH_TRANSFER_TEMP "/work" // 下载和预览工作文件
 
 #define SD_PATH_BOOK_FONT      SD_PATH_FONTS "/misans_40_2.ef"              // 默认阅读字体
 #define SD_PATH_BOOK_FONT_ALT  SD_PATH_FONTS "/font_misans_regular_25_2.ef" // 备用阅读字体
@@ -134,15 +143,27 @@ static inline int SdEnsureDir(const char* path) {
 /** @brief 创建应用根目录并尝试补齐功能目录；根目录就绪返回 1 */
 static inline int SdEnsureAppLayout(void) {
     static const char* kTag = "sd_paths";
-    if (!SdEnsureDir("/sdcard/metalio") || !SdEnsureDir(SD_APP_ROOT)) {
+    if (!SdEnsureDir(SD_MOUNT_POINT "/metalio") || !SdEnsureDir(SD_APP_ROOT)) {
         ESP_LOGW(kTag, "ensure app root %s failed errno=%d", SD_APP_ROOT, errno);
         return 0;
     }
     SdEnsureDir(SD_PATH_SETTINGS);
-    SdEnsureDir(SD_PATH_RECORDINGS);
     SdEnsureDir(SD_PATH_BOOKS);
     SdEnsureDir(SD_PATH_FONTS);
     SdEnsureDir(SD_PATH_FONT_SRC);
+    SdEnsureDir(SD_PATH_SYSTEM);
+    SdEnsureDir(SD_PATH_LOGS);
+    SdEnsureDir(SD_PATH_BOOK_STATE);
+    SdEnsureDir(SD_PATH_TEMP);
+    SdEnsureDir(SD_PATH_BOOK_TEMP);
+    SdEnsureDir(SD_PATH_BOOK_WORK);
+    SdEnsureDir(SD_PATH_BOOK_CACHE);
+    SdEnsureDir(SD_PATH_BWCHAT_TEMP);
+    SdEnsureDir(SD_PATH_WALLPAPER_APP_TEMP);
+    SdEnsureDir(SD_PATH_WALLPAPER_TEMP);
+    SdEnsureDir(SD_PATH_WALLPAPER_META);
+    SdEnsureDir(SD_PATH_TRANSFER_TEMP);
+    SdEnsureDir(SD_PATH_TRANSFER_WORK);
     SdEnsureDir(SD_PATH_A2UI_CACHE);
     SdEnsureDir(SD_PATH_CHAT_LOG);
     SdEnsureDir(SD_PATH_WALLPAPER);
@@ -183,7 +204,7 @@ static inline int SdWriteTextIfAbsent(const char* path, const char* body, size_t
  */
 static inline int SdEnsureUploadReadme(void) {
     static const char* kTag = "sd_paths";
-    if (!SdEnsureDir("/sdcard/metalio") || !SdEnsureDir(SD_APP_ROOT)) {
+    if (!SdEnsureDir(SD_MOUNT_POINT "/metalio") || !SdEnsureDir(SD_APP_ROOT)) {
         ESP_LOGW(kTag, "ensure %s for upload readme failed errno=%d", SD_APP_ROOT, errno);
         return 0;
     }

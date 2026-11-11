@@ -111,7 +111,8 @@ inline std::string DeviceLocationWifiUrl() {
 }
 
 inline std::string VisionUploadUrl() {
-    return Url(kVisionUpload);
+    if (!cloudzao_vision_upload_host[0] || !kVisionUpload[0]) return {};
+    return std::string(cloudzao_vision_upload_host) + kVisionUpload;
 }
 
 inline const char* const kWorkBuddyAuthorization = cloudzao_path_workbuddy_authorization;

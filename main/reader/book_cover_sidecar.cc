@@ -6,6 +6,7 @@
 #include "image_util.h"
 #include "reader_image_budget.h"
 #include "sd_paths.h"
+#include "sd_data_layout.h"
 
 #include <cstring>
 #include <string>
@@ -33,15 +34,9 @@ bool BuildSidecarPath(const char* book_path, char* out, size_t out_sz) {
     if (book_path == nullptr || out == nullptr || out_sz == 0) {
         return false;
     }
-    const char* dot = std::strrchr(book_path, '.');
-    const char* slash = std::strrchr(book_path, '/');
-    if (dot == nullptr || (slash != nullptr && dot < slash)) {
-        return false;
-    }
-    const size_t prefix_len = static_cast<size_t>(dot - book_path);
-    // New caches keep gray; existing binary sidecars are read as-is, never migrated.
-    const std::string stem(book_path,prefix_len);
-    const std::string gray=stem+".a2l8",legacy=stem+".a2i1";
+    const std::string gray = sd_data::BookPath(book_path, ".a2l8");
+    const std::string legacy = sd_data::BookPath(book_path, ".a2i1");
+    if (gray.empty() || legacy.empty()) return false;
     const std::string& path=access(gray.c_str(),F_OK)==0 ? gray :
         (access(legacy.c_str(),F_OK)==0 ? legacy : gray);
     if(path.size()+1>out_sz) return false;

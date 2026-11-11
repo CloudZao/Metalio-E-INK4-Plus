@@ -710,7 +710,7 @@ void LvAdapterEpdiy::Tick() {
             static unsigned suppressed = 0;
             const auto now = esp_timer_get_time();
             if (last_log_us == 0 || now - last_log_us >= 5000000) {
-                ESP_LOGW(TAG, "UI round slow total=%lldms timers=%lldms suppressed=%u",
+                ESP_LOGD(TAG, "UI round slow total=%lldms timers=%lldms suppressed=%u",
                     static_cast<long long>(round_us / 1000), static_cast<long long>(dt / 1000), suppressed);
                 last_log_us = now; suppressed = 0;
             } else ++suppressed;

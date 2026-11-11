@@ -1532,7 +1532,7 @@ lv_obj_t *a2ui_math_create(lv_obj_t *parent, const char *latex, bool display_sty
     }
     MathNode *root = build_tree(mp, latex, display_style);
     if (!root) {
-        ESP_LOGW(TAG, "parse fail: %.40s", latex ? latex : "");
+        ESP_LOGW(TAG, "math parse failed; using text fallback");
         free(mp);
         lv_obj_t *fb = lv_label_create(parent);
         lv_label_set_text(fb, latex ? latex : "?");

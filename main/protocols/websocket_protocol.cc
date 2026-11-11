@@ -250,7 +250,7 @@ std::string WebsocketProtocol::GetHelloMessage() {
 void WebsocketProtocol::ParseServerHello(const cJSON* root) {
     auto transport = cJSON_GetObjectItem(root, "transport");
     if (transport == nullptr || strcmp(transport->valuestring, "websocket") != 0) {
-        ESP_LOGE(TAG, "Unsupported transport: %s", transport->valuestring);
+        ESP_LOGE(TAG, "unsupported websocket transport");
         return;
     }
 

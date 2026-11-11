@@ -100,12 +100,15 @@ void OnReaderUnderlineDraw(lv_event_t* e) {
     if (width <= 0 || ink_bottom < 0) return;
     lv_area_t coords;
     lv_obj_get_content_coords(label, &coords);
-    if (reader::IsJustifiedTextLabel(label)) width = lv_area_get_width(&coords);
+    if (reader::IsJustifiedTextLabel(label) || reader::IsCompactTextLabel(label)) {
+        width = reader::MakeTextLineSpacing(font, txt, lv_area_get_width(&coords),
+            reader::IsJustifiedTextLabel(label), false, letter_space).width;
+    }
     int x = coords.x1;
     const auto align = lv_obj_get_style_text_align(label, LV_PART_MAIN);
     if (align == LV_TEXT_ALIGN_CENTER) x += (lv_area_get_width(&coords) - width) / 2;
     else if (align == LV_TEXT_ALIGN_RIGHT) x += lv_area_get_width(&coords) - width;
-    const int y = coords.y1 + reader::ReaderUnderlineTop(ink_bottom);
+    const int y = coords.y1 + reader::ReaderUnderlineTop(ink_bottom) + BookReaderPrefsTextValue(BookTextOption::UnderlineOffset);
     lv_draw_rect_dsc_t dsc;
     lv_draw_rect_dsc_init(&dsc);
     dsc.bg_color = lv_color_black();
@@ -222,7 +225,8 @@ void RenderReaderPage() {
     const reader::Page* page = st.reader.session->CurrentPageData();
     const bool reuse_raster = page && !page_images && BookReaderPrefsBackground() == 0 &&
         reader::PageIsTextOnly(*page) && st.reader.text_raster_image &&
-        lv_obj_is_valid(st.reader.text_raster_image) && lv_obj_get_child_count(st.reader.content) == 1;
+        lv_obj_is_valid(st.reader.text_raster_image) && lv_obj_get_child_count(st.reader.content) == 1 &&
+        lv_obj_get_child_count(lv_obj_get_parent(lv_obj_get_parent(st.reader.text_raster_image))) == 1;
     if (!reuse_raster) {
         lv_obj_clean(st.reader.content);
         Book_DisableScroll(st.reader.content);
@@ -284,8 +288,37 @@ void RenderReaderPage() {
     const int spacing_percent = st.reader.session->LineSpacingPercent();
     const lv_coord_t para_gap = st.reader.session->ParaGap();
 
-    // 纯文本页：预渲 L8 → 单张 lv_image（PARTIAL 上屏）
-    if (!page_images && book_font != nullptr && reader::PageIsTextOnly(*page) && content_h > 40 &&
+    const auto attach_image = [&](lv_obj_t* parent, const reader::PageItem& item, int col_w, int top) {
+        const int img_h = item.image_h;
+        lv_obj_t* slot = lv_obj_create(parent);
+        lv_obj_remove_style_all(slot);
+        lv_obj_set_width(slot, col_w);
+        lv_obj_set_height(slot, page->items.size() == 1 ? content_h : img_h);
+        if (top >= 0) lv_obj_set_pos(slot, 0, top);
+        lv_obj_clear_flag(slot, LV_OBJ_FLAG_CLICKABLE);
+        Book_DisableScroll(slot);
+
+        reader::RasterImage cached;
+        if (st.reader.session->TryCopyCachedPageImage(item.image_href, item.image_w, img_h, cached) && !cached.empty()) {
+            auto* heap_img = new reader::RasterImage(std::move(cached));
+            AttachPageImageToSlot(slot, heap_img, true);
+        } else {
+            lv_obj_t* label = lv_label_create(slot);
+            lv_label_set_text(label, Lang::Strings::BOOK_LOADING);
+            lv_obj_set_style_text_font(label, book_font, 0);
+            lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_center(label);
+            BookUiState::PageImagePending pending;
+            pending.href = item.image_href;
+            pending.max_w = item.image_w;
+            pending.max_h = img_h;
+            pending.slot = slot;
+            st.reader.page_image_pending.push_back(std::move(pending));
+        }
+    };
+
+    // 正文统一预渲为 L8，插图按同一布局坐标异步填充。
+    if (!page_images && book_font != nullptr && content_h > 40 &&
         max_w > 40 && !prepared->raster.empty()) {
         const lv_coord_t col_w = prepared->column_width;
         const lv_coord_t col_x = content_area.x1 + (max_w - col_w) / 2;
@@ -328,6 +361,13 @@ void RenderReaderPage() {
         EpdSetContentRole(st.reader.text_raster_image,BookReaderPrefsAntialias() || background == 3
             ? EpdContentRole::ReaderAntialias : EpdContentRole::Monochrome);
 
+        size_t image_index = 0;
+        for (const auto& item : page->items) {
+            if (item.kind != reader::ContentKind::kText) {
+                attach_image(col, item, col_w, prepared->image_tops[image_index++]);
+            }
+        }
+        StartPageImageWorker();
         UpdateReadFooter();
         FinishReaderFirstPaintGate();
         ResetPointerLongPress();
@@ -346,7 +386,7 @@ void RenderReaderPage() {
         AttachReadBodyInput(st.reader.content);
     }
     const lv_coord_t col_w = page_images ? max_w
-        : reader::PageTextColumnWidth(*page, book_font, max_w);
+        : reader::PageTextColumnWidth(*page, book_font, max_w, st.reader.session->Style());
     const lv_coord_t col_x = content_area.x1 + (max_w - col_w) / 2;
 
     lv_obj_t* col = lv_obj_create(st.reader.content);
@@ -360,7 +400,8 @@ void RenderReaderPage() {
     lv_obj_clear_flag(col, LV_OBJ_FLAG_CLICKABLE);
     Book_DisableScroll(col);
 
-    const auto lines = reader::MakeTextLineLayout(book_font, content_h, spacing_percent);
+    const auto lines = reader::MakeTextLineLayout(book_font, content_h, spacing_percent, false, st.reader.session->Style().line_gap);
+    lv_obj_set_style_text_letter_space(col, st.reader.session->Style().letter_gap, 0);
     int row_index = 0;
     bool prev_chapter_title = false;
     for (const auto& item : page->items) {
@@ -373,35 +414,11 @@ void RenderReaderPage() {
                     ? static_cast<lv_coord_t>(para_gap + reader::kReaderChapterTitleAfterGap)
                     : para_gap;
             reader::CreatePageTextLabel(col, item, col_w, book_font, lines, row_index, gap,
-                [](lv_obj_t* label) { AttachReaderUnderline(label, BookReaderPrefsUnderlineMode()); });
+                [](lv_obj_t* label) { AttachReaderUnderline(label, BookReaderPrefsUnderlineMode()); }, st.reader.session->Style().indent_chars);
             prev_chapter_title = item.chapter_title;
         } else {
             prev_chapter_title = false;
-            const int img_h = item.image_h;
-            lv_obj_t* slot = lv_obj_create(col);
-            lv_obj_remove_style_all(slot);
-            lv_obj_set_width(slot, col_w);
-            lv_obj_set_height(slot, page->items.size() == 1 ? content_h : img_h);
-            lv_obj_clear_flag(slot, LV_OBJ_FLAG_CLICKABLE);
-            Book_DisableScroll(slot);
-
-            reader::RasterImage cached;
-            if (st.reader.session->TryCopyCachedPageImage(item.image_href, item.image_w, img_h, cached) && !cached.empty()) {
-                auto* heap_img = new reader::RasterImage(std::move(cached));
-                AttachPageImageToSlot(slot, heap_img, true);
-            } else {
-                lv_obj_t* label = lv_label_create(slot);
-                lv_label_set_text(label, Lang::Strings::BOOK_LOADING);
-                lv_obj_set_style_text_font(label, book_font, 0);
-                lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
-                lv_obj_center(label);
-                BookUiState::PageImagePending pending;
-                pending.href = item.image_href;
-                pending.max_w = item.image_w;
-                pending.max_h = img_h;
-                pending.slot = slot;
-                st.reader.page_image_pending.push_back(std::move(pending));
-            }
+            attach_image(col, item, col_w, -1);
         }
     }
 

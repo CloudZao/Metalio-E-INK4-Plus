@@ -1,4 +1,5 @@
 #include "book_disk_cache.h"
+#include "book_storage_paths.h"
 
 #include <atomic>
 #include <climits>
@@ -18,7 +19,8 @@ struct ItemRecord {
 bool BookPageStore::Open(const std::string& book_path, bool count_only) {
     clear(); count_only_ = count_only;
     if (count_only) return true;
-    path_ = book_path + ".rpages-" + std::to_string(s_cache_id.fetch_add(1)) + ".tmp";
+    path_ = BookStorageWorkPath(book_path, "rpages", s_cache_id.fetch_add(1));
+    if (path_.empty()) return good_ = false;
     fp_ = std::fopen(path_.c_str(), "w+b");
     good_ = fp_ && offsets_.Reserve(path_ + ".idx", 1);
     return good_;

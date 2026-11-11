@@ -2,7 +2,6 @@
 #include <esp_log.h>
 #include <esp_crt_bundle.h>
 #include <cstring>
-#include <unistd.h>
 #include <algorithm>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -64,32 +63,57 @@ bool EspSsl::Connect(const std::string& host, int port) {
         return false;
     }
 
+    int sockfd = -1;
+    const esp_err_t socket_result = esp_tls_get_conn_sockfd(tls_client_, &sockfd);
+    if (socket_result != ESP_OK || sockfd < 0) {
+        last_error_ = socket_result != ESP_OK ? socket_result : EBADF;
+        ESP_LOGE(TAG, "TLS receive socket unavailable: code=%d", last_error_);
+        esp_tls_conn_destroy(tls_client_);
+        tls_client_ = nullptr;
+        return false;
+    }
+    // 握手完成后仅缩短单次接收等待，让主动关闭通过退出标志完成，不中断底层 TLS 读取。
+    timeval receive_slice{};
+    receive_slice.tv_usec = 200000;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &receive_slice, sizeof(receive_slice)) != 0) {
+        last_error_ = errno;
+        ESP_LOGE(TAG, "TLS receive timeout setup failed: socket_errno=%d", last_error_);
+        esp_tls_conn_destroy(tls_client_);
+        tls_client_ = nullptr;
+        return false;
+    }
+
+    disconnecting_.store(false);
     connected_ = true;
 
     xEventGroupClearBits(event_group_, ESP_SSL_EVENT_RECEIVE_TASK_EXIT);
-    xTaskCreate([](void* arg) {
+    const auto task_result = xTaskCreate([](void* arg) {
         EspSsl* ssl = (EspSsl*)arg;
         ssl->ReceiveTask();
         xEventGroupSetBits(ssl->event_group_, ESP_SSL_EVENT_RECEIVE_TASK_EXIT);
         vTaskDelete(NULL);
     }, "ssl_receive", 4096, this, 1, &receive_task_handle_);
+    if (task_result != pdPASS) {
+        last_error_ = ENOMEM;
+        ESP_LOGE(TAG, "Failed to create TLS receive task");
+        Disconnect();
+        return false;
+    }
     return true;
 }
 
 void EspSsl::Disconnect() {
+    disconnecting_.store(true);
     connected_ = false;
     
-    // Close socket if it is open
     if (tls_client_ != nullptr) {
-        int sockfd;
-        ESP_ERROR_CHECK(esp_tls_get_conn_sockfd(tls_client_, &sockfd));
-        if (sockfd >= 0) {
-            close(sockfd);
-        }
-    
-        auto bits = xEventGroupWaitBits(event_group_, ESP_SSL_EVENT_RECEIVE_TASK_EXIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(10000));
-        if (!(bits & ESP_SSL_EVENT_RECEIVE_TASK_EXIT)) {
-            ESP_LOGE(TAG, "Failed to wait for receive task exit");
+        // 套接字仍由 TLS 持有，接收任务退出后只释放一次，避免重复关闭及描述符复用。
+        if (receive_task_handle_ != nullptr) {
+            while (!(xEventGroupWaitBits(event_group_, ESP_SSL_EVENT_RECEIVE_TASK_EXIT,
+                    pdFALSE, pdFALSE, pdMS_TO_TICKS(10000)) & ESP_SSL_EVENT_RECEIVE_TASK_EXIT)) {
+                ESP_LOGW(TAG, "Waiting for TLS receive task before releasing connection");
+            }
+            receive_task_handle_ = nullptr;
         }
 
         esp_tls_conn_destroy(tls_client_);
@@ -138,6 +162,8 @@ void EspSsl::ReceiveTask() {
     while (connected_) {
         data.resize(1500);
         int ret = esp_tls_conn_read(tls_client_, data.data(), data.size());
+        const int read_errno = errno;
+        if (disconnecting_.load()) break;
 
         if (ret == ESP_TLS_ERR_SSL_WANT_READ) {
             continue;
@@ -145,7 +171,8 @@ void EspSsl::ReceiveTask() {
 
         if (ret <= 0) {
             if (ret < 0) {
-                ESP_LOGE(TAG, "SSL receive failed: %d", ret);
+                last_error_ = ret;
+                ESP_LOGE(TAG, "SSL receive failed: tls_code=%d socket_errno=%d", ret, read_errno);
             }
             connected_ = false;
             // 接收失败或连接断开时调用断连回调

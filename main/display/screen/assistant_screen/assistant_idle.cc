@@ -11,9 +11,6 @@ namespace {
 // of the resource partition. Icons are LVGL strokes based on the supplied artwork.
 constexpr int kReferenceWidth = 480;
 constexpr int kReferenceHeight = 800;
-constexpr int kListTop = 365;
-constexpr int kFourRowHeight = 106;
-constexpr int kThreeRowHeight = 132;
 constexpr int kTalkRightMargin = 16;
 constexpr int kRuleWidth = 2;
 
@@ -181,10 +178,12 @@ void Assistant_BuildIdleHint(lv_obj_t* host) {
     const int count = 4 - first;
     // Extra space above and below the centered content keeps it off the rules.
     // Keep the four-row list inside the bottom margin of the welcome page.
-    const int row_height = y(count == 3 ? kThreeRowHeight : kFourRowHeight);
+    const int list_top = y(330);
+    const int list_bottom = height - kFooterH - kPageIndicatorH - y(8);
+    const int row_height = (list_bottom - list_top) / count;
     for (int row = 0; row < count; ++row) {
         const int i = first + row;
-        const int top = y(kListTop) + row * row_height;
+        const int top = list_top + row * row_height;
         const int row_bottom = top + row_height;
         lv_obj_t* item = PlainObject(host, x(425), row_bottom - top);
         lv_obj_set_pos(item, x(25), top);

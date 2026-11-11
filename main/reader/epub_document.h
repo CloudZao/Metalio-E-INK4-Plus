@@ -6,6 +6,7 @@
 #include <atomic>
 
 #include "reader_types.h"
+#include "html_content.h"
 #include "zip_reader.h"
 
 namespace reader {
@@ -14,6 +15,13 @@ struct EpubSpineItem {
     std::string href;       // 相对 EPUB 根
     std::string media_type;
     std::string id;
+};
+
+struct EpubTocEntry {
+    std::string title; // 原生目录标题
+    std::string fragment; // 已解码的正文锚点，不含井号
+    int spine_index = -1; // 对应阅读顺序条目
+    uint16_t depth = 0; // 原生目录层级，顶层为零
 };
 
 // EPUB 2/3 元数据 + spine + 封面/章节抽取（借鉴 CrossPoint 流程，POSIX/ZIP 实现）。
@@ -31,16 +39,23 @@ public:
     const std::string& Path() const { return path_; }
     const std::string& Title() const { return title_; }
     const std::string& Author() const { return author_; }
+    /** @brief 获取 OPF 声明的书籍语言，缺失时为空 */
+    const std::string& Language() const { return language_; }
     const std::string& CoverHref() const { return cover_href_; }
 
     int SpineCount() const { return static_cast<int>(spine_.size()); }
     const EpubSpineItem* SpineItem(int index) const;
 
+    /** @brief 获取原生章节目录，目录项与阅读顺序条目独立。 */
+    const std::vector<EpubTocEntry>& Toc() const { return toc_; }
+
     // 解压封面图到 bytes（PNG/JPEG）；小资源/调试用。大图请走 DecodeCoverImageToL8。
     bool LoadCoverBytes(std::vector<uint8_t>& out, size_t max_bytes = 8 * 1024 * 1024);
 
     /** @brief 流式解压章节 HTML 并同步消费正文，不受整章内存大小限制。 */
-    bool StreamChapterBlocks(int spine_index, const ContentBlockSink& sink);
+    bool StreamChapterBlocks(int spine_index, const ContentBlockSink& sink,
+                             const HtmlAnchorSink& anchors = {},
+                             const std::atomic<bool>* cancelled = nullptr);
     /** @brief 有界检查所有阅读顺序条目是否均为单图页面，正文文字或复杂页面返回 false */
     bool DetectPageImages();
     /** @brief 获取最近一次读取失败的原因。 */
@@ -66,6 +81,7 @@ public:
 private:
     bool ParseContainer();
     bool ParseOpf(const std::string& opf_path);
+    bool ParseNavigation(const std::string& href, bool ncx);
     static std::string DirOf(const std::string& path);
 
     BookReadError error_ = BookReadError::kInvalidData; // 最近一次章节读取错误
@@ -74,8 +90,10 @@ private:
     std::string content_base_;  // OPF 所在目录
     std::string title_;
     std::string author_;
+    std::string language_; // OPF dc:language 原文
     std::string cover_href_;
     std::vector<EpubSpineItem> spine_;
+    std::vector<EpubTocEntry> toc_; // 仅保存有效的本地目录项
     // id -> href
     std::unordered_map<std::string, std::string> manifest_;
     std::unordered_map<std::string, std::string> manifest_props_;  // id -> properties

@@ -195,7 +195,7 @@ void WallpaperPreviewLoadTask(void* arg) {
                                                      *img) &&
                          !img->empty();
                 } else if (work->download_url[0] != '\0') {
-                    auto cache = Cloud_DownloadCover(work->download_url);
+                    auto cache = Cloud_DownloadCover(work->download_url, reader::HttpCacheApp::Wallpaper);
                     if (cache &&
                         Cloud_State().preview.epoch == work->epoch) {
                         ok = reader::DecodeImageFileToL8(cache->path.c_str(), kPreviewMaxW,

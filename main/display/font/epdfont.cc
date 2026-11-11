@@ -1,3 +1,4 @@
+#include <cerrno>
 #include "epdfont.h"
 
 #include <algorithm>
@@ -322,7 +323,7 @@ epdfont_t* epdfont_open(const char* path) {
     }
     FILE* fp = std::fopen(path, "rb");
     if (fp == nullptr) {
-        ESP_LOGW(TAG, "open fail: %s", path);
+        ESP_LOGW(TAG, "bitmap font open failed errno=%d", errno);
         return nullptr;
     }
 
@@ -417,7 +418,7 @@ epdfont_t* epdfont_open(const char* path) {
     f->lv.fallback = nullptr;
     f->lv.user_data = nullptr;
 
-    ESP_LOGI(TAG, "opened %s: glyphs=%u intervals=%u bpp=%u line_h=%u", path,
+    ESP_LOGI(TAG, "bitmap font opened glyphs=%u intervals=%u bpp=%u line_h=%u",
              static_cast<unsigned>(hdr.glyph_count), static_cast<unsigned>(hdr.interval_count), bpp,
              hdr.line_height);
     return f;

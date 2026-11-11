@@ -10,6 +10,6 @@ namespace reader {
 bool WriteWallpaperFileAtomic(const char* destination, const uint8_t* data, size_t length,
                                bool overwrite, ImageDecodeCancelled cancelled, void* context,
                                ImageDecodeError* error);
-/** @brief 删除壁纸及对应下载临时文件、恢复备份，并回收废弃保存工作文件 */
+/** @brief 删除壁纸、元数据和保存备份并清理启用状态；须在非 LVGL 的内部 RAM 栈任务调用。 */
 bool DeleteWallpaperFile(const char* path);
 } // namespace reader

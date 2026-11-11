@@ -71,6 +71,8 @@ public:
     virtual void SendWakeWordDetected(const std::string& wake_word);
     virtual void SendStartListening(ListeningMode mode);
     virtual void SendStopListening();
+    /** @brief 提交单张照片问题，录音问题附在 stop 消息中 */
+    bool SendImageQuestion(const std::string& image_id, bool recorded);
     virtual void SendAbortSpeaking(AbortReason reason);
     virtual void SendMcpMessage(const std::string& message);
 

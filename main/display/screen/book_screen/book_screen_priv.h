@@ -179,6 +179,7 @@ struct BookUiState {
 
     struct Settings {
         reader::RasterImage reader_sheet_cover;
+        int reader_settings_page = 0; // 阅读设置的当前子页，0 为卡片入口
         int reader_tab = 4; // 0 toc, 1 font, 2 bookmark, 3 settings, 4 default duration
         int bookmark_group=0;
         bool bookmark_multi=false;

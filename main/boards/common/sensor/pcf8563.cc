@@ -1,4 +1,6 @@
 #include "pcf8563.h"
+#include "ntp_server.h"
+#include "settings.h"
 
 #include <sys/time.h>
 #include <cerrno>
@@ -157,6 +159,11 @@ bool Pcf8563::ApplyRtcToSystem() {
         ESP_LOGW(TAG, "RTC -> system mktime failed errno=%d", errno);
         return false;
     }
+    // 旧固件保存当地日历；新格式保存 UTC 日历，用标记区分升级前的数据。
+    Settings clock_settings("clock");
+    if (clock_settings.GetBool("rtc_utc")) {
+        ts += NtpServer::GetInstance().UtcOffset();
+    }
 
     struct timeval tv = {
         .tv_sec = ts,
@@ -174,16 +181,19 @@ bool Pcf8563::ApplyRtcToSystem() {
 
 bool Pcf8563::SyncSystemToRtc() {
     time_t now = time(nullptr);
-    struct tm local = {};
-    if (localtime_r(&now, &local) == nullptr) {
+    struct tm utc = {};
+    if (gmtime_r(&now, &utc) == nullptr) {
+        ESP_LOGE(TAG, "system -> RTC UTC conversion failed");
         return false;
     }
-    if (!SetTime(local)) {
+    if (!SetTime(utc)) {
         ESP_LOGW(TAG, "system -> RTC calendar write failed (ready=%d)", ready_);
         return false;
     }
-    ESP_LOGI(TAG, "RTC <- system %04d-%02d-%02d %02d:%02d:%02d", local.tm_year + 1900,
-             local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec);
+    Settings settings("clock", true);
+    if (!settings.GetBool("rtc_utc")) settings.SetBool("rtc_utc", true);
+    ESP_LOGI(TAG, "RTC <- system UTC %04d-%02d-%02d %02d:%02d:%02d", utc.tm_year + 1900,
+             utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec);
     return true;
 }
 

@@ -32,8 +32,6 @@ bool ReadWallpaperMeta(const char* wallpaper_path, std::string& image_name_out,
 /** @brief 写入壁纸旁路元数据 */
 bool WriteWallpaperMeta(const char* wallpaper_path, const std::string& image_name,
                         const std::string& original_filename);
-/** @brief 删除壁纸旁路元数据文件 */
-void DeleteWallpaperMeta(const char* wallpaper_path);
 
 /** @brief 下载云壁纸到本地 */
 bool DownloadCloudWallpaper(const CloudWallpaperTask& task, std::string& err_out,
