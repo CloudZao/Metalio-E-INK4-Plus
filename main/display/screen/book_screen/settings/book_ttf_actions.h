@@ -43,3 +43,6 @@ void OnTtfClose(lv_event_t* e);
 
 /** @brief 取消转换并返回 TTF 文件列表。 */
 void ReturnToTtfList();
+
+/** @brief 查询当前页源字体是否已被选中 */
+bool TtfItemSelected(int idx);

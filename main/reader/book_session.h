@@ -334,10 +334,10 @@ private:
     bool OpenTxt(const char* path, size_t known_size = 0);
     bool OpenEpub(const char* path);
     bool OpenEbook(const char* path);
-    bool PaginateChapter(int chapter, BookPageStore& built, const LayoutAnchor* preview = nullptr,
+    bool PaginateChapter(int chapter, BookPageStore& built, uint32_t generation, const LayoutAnchor* preview = nullptr,
                          const std::atomic<bool>* cancelled = nullptr,
                          std::vector<BookSourcePosition>* epub_positions = nullptr) const;
-    bool CountChapterPages(int chapter, int& out_pages) const;
+    bool CountChapterPages(int chapter, int& out_pages, uint32_t generation) const;
     bool RebuildChapterPageTable();
     static std::string ChapterPageCachePath(const char* book_path);
     bool TryLoadChapterPageCache();

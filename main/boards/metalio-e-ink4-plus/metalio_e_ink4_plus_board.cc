@@ -13,6 +13,7 @@
 #include "frontlight.h"
 #include "metalio_accel.h"
 #include "metalio_audio.h"
+#include "panel_vcom.h"
 #include "metalio_display_setup.h"
 #include "metalio_epd.h"
 #include "metalio_keys.h"
@@ -94,6 +95,7 @@ public:
             Frontlight::GetInstance().SetOutputDeferred(false);
             ESP_LOGI(TAG, "frontlight startup output released after audio reset sequence");
         });
+        PanelVcomInit();
         ESP_LOGI(TAG, "board ready display=%s sd=%s gauge=%s",
                  display_ ? "ok" : "FAIL", MetalioSd_Ok() ? "ok" : "FAIL",
                  Bq27220Gauge::GetInstance().IsReady() ? "ok" : "N/A");

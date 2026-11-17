@@ -33,6 +33,7 @@ constexpr lv_coord_t kCoverSpineInset = UiSx(6);  // 书脊竖线相对左边框
 constexpr lv_coord_t kRowBorderW = UiSx(2);
 constexpr lv_coord_t kRowRadius = UiSx(8);
 constexpr lv_coord_t kReadPadTop = kListPad;  // 与左右边距一致
+constexpr int kReadFontPageSize = 9; // 阅读字体保持 3×3 网格
 constexpr int kFontListPageSize = 6;         // 设置卡字体列表每页固定行数
 constexpr uint32_t kLayoutDebounceMs = 300;   // 抬起且停顿后再排版（定时器内仍会等手指）
 constexpr uint32_t kLayoutHintTickMs = 2000;  // 分阶段编排结果发布与提示到期检查
@@ -50,6 +51,11 @@ struct BookUiState {
         std::vector<reader::BookInfo> books;
         int selected = -1;
         int list_page = 0;
+        int loaded_page = -1; // 当前页数据所属页码
+        bool directory_loading_shown = false; // 同一次等待只绘制一次提示
+        int64_t directory_requested_us = 0; // 翻页加载提示的延迟起点
+        bool directory_loading = false; // 当前目录页读取中
+        bool directory_failed = false; // 当前目录页读取失败
         int list_page_size = 9; // 书架默认 3×3；列表模式按行高算
         lv_coord_t shelf_cover_h = 0; // 书架封面高（按三行可用高度算）
         lv_coord_t shelf_content_h = 0; // 标题行以下可用高度
@@ -68,7 +74,8 @@ struct BookUiState {
         lv_obj_t* list_footer = nullptr; // 页码；多选时靠右下
         lv_obj_t* multi_bar = nullptr;   // 取消 / 全选 / 移除
         bool shelf_multi = false;
-        std::vector<uint8_t> shelf_selected; // 与 books 等长
+        bool delete_stopping = false; // UI 已请求停止当前批次
+        std::vector<reader::BookDirEntry> shelf_selected; // 仅保存已选项，按路径跨页保留
         int64_t shelf_suppress_click_until_us = 0;
         int shelf_suppress_click_idx = -1;
 
@@ -172,6 +179,7 @@ struct BookUiState {
 
         // 阅读时长 checkpoint：仅 LVGL 任务启停；周期 fold+写 .pos
         lv_timer_t* read_time_ckpt_timer = nullptr;
+        bool powering_off = false; // UI：关机暂停后禁止待机轮询恢复阅读
         bool standby_paused = false; // UI：取消后等待原有 worker 完成，阻止新任务
         bool standby_detached = false; // UI：字库及 SD 句柄已关闭
         bool reading_paused_by_standby = false; // 进待机停钟，退出待机可恢复
@@ -216,11 +224,13 @@ struct BookUiState {
         lv_obj_t* sheet_gap_bound = nullptr;
         lv_obj_t* sheet_fl_bright_value = nullptr; // 前光亮度文案
         std::vector<ReadFontEntry> font_entries;
+        int64_t font_requested_us = 0; // 短缓存交接保留原网格
+        bool font_loading_shown = false; // 避免重复刷新加载提示
         bool font_scan_loading = false; // 后台字体目录扫描尚未发布
         bool font_scan_failed = false; // 扫描或任务创建失败，容器显示错误提示
         int font_list_page = 0;  // 设置卡字体列表页码
         bool font_multi = false;
-        std::vector<uint8_t> font_selected; // 与 font_entries 等长
+        std::vector<std::string> font_selected; // 已选字体文件名，跨页保留
         int64_t font_suppress_click_until_us = 0;
         int font_suppress_click_idx = -1;
         bool font_suppress_next_click = false; // 长按进多选后吃掉松手假 CLICKED
@@ -229,8 +239,12 @@ struct BookUiState {
     struct Ttf {
         enum class TtfMode : uint8_t { kNone, kList, kConfirm, kProgress, kResult };
         TtfMode ttf_mode = TtfMode::kNone;
+        lv_obj_t* ttf_page_label = nullptr; // 导入目录页码
+        bool ttf_loading = false; // 当前导入目录页读取中
+        bool ttf_failed = false; // 当前导入目录页读取失败
         std::vector<std::string> ttf_files;
-        std::vector<uint8_t> ttf_selected; // 非空时处于源字体多选模式
+        std::vector<std::string> ttf_selected; // 已选源字体文件名，跨页保留
+        bool ttf_multi = false; // 源字体多选模式与选中数量独立
         int ttf_page = 0;
         std::string ttf_pick;      // 选中的字体文件名（fonts_ttf 内）
         int ttf_size_px = 40;      // 确认页步进器：20–80，默认 40；只输出一档

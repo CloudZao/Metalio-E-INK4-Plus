@@ -80,6 +80,7 @@ public:
 
     /** @brief 发送指定字节数的数据，返回是否完整写入串口 */
     bool sendData(const uint8_t* data, size_t length) {
+        std::lock_guard<std::recursive_timed_mutex> lock(m_commandMutex);
         if (!m_initialized) {
             return false;
         }
@@ -102,6 +103,9 @@ public:
 
     /** @brief 查询串口驱动和接收任务是否已初始化 */
     bool isInitialized() const { return m_initialized; }
+
+    /** @brief 获取多指令事务与共享电源复位使用的串口互斥锁 */
+    std::recursive_timed_mutex& commandMutex() { return m_commandMutex; }
 
 private:
     SimpleUart() = default;
@@ -150,4 +154,5 @@ private:
     std::function<void(const std::vector<uint8_t>&)> m_callback; // 页面可替换的数据回调
     std::function<void(const std::vector<uint8_t>&)> m_observer; // 持续处理协议应答的观察者
     std::mutex m_callbackMutex; // 保护回调注册与接收任务快照
+    std::recursive_timed_mutex m_commandMutex; // 保证存储事务期间不插入其他命令或复位
 };

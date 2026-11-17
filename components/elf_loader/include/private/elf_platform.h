@@ -1,0 +1,114 @@
+/*
+ * SPDX-FileCopyrightText: 2023-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#pragma once
+
+#include "private/elf_types.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Notes: align_size needs to be a power of 2 */
+
+#define ELF_ALIGN(_a, align_size) (((_a) + (align_size - 1)) & \
+                                   ~(align_size - 1))
+
+/* An MMU mapping begins at the containing page, not at the allocation's
+ * original address. The leading page offset counts toward mapped bytes. */
+static inline uint32_t esp_elf_mmu_page_span(uintptr_t base, size_t bytes, uint32_t page_size)
+{
+    if (!bytes || !page_size || (page_size & (page_size - 1))) {
+        return 0;
+    }
+    uint64_t span = (uint64_t)(base & (page_size - 1)) + bytes;
+    uint64_t pages = (span + page_size - 1) / page_size;
+    return pages <= UINT32_MAX ? (uint32_t)pages : 0;
+}
+
+/**
+ * @brief Allocate block of memory.
+ *
+ * @param n - Memory size in byte
+ * @param exec - True: memory can run executable code; False: memory can R/W data
+ *
+ * @return Memory pointer if success or NULL if failed.
+ */
+void *esp_elf_malloc(uint32_t n, bool exec);
+
+/**
+ * @brief Free block of memory.
+ *
+ * @param ptr - memory block pointer allocated by "esp_elf_malloc"
+ *
+ * @return None
+ */
+void esp_elf_free(void *ptr);
+
+/**
+ * @brief Relocates target architecture symbol of ELF
+ *
+ * @param elf  - ELF object pointer
+ * @param rela - Relocated symbol data
+ * @param sym  - ELF symbol table
+ * @param addr - Jumping target address
+ *
+ * @return ESP_OK if success or other if failed.
+ */
+int esp_elf_arch_relocate(esp_elf_t *elf, const elf32_rela_t *rela,
+                          const elf32_sym_t *sym, uint32_t addr);
+
+/**
+ * @brief Remap symbol from ".data" to ".text" section.
+ *
+ * @param elf  - ELF object pointer
+ * @param sym  - ELF symbol table
+ *
+ * @return Remapped symbol value
+ */
+#ifdef CONFIG_ELF_LOADER_CACHE_OFFSET
+uintptr_t elf_remap_text(esp_elf_t *elf, uintptr_t sym);
+#endif
+
+/**
+ * @brief Synchronize ELF text between cache and external RAM.
+ *
+ * @param elf - ELF object pointer
+ *
+ * @return 0 if success or a negative value if failed.
+ *
+ * @note ESP32-S3 on ESP-IDF >= 5.2 uses ranged cache synchronization. Other
+ *       supported targets keep the full-cache synchronization path.
+ */
+#ifdef CONFIG_ELF_LOADER_LOAD_PSRAM
+int esp_elf_arch_flush(esp_elf_t *elf);
+#endif
+
+/**
+ * @brief Initialize MMU hardware remapping function.
+ *
+ * @param elf - ELF object pointer
+ *
+ * @return 0 if success or a negative value if failed.
+ */
+#ifdef CONFIG_ELF_LOADER_SET_MMU
+int esp_elf_arch_init_mmu(esp_elf_t *elf);
+#endif
+
+/**
+ * @brief De-initialize MMU hardware remapping function.
+ *
+ * @param elf - ELF object pointer
+ *
+ * @return None
+ */
+#ifdef CONFIG_ELF_LOADER_SET_MMU
+void esp_elf_arch_deinit_mmu(esp_elf_t *elf);
+#endif
+
+#ifdef __cplusplus
+}
+#endif

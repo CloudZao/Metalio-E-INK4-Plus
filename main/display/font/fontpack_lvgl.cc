@@ -1,9 +1,12 @@
 #include "fontpack_lvgl.h"
 
 #include "font_loader.h"
+#include "sd_access.h"
+#include "sd_paths.h"
 #include "font_bitmap_expand.h"
 
 #include <cstring>
+#include <mutex>
 
 #include <esp_cpu.h>
 #include <esp_heap_caps.h>
@@ -19,6 +22,7 @@ constexpr const char* TAG = "fontpack_lv";
 
 struct FontpackLvFont {
     lv_font_t lv{};
+    lv_font_t sd{}; // 与主字库同规格的 SD 回退字体
     uint16_t size = 0;
     uint16_t bpp = 0;
     bool inited = false;
@@ -27,10 +31,90 @@ struct FontpackLvFont {
 // UI 30@2（397=25@2，字库取最近档）+ 百问AI 30@4 + Math 18/28/36@2
 constexpr int kMaxFonts = 12;
 FontpackLvFont s_fonts[kMaxFonts];
+std::mutex s_fonts_mutex;
 bool s_flash_tried = false;
 bool s_flash_ok = false;
 
 using font_bitmap_expand::UnpackToA8;
+
+struct SdGlyphCacheEntry {
+    uint64_t key; // 字符、字号和灰度组合
+    TickType_t loaded; // 缓存有效期起点
+    int result; // 成功或正常缺字
+    GlyphData glyph; // 单字位图，不向 LVGL 暴露缓存地址
+};
+
+static bool GetSdGlyph(uint32_t letter, uint16_t size, uint16_t bpp, GlyphData* glyph) {
+    static std::mutex mutex;
+    static SdGlyphCacheEntry* cache = nullptr;
+    static unsigned next = 0;
+    static unsigned generation = 0;
+    static TickType_t retry_at = 0;
+    static bool retry = false;
+    static int last_error = FONT_LOADER_OK;
+    static bool available = false;
+    constexpr unsigned capacity = 16;
+    constexpr TickType_t ttl = pdMS_TO_TICKS(5000);
+    std::lock_guard<std::mutex> lock(mutex);
+    sd_access::Transaction transaction;
+    if (!transaction) return false;
+    const unsigned mounted = sd_access::MountGeneration();
+    if (generation != mounted) {
+        if (cache) std::memset(cache, 0, sizeof(*cache) * capacity);
+        generation = mounted;
+        retry = false;
+        last_error = FONT_LOADER_OK;
+        available = false;
+    }
+    const TickType_t now = xTaskGetTickCount();
+    if (retry && now - retry_at < ttl) return false;
+    const uint64_t key = fontpack_make_key(letter, size, bpp);
+    for (unsigned i = 0; cache && i < capacity; ++i) {
+        if (cache[i].key == key && now - cache[i].loaded < ttl) {
+            if (cache[i].result != FONT_LOADER_OK) return false;
+            *glyph = cache[i].glyph;
+            return true;
+        }
+    }
+    const int err = font_loader_read_sd(SD_PATH_FONT_EXT, letter, size, bpp, glyph);
+    if (err != FONT_LOADER_OK && err != FONT_LOADER_ERR_NOT_FOUND) {
+        // 缺少可选文件保持静默；损坏及 I/O 原因已在读取层记录，延后重试避免刷屏。
+        retry = true;
+        retry_at = now;
+        last_error = err;
+        available = false;
+        return false;
+    }
+    if (!cache) {
+        cache = static_cast<SdGlyphCacheEntry*>(heap_caps_calloc(
+            capacity, sizeof(*cache), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!cache) {
+            if (last_error != FONT_LOADER_ERR_STATE) ESP_LOGE(TAG, "SD glyph cache allocation failed");
+            last_error = FONT_LOADER_ERR_STATE;
+            retry = true;
+            retry_at = now;
+            return false;
+        }
+    }
+    if (!available) ESP_LOGI(TAG, "SD extension font available");
+    available = true;
+    last_error = FONT_LOADER_OK;
+    retry = false;
+    auto& slot = cache[next++ % capacity];
+    slot.glyph = *glyph;
+    slot.key = key;
+    slot.loaded = now;
+    slot.result = err;
+    return err == FONT_LOADER_OK;
+}
+
+static bool LookupGlyph(const lv_font_t* font, uint32_t letter, GlyphInfo* glyph, GlyphData* sd) {
+    auto* f = static_cast<const FontpackLvFont*>(font->dsc);
+    if (font->static_bitmap) return get_glyph(letter, f->size, f->bpp, glyph);
+    if (!GetSdGlyph(letter, f->size, f->bpp, sd)) return false;
+    *glyph = {sd->width, sd->height, sd->x_offset, sd->y_offset, sd->advance, sd->bmp_len, sd->bitmap};
+    return true;
+}
 
 lv_font_glyph_format_t FormatForBpp(uint16_t bpp) {
     if (bpp <= 1) {
@@ -45,14 +129,15 @@ lv_font_glyph_format_t FormatForBpp(uint16_t bpp) {
 bool GetGlyphDscCb(const lv_font_t* font, lv_font_glyph_dsc_t* dsc_out, uint32_t letter,
                    uint32_t /*letter_next*/) {
     auto* f = static_cast<FontpackLvFont*>(const_cast<void*>(font->dsc));
-    if (f == nullptr || dsc_out == nullptr || !font_loader_is_ready()) {
+    if (f == nullptr || dsc_out == nullptr || (font->static_bitmap && !font_loader_is_ready())) {
         return false;
     }
     if (letter == '\t') {
         letter = ' ';
     }
     GlyphInfo g{};
-    if (!get_glyph(letter, f->size, f->bpp, &g)) {
+    GlyphData sd;
+    if (!LookupGlyph(font, letter, &g, &sd)) {
         return false;
     }
     dsc_out->adv_w = g.advance;
@@ -69,7 +154,7 @@ bool GetGlyphDscCb(const lv_font_t* font, lv_font_glyph_dsc_t* dsc_out, uint32_t
     dsc_out->stride = 0;
     dsc_out->format = FormatForBpp(f->bpp);
     dsc_out->is_placeholder = 0;
-    dsc_out->gid.index = letter;  // bitmap 回调再查一次（mmap 二分很便宜）
+    dsc_out->gid.index = letter;  // 位图回调按同一字符查询 Flash 或 SD 缓存
     return true;
 }
 
@@ -82,15 +167,17 @@ const void* GetGlyphBitmapCb(lv_font_glyph_dsc_t* g_dsc, lv_draw_buf_t* draw_buf
         return nullptr;
     }
     GlyphInfo g{};
-    if (!get_glyph(g_dsc->gid.index, f->size, f->bpp, &g)) {
+    GlyphData sd;
+    if (!LookupGlyph(g_dsc->resolved_font, g_dsc->gid.index, &g, &sd)) {
         return nullptr;
     }
-    if (g.width == 0 || g.height == 0 || g.bmp_len == 0 || g.bitmap == nullptr) {
+    if (g.width != g_dsc->box_w || g.height != g_dsc->box_h ||
+        g.width == 0 || g.height == 0 || g.bmp_len == 0 || g.bitmap == nullptr) {
         return nullptr;
     }
 
     if (g_dsc->req_raw_bitmap) {
-        return g.bitmap;
+        return g_dsc->resolved_font->static_bitmap ? g.bitmap : nullptr;
     }
     if (draw_buf == nullptr || draw_buf->data == nullptr) {
         return nullptr;
@@ -142,6 +229,7 @@ void EstimateMetrics(FontpackLvFont* f) {
 }
 
 FontpackLvFont* FindOrCreate(uint16_t size, uint16_t bpp) {
+    std::lock_guard<std::mutex> lock(s_fonts_mutex);
     for (int i = 0; i < kMaxFonts; ++i) {
         if (s_fonts[i].inited && s_fonts[i].size == size && s_fonts[i].bpp == bpp) {
             return &s_fonts[i];
@@ -159,7 +247,7 @@ FontpackLvFont* FindOrCreate(uint16_t size, uint16_t bpp) {
         return nullptr;
     }
 
-    std::memset(slot, 0, sizeof(*slot));
+    *slot = FontpackLvFont{};
     slot->size = size;
     slot->bpp = bpp;
     slot->lv.get_glyph_dsc = GetGlyphDscCb;
@@ -171,9 +259,17 @@ FontpackLvFont* FindOrCreate(uint16_t size, uint16_t bpp) {
     slot->lv.underline_position = -1;
     slot->lv.underline_thickness = 1;
     slot->lv.dsc = slot;
-    slot->lv.fallback = nullptr;
+    slot->lv.fallback = &slot->sd;
     slot->lv.user_data = nullptr;
-    EstimateMetrics(slot);
+    if (font_loader_is_ready()) {
+        EstimateMetrics(slot);
+    } else {
+        slot->lv.line_height = size + size / 5;
+        slot->lv.base_line = size / 5;
+    }
+    slot->sd = slot->lv;
+    slot->sd.static_bitmap = 0;
+    slot->sd.fallback = nullptr;
     slot->inited = true;
     ESP_LOGI(TAG, "lv_font size=%u bpp=%u line_h=%u base=%d", size, bpp, slot->lv.line_height,
              static_cast<int>(slot->lv.base_line));
@@ -268,13 +364,20 @@ const lv_font_t* fontpack_lv_font_get(uint16_t size, uint16_t bpp) {
     return slot != nullptr ? &slot->lv : nullptr;
 }
 
+const lv_font_t* fontpack_lv_font_sd(uint16_t size, uint16_t bpp) {
+    if (size == 0 || (bpp != 1 && bpp != 2 && bpp != 4)) return nullptr;
+    FontpackLvFont* slot = FindOrCreate(size, bpp);
+    return slot != nullptr ? &slot->sd : nullptr;
+}
+
 uint16_t fontpack_lv_font_bpp(const lv_font_t* font) {
     if (font == nullptr || font->dsc == nullptr) {
         return 0;
     }
+    std::lock_guard<std::mutex> lock(s_fonts_mutex);
     // dsc 指向 FontpackLvFont（lv 为首成员）
     for (int i = 0; i < kMaxFonts; ++i) {
-        if (s_fonts[i].inited && &s_fonts[i].lv == font) {
+        if (s_fonts[i].inited && (&s_fonts[i].lv == font || &s_fonts[i].sd == font)) {
             return s_fonts[i].bpp;
         }
     }

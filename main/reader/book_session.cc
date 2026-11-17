@@ -652,14 +652,14 @@ struct Pos3Blob {
 #pragma pack(pop)
 static_assert(sizeof(Pos3Blob) == 40, "POS3 plus TXT anchor size");
 
-void LogProgressFailure(const char* stage, const char* path) {
+void LogProgressFailure(const char* stage, const char*) {
     static std::atomic<int64_t> last_us{0};
     static std::atomic<unsigned> suppressed{0};
     const auto now = esp_timer_get_time();
     auto previous = last_us.load();
     if ((previous == 0 || now - previous >= 5000000) && last_us.compare_exchange_strong(previous, now)) {
-        ESP_LOGE(TAG, "progress %s failed errno=%d suppressed=%u path=%s", stage, errno,
-                 suppressed.exchange(0), path);
+        ESP_LOGE(TAG, "progress %s failed errno=%d suppressed=%u", stage, errno,
+                 suppressed.exchange(0));
     } else ++suppressed;
 }
 
@@ -694,9 +694,27 @@ void DrainProgressWrites() {
             continue;
         }
         sd_access::Transaction transaction(job->access);
+        Pos3Blob previous{};
+        bool previous_known = false;
+        if (transaction) {
+            FILE* fp = std::fopen(job->path.c_str(), "rb");
+            if (fp) {
+                const size_t bytes = std::fread(&previous, 1, sizeof(previous), fp);
+                const bool read_failed = std::ferror(fp) != 0;
+                std::fclose(fp);
+                previous_known = !read_failed && bytes >= 16 && IsProgressMagic(previous.magic);
+                if (!previous_known) ESP_LOGW(TAG, "progress statistics baseline unavailable stage=read bytes=%u", static_cast<unsigned>(bytes));
+                if (bytes < 20 || !MagicHasLifetime(previous.magic)) previous.reading_seconds = 0;
+            } else if (errno == ENOENT) previous_known = true;
+            else ESP_LOGW(TAG, "progress statistics baseline unavailable stage=open errno=%d", errno);
+        }
         const bool ok = transaction && WriteFileAtomic(job->path.c_str(),
             reinterpret_cast<const uint8_t*>(&job->blob), sizeof(job->blob));
         if (ok) {
+            if (previous_known) {
+                book_home_snapshot::UpdateAggregateProgress(previous.reading_seconds, previous.pct_x10 >= 1000,
+                    job->blob.reading_seconds, job->blob.pct_x10 >= 1000);
+            }
             book_home_snapshot::NoteOpenedBook(job->book.c_str());
             BookSession::ProgressPeek snapshot;
             snapshot.progress_x10 = job->blob.pct_x10;
@@ -1123,6 +1141,8 @@ uint32_t BookSession::FontFingerprint() const {
         0xFF0Cu,  // ，
         0x3002u,  // 。
         0x201Cu,  // “
+        0x3400u,  // 扩展 A 区：扩展字库可用性参与分页指纹
+        0x20000u, // 扩展 B 区
     };
     for (uint32_t cp : kSamples) {
         h = h * 131u + static_cast<uint32_t>(GlyphWidth(font_, cp));
@@ -1514,7 +1534,7 @@ bool BookSession::DeleteFile(const char* book) {
     book_home_snapshot::RemoveBook(book);
     book_home_snapshot::SubtractAggregateContribution(peek.reading_seconds, peek.progress_x10 >= 1000);
     InvalidateBookLibraryCache();
-    ESP_LOGI(TAG, "book delete done auxiliary_ok=%d", clean);
+    ESP_LOGD(TAG, "book delete done auxiliary_ok=%d", clean);
     if (!clean) errno = EIO;
     return clean;
 }
@@ -2325,7 +2345,7 @@ bool BookSession::LoadChapter(int chapter) {
     BookPageStore built;
     if (!built.Open(info_.path)) { error_ = built.Error(); return false; }
     auto positions = epub_toc_positions_;
-    if (!source->PaginateChapter(chapter, built, nullptr, navigation_cancelled_,
+    if (!source->PaginateChapter(chapter, built, source->chapter_pages_gen_.load(), nullptr, navigation_cancelled_,
                                 info_.format == BookFormat::kEpub ? &positions : nullptr) || !built.Finish()) {
         error_ = built.Good() ? source->Error() : built.Error();
         return false;
@@ -2348,11 +2368,10 @@ bool BookSession::LoadChapter(int chapter) {
     return true;
 }
 
-bool BookSession::PaginateChapter(int chapter, BookPageStore& built, const LayoutAnchor* preview,
+bool BookSession::PaginateChapter(int chapter, BookPageStore& built, uint32_t generation, const LayoutAnchor* preview,
                                  const std::atomic<bool>* cancelled,
                                  std::vector<BookSourcePosition>* epub_positions) const {
     if (chapter < 0 || chapter >= chapter_count_) return false;
-    const uint32_t generation = chapter_pages_gen_;
     Page cur;
     lv_coord_t y = 0, line_w = 0;
     const lv_coord_t line_h = LayoutLineHeight();
@@ -2441,7 +2460,7 @@ bool BookSession::PaginateChapter(int chapter, BookPageStore& built, const Layou
             const auto* data = reinterpret_cast<const uint8_t*>(block.text.data());
             for (size_t i = 0; i < block.text.size();) {
                 if (interrupted()) return false;
-                if ((++glyphs & 0x1FFu) == 0) {
+                if ((++glyphs & 0x7FFu) == 0) {
                     #ifndef EBOOK_EMULATOR
                     vTaskDelay(1);
                     #endif
@@ -2626,20 +2645,20 @@ void BookSession::NoteChapterPageCount(int chapter, int pages) {
     chapter_page_counts_[static_cast<size_t>(chapter)] = static_cast<uint32_t>(pages);
 }
 
-bool BookSession::CountChapterPages(int chapter, int& out_pages) const {
+bool BookSession::CountChapterPages(int chapter, int& out_pages, uint32_t generation) const {
     if (!IsChapteredBook() || chapter < 0 || chapter >= chapter_count_) return false;
     std::lock_guard<std::mutex> lock(chapter_io_mu_);
     if (chapter == chapter_index_ && !pages_.empty()) { out_pages = pages_.size(); return pages_.Good(); }
     BookPageStore counter;
     counter.Open(info_.path, true);
-    if (!PaginateChapter(chapter, counter)) return false;
+    if (!PaginateChapter(chapter, counter, generation)) return false;
     out_pages = counter.size();
     return true;
 }
 
 namespace {
 
-constexpr uint32_t kChapterPageCacheVersion = 14;
+constexpr uint32_t kChapterPageCacheVersion = 15;
 
 #pragma pack(push, 1)
 struct ChapterPageHdr {
@@ -2771,7 +2790,7 @@ bool BookSession::RebuildChapterPageTable() {
         }
         if (chapter_scan_counts_[static_cast<size_t>(ch)] != 0) continue;
         int n = 1;
-        if (!CountChapterPages(ch, n)) {
+        if (!CountChapterPages(ch, n, gen)) {
             chapter_pages_ready_ = false;
             if (gen != chapter_pages_gen_) return true;
             return false;
@@ -3590,7 +3609,7 @@ bool BookSession::FinishLiveRelayout(const LayoutAnchor& anchor) try {
         pending_pages_.clear();
         if (!pending_pages_.Open(info_.path)) { error_ = pending_pages_.Error(); return false; }
         const int chapter = anchor.valid ? anchor.chapter : chapter_index_;
-        const bool ok = PaginateChapter(chapter, pending_pages_) && pending_pages_.Finish();
+        const bool ok = PaginateChapter(chapter, pending_pages_, chapter_pages_gen_.load()) && pending_pages_.Finish();
         if (ok) {
             pending_chapter_anchor_page_ = std::clamp(static_cast<int>(static_cast<int64_t>(anchor.page) *
                 pending_pages_.size() / std::max(1, anchor.page_count)), 0, std::max(0, static_cast<int>(pending_pages_.size()) - 1));

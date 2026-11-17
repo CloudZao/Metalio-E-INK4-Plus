@@ -8,11 +8,16 @@
 #include "book_screen/shelf/book_detail.h"
 #include "book_screen/book_font_runtime.h"
 #include "book_screen/book_text_util.h"
+#include "book_screen/shelf/book_shelf_ops.h"
+#include "book_screen/reader/book_reader_prefs.h"
+#include "reader/book_progress_cache.h"
+#include "sd_access.h"
 #include "book_screen/reader/book_reader_body.h"
 
 #include <lvgl.h>
 #include <algorithm>
 #include <cstdint>
+#include <cerrno>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -20,6 +25,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <sys/stat.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -27,45 +33,52 @@
 
 #include "assets/lang_config.h"
 #include "reader/reader.h"
+#include "reader/list_thumbnail_cache.h"
 #include "screen_common.h"
 
 struct DetailCoverDoneMsg {
-    uint32_t token = 0;
-    bool cover_ok = false;
-    reader::RasterImage* cover = nullptr;
-    std::string title;
-    std::string author;
-    std::string path;
+    uint32_t token = 0; // 请求代次，用于丢弃离页或翻页后的结果
+    bool cover_ok = false; // 封面已成功解码
+    reader::RasterImage* cover = nullptr; // 结果持有像素，UI 消费后释放
+    std::string title; // 文档中的书名
+    std::string author; // 文档中的作者
+    std::string path; // 匹配当前详情书籍的文件标识
 };
 
 struct DetailCoverWorkerArg {
-    uint32_t token = 0;
-    reader::BookInfo info;
-    int max_w = 0;
-    int max_h = 0;
+    uint32_t token = 0; // 请求代次，用于丢弃离页或翻页后的结果
+    reader::BookInfo info; // 当前可见书籍的属性快照
+    int max_w = 0; // 封面目标最大宽度
+    int max_h = 0; // 封面目标最大高度
 };
 struct ListCoverDoneMsg {
-    uint32_t token = 0;
+    uint32_t token = 0; // 请求代次，用于丢弃离页或翻页后的结果
     size_t target = 0; // UI 目标表索引，后台不持有控件或像素槽指针。
     TaskHandle_t waiter = nullptr; // UI 消费后通知仍存活的唯一 worker。
-    reader::RasterImage cover;
+    reader::RasterImage cover; // UI 接管的封面像素
+    reader::BookInfo info; // 后台获取的文件属性，随同代次校验后应用
+    bool metadata_ready = false; // stat 成功后才覆盖现有属性
+    bool progress_ready = false; // 已查询进度，允许更新徽标
 };
 
 struct ListCoverItem {
-    reader::BookInfo info;
-    int max_w = 0,max_h = 0;
-    size_t target = 0;
+    reader::BookInfo info; // 当前可见书籍的属性快照
+    int max_w = 0; // 封面目标最大宽度，零表示仅补属性
+    int max_h = 0; // 封面目标最大高度，零表示仅补属性
+    size_t target = 0; // 同一代次中的 UI 目标下标
 };
 
 struct ListCoverFillWork {
-    uint32_t token = 0;
-    std::vector<ListCoverItem> items;
+    uint32_t token = 0; // 请求代次，用于丢弃离页或翻页后的结果
+    bool load_metadata = false; // 书架名称页在首帧后补全文件属性
+    bool load_progress = false; // 在 UI 线程快照偏好
+    std::vector<ListCoverItem> items; // 当前页可见项，按显示顺序补全
 };
 
 struct ListCoverTarget {
     lv_obj_t* host = nullptr; // 仅 UI 访问，DELETE 时清空。
     reader::RasterImage* slot = nullptr; // 非拥有，须与 host 生命周期一致。
-    reader::BookFormat format = reader::BookFormat::kUnknown;
+    reader::BookFormat format = reader::BookFormat::kUnknown; // 对应占位封面的格式标签
 };
 
 static std::mutex s_list_work_mutex;
@@ -76,7 +89,7 @@ static std::vector<ListCoverTarget> s_list_targets;
 
 void EnqueueListCoverFill(const reader::BookInfo& info, int max_w, int max_h, lv_obj_t* host,
                           reader::RasterImage* slot) try {
-    if (host == nullptr || slot == nullptr || max_w <= 0 || max_h <= 0 || info.path.empty()) {
+    if (host == nullptr || info.path.empty() || (slot && (max_w <= 0 || max_h <= 0))) {
         return;
     }
     auto& st = Book_State();
@@ -88,51 +101,59 @@ void EnqueueListCoverFill(const reader::BookInfo& info, int max_w, int max_h, lv
     p.slot = slot;
     st.shelf.list_cover_pending.push_back(std::move(p));
 } catch (const std::bad_alloc&) {
-    ESP_LOGW(TAG,"cover request allocation failed; keep placeholder");
+    ESP_LOGW(TAG, "cover request allocation failed; keep placeholder");
 }
 
 static void ListCoverHostDeleted(lv_event_t* event) {
-    auto* host=static_cast<lv_obj_t*>(lv_event_get_target(event));
-    for (auto& target:s_list_targets) {
-        if (target.host==host) {
-            target.host=nullptr;
-            target.slot=nullptr;
+    auto* host = static_cast<lv_obj_t*>(lv_event_get_target(event));
+    for (auto& target : s_list_targets) {
+        if (target.host == host) {
+            target.host = nullptr;
+            target.slot = nullptr;
         }
     }
 }
 
-static void ApplyListCoverImage(lv_obj_t* host, reader::RasterImage& cover,reader::BookFormat format) {
+static void ApplyListCoverImage(lv_obj_t* host, reader::RasterImage& cover, reader::BookFormat format) {
     if (host == nullptr || !lv_obj_is_valid(host) || cover.empty()) {
         return;
     }
     cover.BindDsc();
-    lv_obj_t* img=nullptr;
-    for (uint32_t i=0;i<lv_obj_get_child_count(host);++i) {
-        auto* child=lv_obj_get_child(host,i);
-        if (lv_obj_check_type(child,&lv_image_class)) img=child;
-        else if (lv_obj_check_type(child,&lv_label_class) &&
-                 std::strcmp(lv_label_get_text(child),reader::FormatLabel(format))==0) {
-            lv_obj_add_flag(child,LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t* img = nullptr;
+    for (uint32_t i = 0; i < lv_obj_get_child_count(host); ++i) {
+        auto* child = lv_obj_get_child(host, i);
+        if (lv_obj_check_type(child, &lv_image_class)) {
+            img = child;
+        } else if (lv_obj_check_type(child, &lv_label_class) &&
+                   std::strcmp(lv_label_get_text(child), reader::FormatLabel(format)) == 0) {
+            lv_obj_add_flag(child, LV_OBJ_FLAG_HIDDEN);
         }
     }
-    if (img==nullptr) img=lv_image_create(host);
+    if (img == nullptr) {
+        img = lv_image_create(host);
+    }
     lv_image_set_src(img, &cover.dsc);
-    EpdSetContentRole(img,EpdContentRole::Cover);
-    lv_obj_move_to_index(img,0);
-    lv_obj_clear_flag(img,LV_OBJ_FLAG_HIDDEN);
+    EpdSetContentRole(img, EpdContentRole::Cover);
+    lv_obj_move_to_index(img, 0);
+    lv_obj_clear_flag(img, LV_OBJ_FLAG_HIDDEN);
     lv_obj_center(img);
     lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
 }
 
-void AsyncListCoverDone(void* user_data) {
+static void AsyncListCoverDone(void* user_data) {
     std::unique_ptr<ListCoverDoneMsg> msg(static_cast<ListCoverDoneMsg*>(user_data));
     auto& st = Book_State();
-    if (msg->token==st.shelf.list_cover_token.load() && msg->token==s_list_targets_token &&
-        msg->target<s_list_targets.size()) {
-        auto& target=s_list_targets[msg->target];
-        if (target.host!=nullptr && lv_obj_is_valid(target.host) && target.slot!=nullptr) {
-            *target.slot=std::move(msg->cover);
-            ApplyListCoverImage(target.host,*target.slot,target.format);
+    if (msg->token == st.shelf.list_cover_token.load() && msg->token == s_list_targets_token &&
+        msg->target < s_list_targets.size()) {
+        auto& target = s_list_targets[msg->target];
+        if (target.host != nullptr && lv_obj_is_valid(target.host)) {
+            if (msg->metadata_ready) {
+                ApplyShelfEntryMetadata(msg->info, target.host, msg->progress_ready);
+            }
+            if (target.slot && !msg->cover.empty()) {
+                *target.slot = std::move(msg->cover);
+                ApplyListCoverImage(target.host, *target.slot, target.format);
+            }
         }
     }
     // worker 不接收其他通知，且在本次确认前不会退出或投递第二张图片。
@@ -141,26 +162,70 @@ void AsyncListCoverDone(void* user_data) {
 
 static void RunListCoverWork(ListCoverFillWork* work) {
     auto& st = Book_State();
-    for (auto& item:work->items) {
-        if (work->token!=st.shelf.list_cover_token.load()) break;
-        auto done=std::unique_ptr<ListCoverDoneMsg>(new(std::nothrow) ListCoverDoneMsg{});
-        if (!done) break;
-        bool ok=false;
-        try {
-            ok=BookCoverLoader_LoadBookDetailCover(item.info,item.max_w,item.max_h,done->cover) &&
-                !done->cover.empty();
-        } catch (const std::bad_alloc&) {
-            ESP_LOGW(TAG,"cover decode allocation failed; keep placeholder");
+    for (auto& item : work->items) {
+        if (work->token != st.shelf.list_cover_token.load()) {
+            break;
         }
-        if (work->token!=st.shelf.list_cover_token.load()) break;
-        if (!ok) continue;
+        auto done = std::unique_ptr<ListCoverDoneMsg>(new (std::nothrow) ListCoverDoneMsg{});
+        if (!done) {
+            ESP_LOGW(TAG, "visible entry result allocation failed; keep placeholders");
+            break;
+        }
+        try {
+            sd_access::Transaction access;
+            if (!access || sd_access::IsQuiescing()) {
+                break;
+            }
+            done->metadata_ready = !work->load_metadata;
+            struct stat status{};
+            if (work->load_metadata && stat(item.info.path.c_str(), &status) == 0) {
+                item.info.file_size = status.st_size;
+                item.info.mtime = status.st_mtime;
+                done->metadata_ready = true;
+            } else if (work->load_metadata) {
+                ESP_LOGW(TAG, "visible entry stat failed errno=%d; keep placeholder", errno);
+            }
+            if (work->token != st.shelf.list_cover_token.load()) {
+                break;
+            }
+            if (done->metadata_ready && work->load_progress) {
+                reader::BookSession::ProgressPeek progress;
+                if (!reader::book_progress_cache::TryGet(item.info.path.c_str(), progress)) {
+                    progress = reader::BookSession::PeekProgress(item.info.path.c_str());
+                    reader::book_progress_cache::Upsert(item.info.path.c_str(), progress);
+                }
+                done->progress_ready = true;
+            }
+            if (work->token != st.shelf.list_cover_token.load()) {
+                break;
+            }
+            if (done->metadata_ready && item.max_w > 0 && item.max_h > 0) {
+                const bool cached = reader::GetListThumbnail(item.info.path.c_str(), item.max_w, item.max_h,
+                                                             item.info.file_size, item.info.mtime, done->cover);
+                if (!cached && BookCoverLoader_LoadBookDetailCover(item.info, item.max_w, item.max_h, done->cover) &&
+                    !done->cover.empty() && work->token == st.shelf.list_cover_token.load()) {
+                    reader::CacheListThumbnail(item.info.path.c_str(), item.max_w, item.max_h, item.info.file_size,
+                                               item.info.mtime, done->cover);
+                }
+            }
+            done->info = std::move(item.info);
+        } catch (const std::bad_alloc&) {
+            ESP_LOGW(TAG, "visible entry allocation failed; keep placeholder");
+            continue;
+        }
+        if (work->token != st.shelf.list_cover_token.load()) {
+            break;
+        }
+        if (!done->metadata_ready && done->cover.empty()) {
+            continue;
+        }
         done->token = work->token;
         done->target = item.target;
         done->waiter = xTaskGetCurrentTaskHandle();
-        while (work->token==st.shelf.list_cover_token.load()) {
-            if (ScreenLvAsync(AsyncListCoverDone,done.get())) {
+        while (work->token == st.shelf.list_cover_token.load()) {
+            if (ScreenLvAsync(AsyncListCoverDone, done.get())) {
                 done.release();
-                ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
                 break;
             }
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -174,8 +239,10 @@ static void ListCoverFillWorker(void*) {
         {
             std::lock_guard<std::mutex> lock(s_list_work_mutex);
             work.reset(s_list_posted);
-            s_list_posted=nullptr;
-            if (!work) s_list_task=nullptr;
+            s_list_posted = nullptr;
+            if (!work) {
+                s_list_task = nullptr;
+            }
         }
         if (!work) {
             vTaskDeleteWithCaps(nullptr);
@@ -187,56 +254,72 @@ static void ListCoverFillWorker(void*) {
 
 void ScheduleListCoverFill() {
     auto& st = Book_State();
-    if (st.shelf.list_cover_pending.empty()) return;
-    const uint32_t token=st.shelf.list_cover_token.load();
-    if (s_list_targets_token!=token) {
-        s_list_targets.clear();
-        s_list_targets_token=token;
+    if (st.shelf.list_cover_pending.empty()) {
+        return;
     }
-    const size_t previous_targets=s_list_targets.size();
-    auto work=std::unique_ptr<ListCoverFillWork>(new(std::nothrow) ListCoverFillWork{});
-    if (!work) return;
-    work->token=token;
+    const uint32_t token = st.shelf.list_cover_token.load();
+    if (s_list_targets_token != token) {
+        s_list_targets.clear();
+        s_list_targets_token = token;
+    }
+    const size_t previous_targets = s_list_targets.size();
+    auto work = std::unique_ptr<ListCoverFillWork>(new (std::nothrow) ListCoverFillWork{});
+    if (!work) {
+        ESP_LOGW(TAG, "cover batch allocation failed; keep placeholders");
+        return;
+    }
+    work->token = token;
+    work->load_metadata = st.shelf.back_root == BookUiState::NavRoot::kShelf &&
+        st.shelf.list_scr && lv_screen_active() == st.shelf.list_scr;
+    work->load_progress = work->load_metadata && BookReaderPrefsShowShelfProgress() != 0;
     std::unique_ptr<ListCoverFillWork> replaced;
-    bool start_failed=false;
+    bool start_failed = false;
     try {
         work->items.reserve(st.shelf.list_cover_pending.size());
-        for (const auto& pending:st.shelf.list_cover_pending) {
-            size_t target=0;
-            while (target<s_list_targets.size() &&
-                   (s_list_targets[target].host!=pending.host || s_list_targets[target].slot!=pending.slot)) ++target;
-            if (target==s_list_targets.size()) {
-                s_list_targets.push_back({pending.host,pending.slot,pending.info.format});
-                lv_obj_add_event_cb(pending.host,ListCoverHostDeleted,LV_EVENT_DELETE,nullptr);
+        for (const auto& pending : st.shelf.list_cover_pending) {
+            size_t target = 0;
+            while (target < s_list_targets.size() &&
+                   (s_list_targets[target].host != pending.host || s_list_targets[target].slot != pending.slot)) {
+                ++target;
             }
-            work->items.push_back({pending.info,pending.max_w,pending.max_h,target});
+            if (target == s_list_targets.size()) {
+                s_list_targets.push_back({pending.host, pending.slot, pending.info.format});
+                lv_obj_add_event_cb(pending.host, ListCoverHostDeleted, LV_EVENT_DELETE, nullptr);
+            }
+            work->items.push_back({pending.info, pending.max_w, pending.max_h, target});
         }
         {
             std::lock_guard<std::mutex> lock(s_list_work_mutex);
-            if (s_list_posted!=nullptr && s_list_posted->token==token) {
-                work->items.reserve(work->items.size()+s_list_posted->items.size());
-                for (auto& item:s_list_posted->items) {
-                    const bool duplicate=std::any_of(work->items.begin(),work->items.end(),
-                        [&](const ListCoverItem& current) { return current.target==item.target; });
-                    if (!duplicate) work->items.push_back(std::move(item));
+            if (s_list_posted != nullptr && s_list_posted->token == token) {
+                work->items.reserve(work->items.size() + s_list_posted->items.size());
+                for (auto& item : s_list_posted->items) {
+                    const bool duplicate =
+                        std::any_of(work->items.begin(), work->items.end(),
+                                    [&](const ListCoverItem& current) { return current.target == item.target; });
+                    if (!duplicate) {
+                        work->items.push_back(std::move(item));
+                    }
                 }
             }
             replaced.reset(s_list_posted);
-            s_list_posted=work.release();
+            s_list_posted = work.release();
             st.shelf.list_cover_pending.clear();
-            if (s_list_task==nullptr && xTaskCreatePinnedToCoreWithCaps(
-                ListCoverFillWorker,"list_cover",kListCoverWorkerStack,nullptr,tskIDLE_PRIORITY+1,
-                &s_list_task,0,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)!=pdPASS) {
-                s_list_task=nullptr;
+            if (s_list_task == nullptr &&
+                xTaskCreatePinnedToCoreWithCaps(ListCoverFillWorker, "list_cover", kListCoverWorkerStack, nullptr,
+                                                tskIDLE_PRIORITY + 1, &s_list_task, 0,
+                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+                s_list_task = nullptr;
                 work.reset(s_list_posted);
-                s_list_posted=nullptr;
-                start_failed=true;
+                s_list_posted = nullptr;
+                start_failed = true;
             }
         }
-        if (start_failed) ESP_LOGW(TAG,"list_cover task failed; keep placeholders");
+        if (start_failed) {
+            ESP_LOGW(TAG, "list_cover task failed; keep placeholders");
+        }
     } catch (const std::bad_alloc&) {
         s_list_targets.resize(previous_targets);
-        ESP_LOGW(TAG,"cover batch allocation failed; keep placeholders");
+        ESP_LOGW(TAG, "cover batch allocation failed; keep placeholders");
     }
 }
 
@@ -279,7 +362,7 @@ void ApplyDetailCoverImage() {
     Book_DisableScroll(frame);
     lv_obj_t* img = lv_image_create(frame);
     lv_image_set_src(img, &st.detail.detail_cover.dsc);
-    EpdSetContentRole(img,EpdContentRole::Cover);
+    EpdSetContentRole(img, EpdContentRole::Cover);
     lv_obj_center(img);
     lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
 }
@@ -291,7 +374,8 @@ void UpdateDetailMetaLabels(const reader::BookInfo& shown) {
     }
     if (st.detail.detail_meta_lbl != nullptr && lv_obj_is_valid(st.detail.detail_meta_lbl)) {
         // 详情页 meta 槽改为作者行；无作者显示「未知」，保持单行槽高度
-        lv_label_set_text(st.detail.detail_meta_lbl, shown.author.empty() ? Lang::Strings::COMMON_UNKNOWN : shown.author.c_str());
+        lv_label_set_text(st.detail.detail_meta_lbl,
+                          shown.author.empty() ? Lang::Strings::COMMON_UNKNOWN : shown.author.c_str());
     }
 }
 
@@ -342,8 +426,7 @@ void DetailCoverWorker(void* arg) {
     auto* cover = new reader::RasterImage();
     reader::BookInfo info = ctx->info;
     // 失败可能来自 IO 或内存不足，不作为永久缺封面的依据。
-    const bool ok = BookCoverLoader_LoadBookDetailCover(info, ctx->max_w, ctx->max_h, *cover) &&
-                    !cover->empty();
+    const bool ok = BookCoverLoader_LoadBookDetailCover(info, ctx->max_w, ctx->max_h, *cover) && !cover->empty();
 
     auto* done = new DetailCoverDoneMsg{};
     done->token = ctx->token;
@@ -380,13 +463,12 @@ void StartDetailCoverWorker(int book_index) {
     ctx->info = st.shelf.books[static_cast<size_t>(book_index)];
     ctx->max_w = CoverFrameInner(st.detail.detail_cover_fw);
     ctx->max_h = CoverFrameInner(st.detail.detail_cover_fh);
-    BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
-        DetailCoverWorker, "book_cover", kDetailCoverWorkerStack, ctx, tskIDLE_PRIORITY + 2, nullptr,
-        0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    BaseType_t created =
+        xTaskCreatePinnedToCoreWithCaps(DetailCoverWorker, "book_cover", kDetailCoverWorkerStack, ctx,
+                                        tskIDLE_PRIORITY + 2, nullptr, 0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (created != pdPASS) {
         ESP_LOGW(TAG, "book_cover task failed; keep placeholder");
         delete ctx;
         st.detail.detail_cover_token.fetch_add(1);
     }
 }
-

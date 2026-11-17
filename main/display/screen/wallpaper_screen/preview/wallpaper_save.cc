@@ -283,27 +283,13 @@ void ApplySaveAsync(void* p) {
     ResetOrientState();
     Wallpaper_CloseDialog();
 
-    if (msg->save_as) {
-        CollectWallpapers();
-        SyncWpSelectedSize();
-        int found = -1;
-        if (msg->out_name[0] != '\0') {
-            for (size_t i = 0; i < Wallpaper_State().list.files.size(); ++i) {
-                if (std::strcmp(Wallpaper_State().list.files[i].name, msg->out_name) == 0) {
-                    found = static_cast<int>(i);
-                    break;
-                }
-            }
-        }
-        if (found >= 0) {
-            Wallpaper_State().preview.idx = found;
-            if (Wallpaper_State().ui.preview_title != nullptr) {
-                const FileEntry& fe = Wallpaper_State().list.files[static_cast<size_t>(found)];
-                const char* raw = fe.title[0] != '\0' ? fe.title : fe.name;
-                const std::string shown = Wallpaper_LayoutTitleTwoLines(raw, Wallpaper_UiFont(), Wallpaper_ContentWidth());
-                lv_label_set_text(Wallpaper_State().ui.preview_title, shown.c_str());
-            }
-        }
+    if (msg->save_as && Wallpaper_State().preview.idx >= 0 &&
+        Wallpaper_State().preview.idx < static_cast<int>(Wallpaper_State().list.files.size())) {
+        auto& entry = Wallpaper_State().list.files[Wallpaper_State().preview.idx];
+        std::snprintf(entry.name, sizeof(entry.name), "%s", msg->out_name);
+        std::snprintf(entry.path, sizeof(entry.path), "%s/%s", SD_PATH_WALLPAPER, msg->out_name);
+        entry.size_bytes = msg->size_bytes;
+        if (Wallpaper_State().ui.preview_title) lv_label_set_text(Wallpaper_State().ui.preview_title, entry.title);
     } else if (msg->index >= 0 && msg->index < static_cast<int>(Wallpaper_State().list.files.size())) {
         Wallpaper_State().list.files[static_cast<size_t>(msg->index)].size_bytes = msg->size_bytes;
         if (msg->index < static_cast<int>(Wallpaper_State().list.thumbs.size())) {

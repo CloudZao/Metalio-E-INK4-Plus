@@ -6,10 +6,14 @@
 #include "cx25601n.h"
 
 #include "bq27220_gauge.h"
+#include "lv_adapter_epdiy.h"
+#include "power_policy.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 
 namespace {
@@ -50,7 +54,32 @@ TaskHandle_t s_vreg_task = nullptr;
 bool s_vreg_suspended = false;
 uint32_t s_vreg_vol_mv = 0;
 uint32_t s_vreg_now_mv = 0;
-bool s_uv_shutdown_done = false;
+bool s_battery_shutdown_done = false;
+
+static void BatteryShutdownTask(void* arg) {
+    const bool low_voltage = arg != nullptr;
+    auto* display = LvAdapterEpdiy::Instance();
+    const bool shown = display != nullptr && display->ShowLowBatteryShutdownNotice(low_voltage);
+    if (!shown) {
+        ESP_LOGW(TAG, "Battery protect: notice unavailable; continue protective shutdown");
+    }
+    const esp_err_t err = cx25601n_enter_batfet_shutdown();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Battery protect: BATFET shutdown failed, err=%d; use power key", err);
+    }
+    PowerPolicy::GetInstance().RequestPowerOff();
+    vTaskDeleteWithCaps(nullptr);
+}
+
+static esp_err_t StartBatteryShutdown(bool low_voltage) {
+    if (xTaskCreatePinnedToCoreWithCaps(BatteryShutdownTask, "battery_off", 16 * 1024,
+            low_voltage ? reinterpret_cast<void*>(1) : nullptr, 5, nullptr, 0,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        ESP_LOGE(TAG, "Battery protect: shutdown task allocation failed");
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
 
 esp_err_t read_byte(uint8_t reg, uint8_t *val) {
     return power_i2c_write_read(&s_bus, CX25601N_I2C_ADDR, reg, val, 1, I2C_TIMEOUT_MS);
@@ -183,19 +212,35 @@ void charger_vreg_task(void *arg) {
         const bool idle = have_stat && (stat == CX25601N_CHG_STAT_NOT);
         const bool vbat_below = (vbat >= 2500 && static_cast<uint32_t>(vbat) < vreg_target);
 
-        // 欠压保护：无输入且 VBAT≤3.1V → REG0x18=0x01 关 BATFET
-        if (!s_uv_shutdown_done && vbat >= 2500 && vbat <= kUvBatfetShutdownMv) {
+        int level = -1;
+        bool charging = false;
+        bool discharging = false;
+        const bool have_level = Bq27220Gauge::GetInstance().GetCachedBatteryLevel(
+            level, charging, discharging);
+        const bool empty = have_level && level == 0;
+        const bool low_voltage = vbat >= 2500 && vbat <= kUvBatfetShutdownMv;
+
+        // 无外部输入时，低电压或有效显示电量为 0% 均提示后断电；低电压提示优先。
+        if (!s_battery_shutdown_done && (low_voltage || empty)) {
             uint8_t vbus = 0;
             const bool have_vbus = (cx25601n_get_vbus_stat(&vbus) == ESP_OK);
-            if (have_vbus && vbus == 0) {
-                ESP_LOGW(TAG, "UV protect: vbat=%ldmV → REG0x18=0x01 (BATFET shutdown)",
-                         static_cast<long>(vbat));
-                if (cx25601n_enter_batfet_shutdown() == ESP_OK) {
-                    s_uv_shutdown_done = true;
+            const bool chip_charging = have_stat &&
+                (stat == CX25601N_CHG_STAT_CC || stat == CX25601N_CHG_STAT_CV ||
+                 stat == CX25601N_CHG_STAT_TOPOFF);
+            if (have_vbus && vbus == 0 && !chip_charging && ima <= 5) {
+                ESP_LOGW(TAG, "Battery protect: reason=%s vbat=%ldmV level=%d; request shutdown",
+                         low_voltage ? "low_voltage" : "empty", static_cast<long>(vbat), level);
+                const esp_err_t err = StartBatteryShutdown(low_voltage);
+                if (err == ESP_OK) {
+                    s_battery_shutdown_done = true;
+                } else {
+                    const esp_err_t cut_err = cx25601n_enter_batfet_shutdown();
+                    s_battery_shutdown_done = cut_err == ESP_OK;
+                    if (cut_err != ESP_OK) ESP_LOGE(TAG, "Battery protect: emergency cutoff failed, err=%d", cut_err);
                 }
             }
-        } else if (s_uv_shutdown_done && vbat > kUvBatfetShutdownMv + 100) {
-            s_uv_shutdown_done = false;
+        } else if (s_battery_shutdown_done && !empty && vbat > kUvBatfetShutdownMv + 100) {
+            s_battery_shutdown_done = false;
         }
 
         xSemaphoreTake(s_lock, portMAX_DELAY);

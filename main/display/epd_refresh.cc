@@ -51,11 +51,10 @@ EpdRippleColumn* ripple_columns;
 size_t fb_bytes;
 SemaphoreHandle_t mailbox;
 TaskHandle_t worker;
-std::atomic<int> refresh_profile{1};
+std::atomic<int> refresh_profile{0};
 std::atomic<bool> save_profile{false};
-std::atomic<int> black_depth{0};
-std::atomic<bool> save_black_depth{false};
-constexpr int kBlackDepthMv[] = {1200, 1600, 2000};
+std::atomic<int> requested_vcom{-EPD_VCOM_MV};
+std::atomic<int> applied_vcom{0};
 bool pending_full, pending_stream, pending_light, pending_reader_aa;
 bool panel_powered=false; // Worker-owned; retained only across a page animation.
 bool pending_scroll=false, pending_scroll_settle=false;
@@ -192,7 +191,7 @@ void Pattern(uint8_t* fb, int selected, int phase = 0) {
     }
 }
 const EpdWaveform* ProfileWaveform(int profile, int mode=MODE_DU, bool reader_aa=false) {
-    if (mode==MODE_GL16 && (profile==3 || (reader_aa && profile>=1))) return my_waveform_gray8();
+    if (mode==MODE_GL16 && reader_aa && profile>=1) return my_waveform_gray8();
     if (profile>=1 && my_waveform_fast()) return my_waveform_fast();
     return &MY_WAVEFORM;
 }
@@ -373,10 +372,12 @@ void Transition(EpdiyHighlevelState* hl, int direction, EpdEffect selected_effec
     uint8_t* target = hl->front_fb;
     const auto logical = EpdPageLogicalPoint(0, 0, epd_width(), epd_height(), orient);
     const bool landscape = orient==1 || orient==2;
-    const int left = landscape ? DISPLAY_CONTENT_TOP_INSET : DISPLAY_CONTENT_LEFT_INSET;
-    const int top = landscape ? DISPLAY_CONTENT_LEFT_INSET : DISPLAY_CONTENT_TOP_INSET;
-    const int width = logical.width - left - (landscape ? DISPLAY_CONTENT_BOTTOM_INSET : DISPLAY_CONTENT_RIGHT_INSET);
-    const int height = logical.height - top - (landscape ? DISPLAY_CONTENT_RIGHT_INSET : DISPLAY_CONTENT_BOTTOM_INSET);
+    const int origin_x = (landscape ? DISPLAY_CONTENT_TOP_INSET : DISPLAY_CONTENT_LEFT_INSET) + DisplayUiOffsetX();
+    const int origin_y = (landscape ? DISPLAY_CONTENT_LEFT_INSET : DISPLAY_CONTENT_TOP_INSET) + DisplayUiOffsetY();
+    const int left = std::clamp(origin_x, 0, logical.width);
+    const int top = std::clamp(origin_y, 0, logical.height);
+    const int width = std::clamp(origin_x + (landscape ? DisplayUiContentH() : DisplayUiContentW()), 0, logical.width) - left;
+    const int height = std::clamp(origin_y + (landscape ? DisplayUiContentW() : DisplayUiContentH()), 0, logical.height) - top;
     if (ripple) {
         if (width<=0 || height<=0) return;
         // The physical back frame changes after every update. Sample a frozen old
@@ -410,8 +411,9 @@ void Worker(void*) {
     int applied_profile=refresh_profile.load();
     epd_hl_waveform(hl,ProfileWaveform(applied_profile));
     bool profile_full=true;
-    int applied_depth=black_depth.load();
-    epd_set_vcom(kBlackDepthMv[applied_depth]);
+    int current_vcom=requested_vcom.load();
+    epd_set_vcom(-current_vcom);
+    applied_vcom.store(current_vcom);
     int64_t last_full=esp_timer_get_time();
     for (;;) {
         ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(100));
@@ -452,20 +454,16 @@ void Worker(void*) {
             Settings settings("screen",true);
             settings.SetInt("refresh_profile",selected_profile);
         }
-        const bool persist_depth=save_black_depth.exchange(false);
-        const int selected_depth=black_depth.load();
-        if (selected_depth!=applied_depth) {
-            // 与 P14 复位共用闸门，VCOM/关屏也须等待断电窗口结束。
+        const int selected_vcom=requested_vcom.load();
+        if (selected_vcom!=current_vcom) {
+            // 与共享电源复位共用闸门，仅在当前波形结束后切换校准值。
             EpdFlashGuard panel_guard;
             if (panel_powered) { epd_poweroff(); panel_powered=false; }
-            epd_set_vcom(kBlackDepthMv[selected_depth]);
-            applied_depth=selected_depth;
+            epd_set_vcom(-selected_vcom);
+            current_vcom=selected_vcom;
+            applied_vcom.store(current_vcom);
             profile_full=true;
-            ESP_LOGI(TAG,"black depth=%d vcom=%d mV",selected_depth,kBlackDepthMv[selected_depth]);
-        }
-        if (persist_depth) {
-            Settings settings("screen",true);
-            settings.SetInt("black_depth",selected_depth);
+            ESP_LOGI(TAG,"calibrated vcom=%d mV",current_vcom);
         }
         // 退出测试时保留物理灰阶状态，由下一次推白或必要清屏更新基线。
         if (!test_active.load()) { pattern=-1; test=false; if (job.sequence) tests_completed.store(job.sequence); }
@@ -587,14 +585,13 @@ bool EpdRefreshInit() {
         int saved=settings.GetInt("refresh_profile",-1);
         if (saved<0) {
             const int legacy=settings.GetInt("refresh_mode",-1);
-            saved=legacy==0 ? 0 : 1; // Preserve old full/trimmed selections.
+            saved=legacy==1 ? 1 : 0; // Preserve old full/trimmed selections.
         }
-        if (saved<0 || saved>3) saved=1;
+        if (saved==3) saved=2; // 已移除的极速档迁移为快速。
+        if (saved<0 || saved>2) saved=0;
         if (saved>=1 && !my_waveform_fast()) saved=0;
         refresh_profile.store(saved);
-        ESP_LOGI(TAG,"refresh profile=%d (0=clear 1=balanced 2=fast 3=extreme)",saved);
-        const int depth=settings.GetInt("black_depth",0);
-        black_depth.store(depth>=0 && depth<=2 ? depth : 0);
+        ESP_LOGI(TAG,"refresh profile=%d (0=clear 1=balanced 2=fast)",saved);
     }
 #if defined(CONFIG_IDF_TARGET_ESP32S31)
     if (!epd_pixel_order_selftest()) {
@@ -699,7 +696,7 @@ EpdRefreshProfile EpdGetRefreshProfile() {
     return static_cast<EpdRefreshProfile>(refresh_profile.load());
 }
 bool EpdSetRefreshProfile(EpdRefreshProfile profile) {
-    if (!worker || (profile!=EpdRefreshProfile::Clear && profile!=EpdRefreshProfile::Balanced && profile!=EpdRefreshProfile::Fast && profile!=EpdRefreshProfile::Extreme)) return false;
+    if (!worker || (profile!=EpdRefreshProfile::Clear && profile!=EpdRefreshProfile::Balanced && profile!=EpdRefreshProfile::Fast)) return false;
     if (profile!=EpdRefreshProfile::Clear && !my_waveform_fast()) return false;
     if (refresh_profile.exchange(static_cast<int>(profile))!=static_cast<int>(profile)) {
         save_profile.store(true);
@@ -708,15 +705,12 @@ bool EpdSetRefreshProfile(EpdRefreshProfile profile) {
     return true;
 }
 
-EpdBlackDepth EpdGetBlackDepth() {
-    return static_cast<EpdBlackDepth>(black_depth.load());
+int EpdGetVcomMv() {
+    return applied_vcom.load();
 }
-bool EpdSetBlackDepth(EpdBlackDepth depth) {
-    const int value=static_cast<int>(depth);
-    if (!worker || value<0 || value>2) return false;
-    if (black_depth.exchange(value)!=value) {
-        save_black_depth.store(true);
-        xTaskNotifyGive(worker);
-    }
+bool EpdSetVcomMv(int vcom_mv) {
+    if (!worker || vcom_mv > -EPD_VCOM_MIN_MV || vcom_mv < -EPD_VCOM_MAX_MV || vcom_mv % 10) return false;
+    requested_vcom.store(vcom_mv);
+    xTaskNotifyGive(worker);
     return true;
 }

@@ -6,10 +6,12 @@ extern "C" {
 
 extern const char cloudzao_log_upload_host[];
 extern const char cloudzao_path_device_logs[];
+extern const char cloudzao_app_store_url[]; // 应用商店默认 API 基址
 extern const char cloudzao_host[]; // 业务 API 基址
 extern const char cloudzao_ota_url[]; // OTA 检查地址 
 extern const char xiaozhi_ota_url[]; // 小智 OTA 检查地址
 extern const char yunxin_ota_url[]; // 云信 OTA 检查地址
+extern const char yunxin_binding_url[]; // 国际版云信扫码绑定完整地址
 extern const char yunxin_websocket_url[]; // 云信 WebSocket 基址
 extern const char yunxin_app_key[]; // 云信应用标识
 extern const char yunxin_token[]; // 云信 WebSocket Token

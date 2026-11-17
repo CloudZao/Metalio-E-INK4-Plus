@@ -16,6 +16,7 @@
 #include "frontlight.h"
 #include "metalio_accel.h"
 #include "metalio_audio.h"
+#include "simple_uart.hpp"
 #include "metalio_keys.h"
 #include "metalio_vibe.h"
 #include "metalio_sd.h"
@@ -240,6 +241,7 @@ esp_err_t power_hw_pa_set(bool on) {
 }
 
 esp_err_t power_hw_bt_power_reset(void) {
+    std::lock_guard<std::recursive_timed_mutex> transaction(SimpleUart::getInstance().commandMutex());
     auto* cell = CellularBoard();
     if (cell) cell->PreparePowerOff();
     esp_err_t err;

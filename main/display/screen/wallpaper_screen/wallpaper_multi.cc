@@ -8,6 +8,7 @@
 #include <freertos/FreeRTOS.h>
 #include <lvgl.h>
 #include <cstdint>
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <new>
@@ -16,37 +17,34 @@
 #include <freertos/task.h>
 
 #include "assets/lang_config.h"
+#include "power_policy.h"
 #include "haptic_feedback.h"
 
-void SyncWpSelectedSize() {
-    if (Wallpaper_State().list.selected.size() != Wallpaper_State().list.files.size()) {
-        Wallpaper_State().list.selected.assign(Wallpaper_State().list.files.size(), 0);
-    }
-}
-
 int WpSelectedCount() {
-    SyncWpSelectedSize();
-    int n = 0;
-    for (uint8_t v : Wallpaper_State().list.selected) {
-        if (v != 0) {
-            ++n;
-        }
-    }
-    return n;
+    return static_cast<int>(Wallpaper_State().list.selected.size());
 }
 
 bool WpItemSelected(int idx) {
-    SyncWpSelectedSize();
-    return idx >= 0 && idx < static_cast<int>(Wallpaper_State().list.selected.size()) &&
-           Wallpaper_State().list.selected[static_cast<size_t>(idx)] != 0;
+    const auto& list = Wallpaper_State().list;
+    if (idx < 0 || idx >= static_cast<int>(list.files.size())) {
+        return false;
+    }
+    return std::find(list.selected.begin(), list.selected.end(), list.files[idx].name) != list.selected.end();
 }
 
-void ToggleWpItemSelected(int idx) {
-    SyncWpSelectedSize();
-    if (idx < 0 || idx >= static_cast<int>(Wallpaper_State().list.selected.size())) {
+void ToggleWpItemSelected(int idx) try {
+    auto& list = Wallpaper_State().list;
+    if (list.loading || idx < 0 || idx >= static_cast<int>(list.files.size())) {
         return;
     }
-    Wallpaper_State().list.selected[static_cast<size_t>(idx)] = Wallpaper_State().list.selected[static_cast<size_t>(idx)] ? 0 : 1;
+    const auto found = std::find(list.selected.begin(), list.selected.end(), list.files[idx].name);
+    if (found == list.selected.end()) {
+        list.selected.emplace_back(list.files[idx].name);
+    } else {
+        list.selected.erase(found);
+    }
+} catch (const std::bad_alloc&) {
+    ESP_LOGW(TAG, "wallpaper selection allocation failed; selection unchanged");
 }
 
 void RefreshWpFooterMode() {
@@ -99,7 +97,7 @@ void ExitWpMultiMode(bool rebuild) {
     Wallpaper_State().list.multi = false;
     Wallpaper_State().list.suppress_click_until_us = 0;
     Wallpaper_State().list.suppress_click_idx = -1;
-    Wallpaper_State().list.selected.assign(Wallpaper_State().list.files.size(), 0);
+    Wallpaper_State().list.selected.clear();
     RefreshWpFooterMode();
     if (rebuild) {
         RequestWallpaperListRebuild();
@@ -108,10 +106,8 @@ void ExitWpMultiMode(bool rebuild) {
 
 void EnterWpMultiModeSelect(int idx) {
     Wallpaper_State().list.multi = true;
-    Wallpaper_State().list.selected.assign(Wallpaper_State().list.files.size(), 0);
-    if (idx >= 0 && idx < static_cast<int>(Wallpaper_State().list.selected.size())) {
-        Wallpaper_State().list.selected[static_cast<size_t>(idx)] = 1;
-    }
+    Wallpaper_State().list.selected.clear();
+    ToggleWpItemSelected(idx);
     RefreshWpFooterMode();
     RequestWallpaperListRebuild();
 }
@@ -123,8 +119,7 @@ lv_obj_t* FindWpCell(int index) {
     const uint32_t n = lv_obj_get_child_count(Wallpaper_State().ui.list_host);
     for (uint32_t i = 0; i < n; ++i) {
         lv_obj_t* cell = lv_obj_get_child(Wallpaper_State().ui.list_host, i);
-        if (cell != nullptr &&
-            static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(cell))) == index) {
+        if (cell != nullptr && static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(cell))) == index) {
             return cell;
         }
     }
@@ -138,8 +133,7 @@ lv_obj_t* FindWpCheckBox(lv_obj_t* cell) {
     const uint32_t n = lv_obj_get_child_count(cell);
     for (uint32_t i = 0; i < n; ++i) {
         lv_obj_t* c = lv_obj_get_child(cell, i);
-        if (c != nullptr && lv_obj_get_width(c) == kWpCheckSize &&
-            lv_obj_get_height(c) == kWpCheckSize) {
+        if (c != nullptr && lv_obj_get_width(c) == kWpCheckSize && lv_obj_get_height(c) == kWpCheckSize) {
             return c;
         }
     }
@@ -168,7 +162,8 @@ void PatchWpRowCheckMark(int index) {
 }
 
 void PatchWpVisibleCheckMarks() {
-    if (!Wallpaper_State().list.multi || Wallpaper_State().ui.list_host == nullptr || !lv_obj_is_valid(Wallpaper_State().ui.list_host)) {
+    if (!Wallpaper_State().list.multi || Wallpaper_State().ui.list_host == nullptr ||
+        !lv_obj_is_valid(Wallpaper_State().ui.list_host)) {
         return;
     }
     const uint32_t n = lv_obj_get_child_count(Wallpaper_State().ui.list_host);
@@ -177,8 +172,7 @@ void PatchWpVisibleCheckMarks() {
         if (cell == nullptr) {
             continue;
         }
-        PatchWpRowCheckMark(
-            static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(cell))));
+        PatchWpRowCheckMark(static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(cell))));
     }
     if (Wallpaper_State().ui.status_label != nullptr && lv_obj_is_valid(Wallpaper_State().ui.status_label)) {
         char buf[32];
@@ -195,24 +189,34 @@ void RequestWpCheckMarksPaint() {
 }
 
 void OnWpMultiCancel(lv_event_t* /*e*/) {
-    if (Wallpaper_State().workers.delete_busy.load()) {
-        return;
-    }
+    Wallpaper_State().workers.delete_cancel.store(true);
     ExitWpMultiMode(true);
 }
 
 void OnWpMultiSelectAll(lv_event_t* /*e*/) {
-    if (!Wallpaper_State().list.multi || Wallpaper_State().list.files.empty() || Wallpaper_State().workers.delete_busy.load()) {
+    if (!Wallpaper_State().list.multi || Wallpaper_State().list.files.empty() ||
+        Wallpaper_State().workers.delete_busy.load()) {
         return;
     }
-    SyncWpSelectedSize();
+
+    if (Wallpaper_State().list.loading) {
+        return;
+    }
     const int n = static_cast<int>(Wallpaper_State().list.files.size());
-    const bool clear = (WpSelectedCount() >= n);
-    Wallpaper_State().list.selected.assign(static_cast<size_t>(n), clear ? 0 : 1);
+    bool clear = n > 0;
+    for (int i = 0; i < n; ++i) {
+        clear = clear && WpItemSelected(i);
+    }
+    for (int i = 0; i < n; ++i) {
+        if (WpItemSelected(i) == clear) {
+            ToggleWpItemSelected(i);
+        }
+    }
     RequestWpCheckMarksPaint();
 }
 
 struct BatchDeleteWork {
+    PowerNeedHold awake{PowerNeed::StandbyInhibit}; // 移除结束或取消后恢复自动待机
     uint32_t epoch = 0;
     std::vector<std::string> names; // 本次选中的完整文件名，不限制数量
 };
@@ -225,8 +229,8 @@ struct BatchDeleteResultMsg {
 
 void ApplyBatchDeleteAsync(void* p) {
     auto* msg = static_cast<BatchDeleteResultMsg*>(p);
-    Wallpaper_State().workers.delete_busy.store(false);
     Wallpaper_State().workers.delete_task = nullptr;
+    Wallpaper_State().workers.delete_busy.store(false);
     if (msg == nullptr) {
         return;
     }
@@ -235,7 +239,9 @@ void ApplyBatchDeleteAsync(void* p) {
         return;
     }
     ESP_LOGI(TAG, "batch delete done n=%d", msg->deleted);
-    if (msg->failed) ScreenShowToast(Lang::Strings::WALLPAPER_DELETE_FAIL);
+    if (msg->failed) {
+        ScreenShowToast(Lang::Strings::WALLPAPER_DELETE_FAIL);
+    }
     DetachRasterUsers();
     RefreshActiveName();
     CollectWallpapers();
@@ -249,15 +255,17 @@ void BatchDeleteTask(void* arg) {
     auto* work = static_cast<BatchDeleteWork*>(arg);
     auto* msg = new (std::nothrow) BatchDeleteResultMsg{};
     if (msg == nullptr) {
+        ESP_LOGW(TAG, "batch delete result allocation failed");
         delete work;
-        Wallpaper_State().workers.delete_busy.store(false);
         Wallpaper_State().workers.delete_task = nullptr;
+        Wallpaper_State().workers.delete_busy.store(false);
         vTaskDelete(nullptr);
         return;
     }
     if (work != nullptr) {
         msg->epoch = work->epoch;
         for (const auto& name : work->names) {
+            if (Wallpaper_State().workers.delete_cancel.load()) break;
             std::string err;
             char path[sizeof(FileEntry::path)];
             std::snprintf(path, sizeof(path), "%s/%s", kPosixDir, name.c_str());
@@ -265,24 +273,27 @@ void BatchDeleteTask(void* arg) {
                 ++msg->deleted;
             } else {
                 ++msg->failed;
-                ESP_LOGW(TAG, "batch delete fail %s: %s", name.c_str(), err.c_str());
+                ESP_LOGW(TAG, "wallpaper batch delete failed");
             }
         }
         delete work;
     }
     if (!ScreenLvAsync(ApplyBatchDeleteAsync, msg)) {
+        ESP_LOGW(TAG, "batch delete result UI delivery unavailable");
         delete msg;
-        Wallpaper_State().workers.delete_busy.store(false);
         Wallpaper_State().workers.delete_task = nullptr;
+        Wallpaper_State().workers.delete_busy.store(false);
     }
     vTaskDelete(nullptr);
 }
 
 void OnWpMultiRemove(lv_event_t* /*e*/) {
-    if (!Wallpaper_State().list.multi || Wallpaper_State().workers.delete_busy.load() || Wallpaper_State().workers.enable_busy.load() || Wallpaper_State().workers.load_busy.load() || Wallpaper_State().workers.save_busy.load()) {
+    if (!Wallpaper_State().list.multi || Wallpaper_State().workers.delete_busy.load() ||
+        Wallpaper_State().workers.enable_busy.load() || Wallpaper_State().workers.load_busy.load() ||
+        Wallpaper_State().workers.save_busy.load()) {
         return;
     }
-    SyncWpSelectedSize();
+
     if (WpSelectedCount() <= 0) {
         return;
     }
@@ -291,18 +302,14 @@ void OnWpMultiRemove(lv_event_t* /*e*/) {
     }
     auto* work = new (std::nothrow) BatchDeleteWork{};
     if (work == nullptr) {
+        ESP_LOGW(TAG, "batch delete request allocation failed");
         Wallpaper_State().workers.delete_busy.store(false);
         return;
     }
+    Wallpaper_State().workers.delete_cancel.store(false);
     work->epoch = Wallpaper_State().epoch;
     try {
-        work->names.reserve(static_cast<size_t>(WpSelectedCount()));
-        for (int i = 0; i < static_cast<int>(Wallpaper_State().list.files.size()); ++i) {
-            if (i >= static_cast<int>(Wallpaper_State().list.selected.size()) || Wallpaper_State().list.selected[static_cast<size_t>(i)] == 0) {
-                continue;
-            }
-            work->names.emplace_back(Wallpaper_State().list.files[static_cast<size_t>(i)].name);
-        }
+        work->names = Wallpaper_State().list.selected;
     } catch (const std::bad_alloc&) {
         delete work;
         Wallpaper_State().workers.delete_busy.store(false);
@@ -314,8 +321,8 @@ void OnWpMultiRemove(lv_event_t* /*e*/) {
         Wallpaper_State().workers.delete_busy.store(false);
         return;
     }
-    if (xTaskCreatePinnedToCore(BatchDeleteTask, "wp_batch_del", 8 * 1024, work, 5, &Wallpaper_State().workers.delete_task,
-                                0) != pdPASS) {
+    if (xTaskCreatePinnedToCore(BatchDeleteTask, "wp_batch_del", 8 * 1024, work, 5,
+                                &Wallpaper_State().workers.delete_task, 0) != pdPASS) {
         delete work;
         Wallpaper_State().workers.delete_busy.store(false);
         ESP_LOGW(TAG, "batch delete task create failed");
@@ -323,6 +330,9 @@ void OnWpMultiRemove(lv_event_t* /*e*/) {
 }
 
 void Wallpaper_OnRowLongPressed(lv_event_t* e) {
+    if (Wallpaper_State().list.loading) {
+        return;
+    }
     if (Wallpaper_State().mode != UiMode::kList || Wallpaper_State().workers.delete_busy.load()) {
         return;
     }
@@ -341,8 +351,12 @@ void Wallpaper_OnRowLongPressed(lv_event_t* e) {
 }
 
 void Wallpaper_OnRowClicked(lv_event_t* e) {
+    if (Wallpaper_State().list.loading) {
+        return;
+    }
     const int index = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if (index == Wallpaper_State().list.suppress_click_idx && esp_timer_get_time() < Wallpaper_State().list.suppress_click_until_us) {
+    if (index == Wallpaper_State().list.suppress_click_idx &&
+        esp_timer_get_time() < Wallpaper_State().list.suppress_click_until_us) {
         return;
     }
     if (Wallpaper_State().list.multi) {
@@ -437,4 +451,3 @@ void BuildFooter(lv_obj_t* scr) {
     make_multi_dot(Wallpaper_State().ui.multi_bar);
     make_multi_action(Wallpaper_State().ui.multi_bar, Lang::Strings::COMMON_REMOVE, OnWpMultiRemove);
 }
-

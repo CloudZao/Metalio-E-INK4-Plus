@@ -2,7 +2,7 @@
 
 把彩色/灰度原图转成 **A2I1**（与 `main/display/a2ui` 网络图同一格式），纯 1bpp，扩展名 `.a2i1`。
 
-面板参考：[GDEM0397T81P](../../datasheet/GDEM0397T81P.pdf) 3.97"，1bit 黑白，逻辑分辨率 **480×800**。
+面板参考：[GDEM0397T81P](../../docs/datasheets/GDEM0397T81P.pdf) 3.97"，1bit 黑白，逻辑分辨率 **480×800**。
 
 依赖：
 
@@ -54,11 +54,11 @@ tools\a2i1\build_windows.bat
 
 ## 转换 CLI
 
-源图可放本目录；产物放到 `main/xingzhi-assets/` 根目录打包进 `resources`。
+源图可放本目录；产物放到 `main/assets/device/` 根目录打包进 `resources`。
 
 ```bash
 python3 tools/a2i1/jpg_to_a2i1.py tools/a2i1/bg_shutdown.png \
-  -o main/xingzhi-assets/bg_shutdown.a2i1 \
+  -o main/assets/device/bg_shutdown.a2i1 \
   --preview /tmp/bg_shutdown_bw.png \
   --method threshold
 ```

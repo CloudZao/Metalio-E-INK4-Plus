@@ -1,7 +1,6 @@
 #include "ml307_http.h"
 #include <esp_log.h>
 #include <cstring>
-#include <sstream>
 #include <chrono>
 
 static const char *TAG = "Ml307Http";
@@ -151,13 +150,14 @@ void Ml307Http::SetKeepAlive(bool enable) {
 }
 
 void Ml307Http::ParseResponseHeaders(const std::string& headers) {
-    std::istringstream iss(headers);
-    std::string line;
-    while (std::getline(iss, line)) {
-        std::istringstream line_iss(line);
-        std::string key, value;
-        std::getline(line_iss, key, ':');
-        std::getline(line_iss, value);
+    size_t begin = 0;
+    while (begin < headers.size()) {
+        const size_t end = headers.find('\n', begin);
+        const std::string line = headers.substr(begin, end - begin);
+        begin = end == std::string::npos ? headers.size() : end + 1;
+        const size_t colon = line.find(':');
+        std::string key = line.substr(0, colon);
+        std::string value = colon == std::string::npos ? "" : line.substr(colon + 1);
     
         // 去除前后空格
         key.erase(0, key.find_first_not_of(" \t"));

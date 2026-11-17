@@ -31,10 +31,7 @@ static bool MapLogicalToUi(int lx, int ly, int* ux, int* uy, bool clamp_border =
     int x, y;
     DisplayUiTouchToLogical(lx + DISPLAY_TOUCH_OFFSET_X, ly + DISPLAY_TOUCH_OFFSET_Y, &x, &y);
     // 仅手势起点接纳屏幕留白，普通点击仍限制在内容区域。
-    if (clamp_border && x >= -DISPLAY_CONTENT_LEFT_INSET &&
-        x < DisplayUiLogW() + DISPLAY_CONTENT_RIGHT_INSET &&
-        y >= -DISPLAY_CONTENT_TOP_INSET &&
-        y < DisplayUiLogH() + DISPLAY_CONTENT_BOTTOM_INSET) {
+    if (clamp_border && lx >= 0 && lx < DISPLAY_WIDTH && ly >= 0 && ly < DISPLAY_HEIGHT) {
         x = std::clamp(x, 0, DisplayUiLogW() - 1);
         y = std::clamp(y, 0, DisplayUiLogH() - 1);
     }

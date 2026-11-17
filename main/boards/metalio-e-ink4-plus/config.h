@@ -20,6 +20,8 @@
 #define DISPLAY_TOUCH_OFFSET_X  0
 #define DISPLAY_TOUCH_OFFSET_Y  0
 #define EPD_VCOM_MV    1200
+#define EPD_VCOM_MIN_MV 1000 // 屏幕校准电压绝对值下限，毫伏
+#define EPD_VCOM_MAX_MV 3000 // 屏幕校准电压绝对值上限，毫伏
 
 /* 并行数据 / 控制（原理图 V1.2） */
 // #define EPD_PIN_D0     GPIO_NUM_8

@@ -9,8 +9,6 @@
 void StartReadFontScan();
 /** @brief 作废字体扫描并清理未发布结果，后台任务自行收尾。 */
 void CancelReadFontScan();
-/** @brief 将字体列表页码定位到当前使用的字体。 */
-void EnsureFontListPageShowsSelection();
 /** @brief 当前选中字体在列表中的下标 */
 int CurrentFontIndex();
 /** @brief 字体列表总页数 */
@@ -25,8 +23,6 @@ void ExitFontMultiMode(bool paint);
 void EnterFontMultiModeSelect(int idx);
 /** @brief 刷新字体多选底栏 */
 void RefreshFontMultiFooter();
-/** @brief 同步已选字体集合容量 */
-void SyncFontSelectedSize();
 /** @brief 字体项是否已选 */
 bool FontItemSelected(int idx);
 /** @brief 已选字体数量 */

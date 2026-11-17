@@ -237,17 +237,10 @@ void ScreenCommon_NavigateBackAsync(void* /*user_data*/) {
     RequestNavigation(NavigationKind::Back);
 }
 
-void ScreenShowToast(const char* text) {
-    if (text == nullptr || text[0] == '\0') {
-        return;
-    }
-    static lv_obj_t* notice = nullptr;
-    if (notice != nullptr) {
-        lv_obj_delete(notice);
-    }
-    notice = lv_label_create(lv_layer_top());
+lv_obj_t* ScreenCreateToast(lv_obj_t* parent, const char* text) {
+    auto* notice = lv_label_create(parent);
     lv_obj_remove_style_all(notice);
-    lv_label_set_text(notice, text);
+    lv_label_set_text(notice, text ? text : "");
     lv_label_set_long_mode(notice, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_max_width(notice, LV_HOR_RES - 32, 0);
     lv_obj_set_style_text_font(notice, fontpack_lv_font_ui(), 0);
@@ -257,8 +250,20 @@ void ScreenShowToast(const char* text) {
     lv_obj_set_style_radius(notice, 8, 0);
     lv_obj_set_style_pad_hor(notice, 12, 0);
     lv_obj_set_style_pad_ver(notice, 8, 0);
-    lv_obj_clear_flag(notice, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(notice, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
     lv_obj_align(notice, LV_ALIGN_TOP_MID, 0, ScreenStatusBarHeight() + 8);
+    return notice;
+}
+
+void ScreenShowToast(const char* text) {
+    if (text == nullptr || text[0] == '\0') {
+        return;
+    }
+    static lv_obj_t* notice = nullptr;
+    if (notice != nullptr) {
+        lv_obj_delete(notice);
+    }
+    notice = ScreenCreateToast(lv_layer_top(), text);
     lv_obj_add_event_cb(notice, [](lv_event_t*) { notice = nullptr; },
                         LV_EVENT_DELETE, nullptr);
     lv_obj_delete_delayed(notice, 3000);
@@ -463,4 +468,14 @@ void ScreenApplyDotBackdrop(lv_obj_t* obj) {
     lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_image_src(obj, DotBackdropImg(), 0);
     lv_obj_set_style_bg_image_tiled(obj, true, 0);
+}
+
+void ScreenStyleDialogCard(lv_obj_t* card, lv_coord_t padding) {
+    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(card, lv_color_black(), 0);
+    lv_obj_set_style_border_width(card, UiSx(2), 0);
+    lv_obj_set_style_radius(card, UiSx(8), 0);
+    lv_obj_set_style_pad_all(card, padding, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 }

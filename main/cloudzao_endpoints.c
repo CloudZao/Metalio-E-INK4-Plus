@@ -2,10 +2,12 @@
 
 #include "sdkconfig.h"
 
-// Open-source build: leave blank; fill in for a private backend.
+// Production endpoints.
+const char cloudzao_app_store_url[] = "";
 const char cloudzao_host[] = "";
 const char cloudzao_ota_url[] = "";
 const char xiaozhi_ota_url[] = "";
+const char yunxin_binding_url[] = "";
 #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
 const char yunxin_ota_url[] = "";
 const char yunxin_app_key[] = "";

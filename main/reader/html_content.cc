@@ -228,9 +228,11 @@ bool HtmlBlockParser::Tag() {
     std::string name = ToLower(std::string(begin, p));
     const size_t colon = name.find(':');
     if (colon != std::string::npos) name.erase(0, colon + 1);
-    if (name == "head") in_head_ = !closing;
-    else if (name == "script") in_script_ = !closing;
-    else if (name == "style") in_style_ = !closing;
+    const size_t last = tag_.find_last_not_of(" \t\r\n");
+    const bool self_closing = last != std::string::npos && tag_[last] == '/';
+    if (name == "head") in_head_ = !closing && !self_closing;
+    else if (name == "script") in_script_ = !closing && !self_closing;
+    else if (name == "style") in_style_ = !closing && !self_closing;
     else if (!in_head_ && !in_script_ && !in_style_) {
         const bool heading = name.size() == 2 && name[0] == 'h' && name[1] >= '1' && name[1] <= '6';
         if (heading && !closing) in_heading_ = text_.empty() && !continuation_;

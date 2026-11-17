@@ -4,12 +4,14 @@
 
 /** @brief 禁止在 LVGL 任务读 NVS：只用内存缓存 / SD 回退；NVS 由后台 hydrate。 */
 void RefreshActiveName();
-/** @brief 列表排序：当前壁纸优先 */
-void SortFilesActiveFirst();
 /** @brief 活动壁纸水合完成回调 */
 void OnActiveHydrated(void* user);
 /** @brief 收集 SD 壁纸文件列表 */
 void CollectWallpapers();
+/** @brief 取消目录分页并释放句柄 */
+void CancelWallpaperDirectory();
+/** @brief 检查当前页是否仍在加载 */
+bool WallpaperDirectoryLoading();
 /** @brief 壁纸列表总页数 */
 int Wallpaper_ListPageCount();
 /** @brief 钳制壁纸列表页码 */

@@ -1,13 +1,14 @@
 #pragma once
 #include <cstdint>
 
-enum class EpdRefreshProfile : int { Clear = 0, Balanced = 1, Fast = 2, Extreme = 3 };
+enum class EpdRefreshProfile : int { Clear = 0, Balanced = 1, Fast = 2 };
 EpdRefreshProfile EpdGetRefreshProfile();
 bool EpdSetRefreshProfile(EpdRefreshProfile profile);
 
-enum class EpdBlackDepth : int { Default = 0, Medium = 1, Strong = 2 };
-EpdBlackDepth EpdGetBlackDepth();
-bool EpdSetBlackDepth(EpdBlackDepth depth);
+/** @brief 将已校验的负毫伏校准值投递给显示线程 */
+bool EpdSetVcomMv(int vcom_mv);
+/** @brief 获取显示线程当前采用的负毫伏值 */
+int EpdGetVcomMv();
 
 enum class EpdEffect : int {
     None, // 无附加动画

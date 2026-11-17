@@ -2,8 +2,11 @@
 
 #include "home_screen.h"
 #include "ui_scale.h"
+#include "display_orient.h"
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include <lvgl.h>
 
@@ -16,8 +19,9 @@ constexpr lv_coord_t HOME_APP_CARD_MARGIN_H = UiSx(38);
 constexpr lv_coord_t HOME_APP_CARD_GAP_COL = UiSx(28);
 constexpr lv_coord_t HOME_APP_CARD_GAP_ROW = UiSy(41);
 // 三列铺满可绘宽（与 397 上 38/116/28 铺满 480 同构）
-constexpr lv_coord_t HOME_APP_CARD_W =
-    (DISPLAY_CONTENT_W - 2 * HOME_APP_CARD_MARGIN_H - 2 * HOME_APP_CARD_GAP_COL) / 3;
+static inline lv_coord_t HomeAppCardWidth() {
+    return (DisplayUiContentW() - 2 * HOME_APP_CARD_MARGIN_H - 2 * HOME_APP_CARD_GAP_COL) / 3;
+}
 constexpr lv_coord_t HOME_APP_CARD_H = UiSy(136);
 constexpr lv_coord_t HOME_APP_CARD_ICON_PAD_TOP = UiSy(10);
 constexpr lv_coord_t HOME_APP_CARD_NAME_PAD_BOT = UiSy(10);
@@ -59,15 +63,20 @@ struct AppEntry {
     const char* icon_path;
     const char* (*name)();
     lv_obj_t* (*create)();
+    std::string installed_id; // 已安装应用 ID；内置应用为空
+    std::string installed_name; // 已安装应用中文名
+    std::string installed_name_en; // 已安装应用英文名
 };
 
 extern uint8_t Home_gray_dither_l8[kDitherW * kDitherH];
 extern lv_image_dsc_t Home_gray_dither_img;
 extern bool Home_gray_dither_ready;
-extern const AppEntry kApps[];
-extern const AppEntry kSlashApps[];
-extern const int kTotalApps;
-extern const int kSlashAppCount;
+extern std::vector<AppEntry> kApps;
+extern std::vector<AppEntry> kSlashApps;
+extern int kTotalApps;
+extern int kSlashAppCount;
+/** @brief 按当前语言获取内置或已安装应用名 */
+const char* Home_AppLabel(const AppEntry& entry);
 extern lv_obj_t* Home_apps;
 extern lv_obj_t* Home_page_lbl;
 extern lv_obj_t* Home_scr;
@@ -100,3 +109,6 @@ void Home_CreateSlashAppCell(lv_obj_t* row, const AppEntry& entry, int row_i, in
                              lv_coord_t cell_w);
 /** @brief 填充斜切布局应用页 */
 void Home_FillSlashAppsPage();
+
+/** @brief 返回内置或已安装应用的图标，可指定主题后备资源 */
+const void* Home_AppIcon(const AppEntry& entry, const char* fallback = nullptr);

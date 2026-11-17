@@ -15,6 +15,8 @@ unsigned Pending();
 
 /** @brief 更新本机文件系统可用状态，不改变待机访问限制 */
 void SetMounted(bool mounted);
+/** @brief 获取介质挂载代次，用于作废跨挂载缓存 */
+unsigned MountGeneration();
 
 /**
  * @brief 串行化挂载、卸载与介质切换；等待在途访问，超时则不执行变更

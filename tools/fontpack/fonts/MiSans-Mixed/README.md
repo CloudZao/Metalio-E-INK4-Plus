@@ -41,7 +41,7 @@ cd tools/fontpack
 ./flash_fontpack.sh /dev/ttyACM0 ./fonts_misans_25_30.fontpack
 ```
 
-`build_misans_mixed.sh` 还会同步到仓库根目录 **`use_font/font.fontpack`**（`idf.py flash` / `merge_firmware.sh` 默认读此文件）。
+`build_misans_mixed.sh` 还会同步到仓库根目录 **`main/assets/fonts/font.fontpack`**（`idf.py flash` / `tools/firmware/merge_firmware.sh` 默认读此文件）。
 
 ## 手动分步（调试）
 

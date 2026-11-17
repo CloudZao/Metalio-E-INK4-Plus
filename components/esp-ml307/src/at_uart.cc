@@ -7,7 +7,6 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdint>
-#include <sstream>
 
 #define TAG "AtUart"
 
@@ -239,11 +238,13 @@ bool AtUart::ParseResponse() {
 
         // Parse "string", int, int, ... into AtArgumentValue
         std::vector<AtArgumentValue> arguments;
-        std::istringstream iss(values);
-        std::string item;
-        while (std::getline(iss, item, ',')) {
+        size_t begin = 0;
+        while (begin < values.size()) {
+            const size_t end = values.find(',', begin);
+            std::string item = values.substr(begin, end - begin);
+            begin = end == std::string::npos ? values.size() : end + 1;
             AtArgumentValue argument;
-            if (item.front() == '"') {
+            if (!item.empty() && item.front() == '"') {
                 argument.type = AtArgumentValue::Type::String;
                 argument.string_value = item.substr(1, item.size() - 2);
             } else if (item.find(".") != std::string::npos) {

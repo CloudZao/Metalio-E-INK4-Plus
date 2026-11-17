@@ -1,4 +1,5 @@
 #include "home_pixel.h"
+#include "app_store/app_store_icons.h"
 #include "book_screen/book_screen.h"
 #include "book_screen/book_text_util.h"
 #include "workbuddy_screen/workbuddy_screen.h"
@@ -104,10 +105,10 @@ void BlackTab(lv_obj_t* card, const char* text, bool centered) {
     lv_obj_set_style_text_color(tab, lv_color_white(), 0);
     lv_obj_set_style_bg_color(tab, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(tab, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(tab, X(centered ? 14 : 9), 0);
+    lv_obj_set_style_pad_hor(tab, X(centered ? 8 : 9), 0);
     lv_obj_set_style_pad_ver(tab, Y(3), 0);
     if (centered) {
-        lv_obj_set_style_max_width(tab, X(148), 0);
+        lv_obj_set_style_max_width(tab, X(180), 0);
         lv_label_set_long_mode(tab, LV_LABEL_LONG_DOT);
         lv_obj_align_to(tab, card, LV_ALIGN_BOTTOM_MID, 0, Y(19));
     } else {
@@ -128,7 +129,7 @@ void RefreshRecent() {
     const std::string path = reader::book_home_snapshot::LoadLatestAbsPath();
     reader::BookSession::ProgressPeek peek;
     const bool has_progress = !path.empty() && reader::book_progress_cache::TryGet(path.c_str(), peek);
-    const std::string filename = path.empty() || (reader::book_progress_cache::IsReady() && !has_progress)
+    const std::string filename = path.empty()
         ? Lang::Strings::BOOK_NO_RECENT : path.substr(path.find_last_of('/') + 1);
     if (filename != s.recent_filename) {
         Book_SetFilenameMiddle(s.recent, filename.c_str());
@@ -263,17 +264,17 @@ void HomePixel_FillAppsPage() {
         const bool is_buddy = kSlashApps[app].create == WorkBuddyScreen::Create;
         auto* card = Card(X(columns[i % 3]), Y(882) + (i / 3) * row_step, edge, edge, kSlashApps[app]);
         auto* icon = lv_image_create(card);
-        lv_image_set_src(icon, HomeIconSource(app < 6 ? icons[app] : kSlashApps[app].icon_path));
+        const int icon_edge = X(100);
+        AppStoreIcons::SetSource(icon, Home_AppIcon(kSlashApps[app], app < 6 ? icons[app] : nullptr), icon_edge);
         lv_obj_set_style_image_recolor(icon, lv_color_black(), 0);
         lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
-        const int icon_edge = X(100);
         lv_obj_set_size(icon, icon_edge, icon_edge);
         lv_image_set_inner_align(icon, LV_IMAGE_ALIGN_CONTAIN);
         lv_image_set_antialias(icon, false);
         lv_obj_align(icon, LV_ALIGN_CENTER, 0, -Y(6));
         lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
         const char* name = is_buddy ? "buddy" : app == 0 ? Lang::Strings::HOME_PIXEL_READ :
-                           app == 3 ? Lang::Strings::HOME_PIXEL_NOTES : kSlashApps[app].name();
+                           app == 3 ? Lang::Strings::HOME_PIXEL_NOTES : Home_AppLabel(kSlashApps[app]);
         BlackTab(card, name, true);
     }
 }

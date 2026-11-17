@@ -99,7 +99,7 @@ using CommandHandler = void (*)(Action action, KeyPhase phase); // BLE 线程回
 void Init(CommandHandler handler);
 /** @brief 处理限时自动连接；由现有 UI 轮询调用，不阻塞 */
 void Poll();
-/** @brief 设置自动连接开关；关闭时停止扫描并断开，持久化写入由 BLE 任务处理 */
+/** @brief 设置自动连接开关；关闭后在后台完整释放 BLE 协议栈并保存设置，再次开启时重新初始化 */
 bool SetEnabled(bool enabled);
 /** @brief 进入待机暂停蓝牙活动，退出待机按原开关重新搜索 */
 void SetStandby(bool standby);
@@ -107,7 +107,7 @@ void SetStandby(bool standby);
 Snapshot GetSnapshot();
 /** @brief 异步扫描可识别翻页器；后台刷新保留上一轮结果，完成后移除未发现设备 */
 bool Scan(CommandHandler handler, bool keep_results = false);
-/** @brief 取消设备管理扫描及待执行的扫描请求，不断开连接或关闭自动连接开关 */
+/** @brief 取消设备管理扫描；自动连接已关闭时，退出扫描后在后台释放 BLE 协议栈 */
 void StopScan();
 /** @brief 按地址异步连接扫描列表中的设备，避免后台刷新导致条目索引变化 */
 bool Connect(const char* address);

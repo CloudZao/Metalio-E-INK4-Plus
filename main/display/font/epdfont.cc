@@ -1,5 +1,6 @@
 #include <cerrno>
 #include "epdfont.h"
+#include "fontpack_lvgl.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -59,6 +60,7 @@ struct epdfont_t {
     size_t overflow_next = 0;
 
     lv_font_t lv{};
+    lv_font_t fallback{}; // 保持当前阅读字体行高与基线的 SD 扩展字体
 };
 
 static bool ReadExact(FILE* fp, void* dst, size_t n) {
@@ -417,6 +419,21 @@ epdfont_t* epdfont_open(const char* path) {
     f->lv.dsc = f;
     f->lv.fallback = nullptr;
     f->lv.user_data = nullptr;
+
+    const char* name = std::strrchr(path, '/');
+    name = name ? name + 1 : path;
+    unsigned size = 0;
+    int end = 0;
+    if (bpp == 2 && std::sscanf(name, "misans_%u_2.ef%n", &size, &end) == 1 &&
+        end > 0 && name[end] == '\0' && size >= 20 && size <= 50 && size % 5 == 0) {
+        const lv_font_t* extension = fontpack_lv_font_sd(static_cast<uint16_t>(size), bpp);
+        if (extension) {
+            f->fallback = *extension;
+            f->fallback.line_height = f->lv.line_height;
+            f->fallback.base_line = f->lv.base_line;
+            f->lv.fallback = &f->fallback;
+        }
+    }
 
     ESP_LOGI(TAG, "bitmap font opened glyphs=%u intervals=%u bpp=%u line_h=%u",
              static_cast<unsigned>(hdr.glyph_count), static_cast<unsigned>(hdr.interval_count), bpp,

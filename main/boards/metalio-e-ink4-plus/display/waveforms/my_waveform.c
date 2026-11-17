@@ -253,16 +253,16 @@ static const EpdWaveform s_reveal_short_waveform = {
 };
 const EpdWaveform* my_waveform_wipe_reveal_short(void) { return s_reveal_short_data ? &s_reveal_short_waveform : NULL; }
 const EpdWaveform* my_waveform_wipe_gl(int profile) {
-    static uint8_t (*data[4])[16][4];
-    static EpdWaveformPhases phases[4];
-    static const EpdWaveformPhases* ranges[4];
-    static EpdWaveformMode modes[4];
-    static const EpdWaveformMode* mode_ptrs[4];
-    static EpdWaveform waves[4];
-    const int slot=profile>=0 && profile<4 ? profile : 0;
+    enum { PROFILE_COUNT = 3 }; // 清晰、均衡、快速
+    static uint8_t (*data[PROFILE_COUNT])[16][4];
+    static EpdWaveformPhases phases[PROFILE_COUNT];
+    static const EpdWaveformPhases* ranges[PROFILE_COUNT];
+    static EpdWaveformMode modes[PROFILE_COUNT];
+    static const EpdWaveformMode* mode_ptrs[PROFILE_COUNT];
+    static EpdWaveform waves[PROFILE_COUNT];
+    const int slot=profile>=0 && profile<PROFILE_COUNT ? profile : 0;
     if(waves[slot].num_modes) return &waves[slot];
-    const EpdWaveform* source=slot==3 ? my_waveform_gray8() :
-        (slot>=1 && my_waveform_fast() ? my_waveform_fast() : &MY_WAVEFORM);
+    const EpdWaveform* source=slot>=1 && my_waveform_fast() ? my_waveform_fast() : &MY_WAVEFORM;
     const int erase=slot>=2 ? 8 : MY_FULL_DU_FRAMES;
     const EpdWaveformPhases* gl=NULL;
     for(int m=0;m<source->num_modes;++m)

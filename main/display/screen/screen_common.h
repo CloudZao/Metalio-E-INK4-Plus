@@ -23,6 +23,11 @@ lv_coord_t ScreenStatusBarHeight();
 /** @brief 创建通用状态栏 */
 EpdStatusBar ScreenCreateStatusBar(lv_obj_t* scr);
 /**
+ * @brief 创建统一的顶部居中提示，由调用方管理内容和生命周期
+ * @note 须在 LVGL 线程或持有 UI 锁时调用
+ */
+lv_obj_t* ScreenCreateToast(lv_obj_t* parent, const char* text);
+/**
  * @brief 在顶部状态栏下方显示黑底白字圆角提示，3 秒后自动消失
  * @param text 提示文本，调用时复制；空指针或空字符串不显示
  * @note 须在 LVGL 线程或持有 UI 锁时调用；连续调用替换提示并重新计时
@@ -69,3 +74,6 @@ void ScreenPaintCoalesceReset(ScreenPaintCoalesce* c);
 
 /** @brief 应用网点背景样式；尺寸与位置由调用方布局管理，全局显示入口负责边界裁剪 */
 void ScreenApplyDotBackdrop(lv_obj_t* obj);
+
+/** @brief 应用公共弹窗卡片样式；尺寸与布局由调用方设置，padding 为卡片内边距 */
+void ScreenStyleDialogCard(lv_obj_t* card, lv_coord_t padding);

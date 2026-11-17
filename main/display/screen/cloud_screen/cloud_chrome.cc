@@ -32,8 +32,12 @@
 #include "haptic_feedback.h"
 #include "settings_storage_tab.h"
 #include "screen_common.h"
+#include "yunxin_binding/yunxin_binding.h"
+
+static bool ShowBindingPanel();
 
 void ScheduleUserCloudSync() {
+    if (ShowBindingPanel()) return;
     auto& st = Cloud_State();
     if (st.preview.open) {
         return;
@@ -68,6 +72,27 @@ void ShowAppBody(bool on) {
     ShowObj(st.chrome.list_body, on);
     ShowObj(st.chrome.footer, on);
     ShowObj(st.chrome.page_lbl, on);
+}
+
+static bool ShowBindingPanel() {
+    auto& st = Cloud_State();
+    if (st.data.mode != kCloudModeApp || !YunxinBinding::NeedsBinding()) return false;
+    ShowAppBody(false);
+    ShowObj(st.chrome.radio_status_lbl, false);
+    if (!st.chrome.binding_panel) {
+        st.chrome.binding_panel = YunxinBinding::CreatePanel(st.chrome.list_frame, []() {
+            auto& st = Cloud_State();
+            st.chrome.binding_panel = nullptr;
+            if (!ScreenAlive() || st.data.mode != kCloudModeApp) return;
+            ShowAppBody(true);
+            ScheduleUserCloudSync();
+        });
+        if (!st.chrome.binding_panel) {
+            if (!YunxinBinding::NeedsBinding()) return false;
+            ScreenShowToast(Lang::Strings::COMMON_MEMORY_RETRY);
+        }
+    }
+    return true;
 }
 
 void PaintApPanel(const ApTransferInfo& info) {
@@ -222,6 +247,7 @@ void ApplyRadioResult(void* /*user*/) {
         return;
     }
     SetRadioStatus(nullptr);
+    if (ShowBindingPanel()) return;
     ShowAppBody(true);
     if (!st.data.fetch_done && !st.data.loading && !st.data.waiting_net) {
         ScheduleUserCloudSync();
@@ -355,6 +381,10 @@ void EnterCloudMode(int mode) {
     if (prev == kCloudModeUsb && mode != kCloudModeUsb) {
         LeaveUsbMode();
     }
+    if (st.chrome.binding_panel) {
+        lv_obj_delete(st.chrome.binding_panel);
+        st.chrome.binding_panel = nullptr;
+    }
     st.data.mode = mode;
     ShowAppBody(false);
     ShowObj(st.chrome.ap_panel, false);
@@ -393,6 +423,7 @@ void EnterCloudMode(int mode) {
         return;
     }
     SetRadioStatus(Lang::Strings::CLOUD_CONNECTING_NET);
+    ShowBindingPanel();
     KickRadio(mode);
 }
 

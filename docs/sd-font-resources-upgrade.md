@@ -13,7 +13,7 @@
 
 | 分区 | Label | 容量（v1/16m） | 升级内容 |
 |------|--------|----------------|----------|
-| UI 字库 | `font_data` | 5MB @ `0xae4000` | `use_font/font.fontpack`（EFNT，含 Math） |
+| UI 字库 | `font_data` | 5MB @ `0xae4000` | `main/assets/fonts/font.fontpack`（EFNT，含 Math） |
 | 内置资源 | `resources` | 400KB @ `0xa80000` | 构建生成的 mmap_assets / SPIFFS 资源镜像 |
 
 - 支持 **分别升级**（两个文件）或 **合并成一个包** 一次升两边。
@@ -32,7 +32,7 @@
 | 项 | `font_data` | `resources` |
 |----|-------------|-------------|
 | 运行时加载 | `font_loader_init_flash` mmap | `mmap_assets_new("resources")` |
-| 出厂写入 | CMake → `use_font/font.fontpack` | `spiffs_create_partition_assets(xingzhi-assets)` |
+| 出厂写入 | CMake → `main/assets/fonts/font.fontpack` | `spiffs_create_partition_assets(main/assets/device)` |
 | SD→分区写入 | **未实现** | **未实现**（`Assets::Download` 写的是 `assets` 标签，v1 无此分区） |
 | 启动强校验 | magic/version 弱校验 | **编译期** `MMAP_RESOURCES_CHECKSUM` + `MMAP_RESOURCES_FILES`，失败 `ESP_ERROR_CHECK` 会 abort |
 
@@ -150,7 +150,7 @@ Offset  Size   Field
 
 ```bash
 ./pack_metalio_sys.py \
-  --font use_font/font.fontpack \
+  --font main/assets/fonts/font.fontpack \
   --resources build/.../resources.bin \
   --min-app 2.0.55 \
   -o metalio_sys.pkg
@@ -165,7 +165,7 @@ Offset  Size   Field
 ### 策略 A：版本绑定（实现简单）
 
 - 包内 `min_app_version` / 资源 `build_id` 与固件一致才允许写。  
-- 改 `xingzhi-assets` 必须发 **App OTA + resources 包**（或整包）。  
+- 改 `main/assets/device/` 必须发 **App OTA + resources 包**（或整包）。
 - 启动仍可用编译期 `MMAP_RESOURCES_CHECKSUM`。
 
 ### 策略 B：放宽启动校验（用户体验更好）
@@ -220,7 +220,7 @@ Offset  Size   Field
 
 1. SD 路径 + `font.fontpack` 校验写入 `font_data`。  
 2. 设置页入口 + 进度 + 重启。  
-3. 文档：如何从仓库拷贝 `use_font/font.fontpack` 到 SD。
+3. 文档：如何从仓库拷贝 `main/assets/fonts/font.fontpack` 到 SD。
 
 ### P1（合并包 + 资源）
 

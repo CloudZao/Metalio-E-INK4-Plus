@@ -127,6 +127,7 @@ struct UiState {
         lv_obj_t* filter_lbls[kFilterTabCount] = {};
         lv_obj_t* header_row = nullptr;
         lv_obj_t* list_frame = nullptr;
+        lv_obj_t* binding_panel = nullptr; // App 推送内容区的扫码绑定面板
         lv_obj_t* section_title = nullptr;
         lv_obj_t* status_lbl = nullptr;
         lv_obj_t* wifi_panel = nullptr; // WIFI 列表、密码与连接信息共用内容区

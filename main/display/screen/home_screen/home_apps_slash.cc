@@ -189,7 +189,7 @@
         }
         lv_obj_set_style_pad_top(cell, HOME_SLASH_PAD_V, 0);
         lv_obj_set_style_pad_bottom(cell, HOME_SLASH_PAD_V, 0);
-        if (left && std::strcmp(entry.name(), "workbuddy") == 0) {
+        if (left && std::strcmp(Home_AppLabel(entry), "workbuddy") == 0) {
             lv_obj_set_style_pad_left(cell, HOME_SLASH_PAD_OUTER - UiSx(12), 0);
         }
         lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
@@ -204,14 +204,14 @@
 
         auto make_icon = [&]() {
             lv_obj_t *icon = lv_image_create(cell);
-            lv_image_set_src(icon, HomeIconSource(entry.icon_path));
+            lv_image_set_src(icon, Home_AppIcon(entry));
             lv_obj_set_style_image_recolor(icon, fg, 0);
             lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
             lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
         };
         auto make_name = [&]() {
             lv_obj_t *name = lv_label_create(cell);
-            lv_label_set_text(name, entry.name());
+            lv_label_set_text(name, Home_AppLabel(entry));
             lv_label_set_long_mode(name, LV_LABEL_LONG_CLIP);
             const lv_font_t *name_font = fontpack_lv_font_get(30, 2);
             if (name_font == nullptr)

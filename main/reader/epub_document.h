@@ -29,7 +29,8 @@ class EpubDocument {
 public:
     EpubDocument() = default;
 
-    bool Open(const char* path);
+    /** @brief 打开 EPUB；仅提取封面时可跳过章节目录解析 */
+    bool Open(const char* path, bool load_toc = true);
     void Close();
 
     bool IsOpen() const { return zip_.IsOpen(); }
@@ -79,8 +80,8 @@ public:
                               const std::atomic<bool>* abort = nullptr);
 
 private:
-    bool ParseContainer();
-    bool ParseOpf(const std::string& opf_path);
+    bool ParseContainer(bool load_toc);
+    bool ParseOpf(const std::string& opf_path, bool load_toc);
     bool ParseNavigation(const std::string& href, bool ncx);
     static std::string DirOf(const std::string& path);
 

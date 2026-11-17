@@ -65,14 +65,6 @@ void RenderReadingHome() {
         lv_obj_add_flag(st.shelf.list_footer, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if (st.shelf.books.empty()) {
-        char tip[160];
-        std::snprintf(tip, sizeof(tip), Lang::Strings::BOOK_EMPTY_HOME_FMT,
-                      SdUserPath(reader::kDefaultBooksDir));
-        Book_ShowMessage(st.shelf.list_body, tip, Book_ListFont());
-        return;
-    }
-
     const HomeStats stats = CollectHomeStats(st.shelf.books);
     const lv_coord_t content_w = Book_ContentWidth();
 

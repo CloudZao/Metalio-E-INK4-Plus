@@ -114,7 +114,7 @@ a2ui_handle_json(json);  /* under LVGL lock */
 | 源文件 | `tools/ttf-fonts/LatinModernMath/latinmodern-math.otf` |
 | fontpack 字号 | **18 / 28 / 36 @ 2bpp**（脚本 / 正文 / 展示；与 UI 的 25/30 错开） |
 | 生产脚本 | `tools/fontpack/build_misans_mixed.sh`（汉字 → Emoji → Math） |
-| 烧录默认 | `use_font/font.fontpack`（`idf.py flash` / `merge_firmware.sh`） |
+| 烧录默认 | `main/assets/fonts/font.fontpack`（`idf.py flash` / `tools/firmware/merge_firmware.sh`） |
 
 仅合并数学字形（已有汉字+Emoji 包时）：
 
@@ -124,7 +124,7 @@ cd tools/fontpack
   --base fonts/MiSans-Mixed/fonts_misans_25_30.fontpack \
   --math-ttf ../ttf-fonts/LatinModernMath/latinmodern-math.otf \
   -o fonts/MiSans-Mixed/fonts_misans_25_30.fontpack --verify
-cp -f fonts/MiSans-Mixed/fonts_misans_25_30.fontpack ../../use_font/font.fontpack
+cp -f fonts/MiSans-Mixed/fonts_misans_25_30.fontpack ../../main/assets/fonts/font.fontpack
 ```
 
 **注意**：设备必须刷过含 Math 的 fontpack，否则公式缺字/回退难看。
@@ -136,7 +136,7 @@ cp -f fonts/MiSans-Mixed/fonts_misans_25_30.fontpack ../../use_font/font.fontpac
 | [`examples/math_formulas.json`](examples/math_formulas.json) | 斯特林 / 求根 / 质能 / 积分 / 大括号等联调 JSON |
 | [`examples/math_generate_dialog.json`](examples/math_generate_dialog.json) | **模拟对话**：用户「生成一个正态分布概率密度公式」→ 助手回复杂 Math（分式/根号/希腊字母/复合指数） |
 
-下发方式：百问会话 `updateComponents`，或直接 `a2ui_handle_json(...)`（须持 LVGL lock；需已刷含 Latin Modern Math 的 `use_font/font.fontpack`）。
+下发方式：百问会话 `updateComponents`，或直接 `a2ui_handle_json(...)`（须持 LVGL lock；需已刷含 Latin Modern Math 的 `main/assets/fonts/font.fontpack`）。
 
 #### 对话生成公式（服务端 / 模型约定）
 

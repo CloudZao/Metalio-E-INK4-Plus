@@ -63,6 +63,7 @@ struct FileEntry {
     char name[SD_FILE_NAME_CAPACITY] = {};
     char title[SD_FILE_NAME_CAPACITY] = {};
     char path[SD_FILE_PATH_CAPACITY] = {};
+    int64_t mtime = 0; // 文件版本用于缩略图缓存失效
     size_t size_bytes = 0;
     reader::ImageDecodeError thumb_error = reader::ImageDecodeError::kNone; // 缩略图最近一次解码结果
 };
@@ -119,10 +120,15 @@ struct WallpaperUiState {
     ScreenPaintCoalesce wallpaper_paint{};
 
     struct List {
+        int loaded_page = -1; // 当前页数据所属页码
+        bool loading_shown = false; // 同一次等待只刷新一次提示
+        int64_t requested_us = 0; // 短缓存交接期间保留原页面
+        bool loading = false; // 当前目录页加载中
+        bool failed = false; // 当前目录页加载失败
         int list_page = 0;
         int list_per_page = kGridCols * kGridRows;
         bool multi = false;
-        std::vector<uint8_t> selected;
+        std::vector<std::string> selected; // 已选壁纸文件名，跨页保留
         int64_t suppress_click_until_us = 0;
         int suppress_click_idx = -1;
         lv_coord_t body_h = 0;
@@ -148,6 +154,7 @@ struct WallpaperUiState {
         std::atomic<bool> thumb_busy{false};
         std::atomic<bool> enable_busy{false};
         std::atomic<bool> delete_busy{false};
+        std::atomic<bool> delete_cancel{false}; // 在当前壁纸清理完成后停止批量移除
         std::atomic<bool> save_busy{false};
         TaskHandle_t load_task = nullptr;
         TaskHandle_t thumb_task = nullptr;

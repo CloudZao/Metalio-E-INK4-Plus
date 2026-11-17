@@ -1,4 +1,6 @@
 #include "sd_access.h"
+#include "sd_directory_page.h"
+#include "reader/list_thumbnail_cache.h"
 #include "sd_paths.h"
 
 #include <mutex>
@@ -19,6 +21,7 @@ std::mutex s_mu;
 bool s_quiescing = false;
 unsigned s_pending = 0;
 bool s_mounted = false;
+unsigned s_mount_generation = 0; // 每次更新挂载状态时作废旧介质缓存
 TaskHandle_t s_transition_owner = nullptr;
 unsigned s_transition_depth = 0;
 struct PermitSlot {
@@ -93,8 +96,12 @@ void RemovePermit(bool transaction = false) {
 
 namespace sd_access {
 void Quiesce() {
-    std::lock_guard<std::mutex> lock(s_mu);
-    s_quiescing = true;
+    {
+        std::lock_guard<std::mutex> lock(s_mu);
+        s_quiescing = true;
+    }
+    SdCancelDirectoryPages();
+    reader::ClearListThumbnailCache();
 }
 void Resume() {
     std::lock_guard<std::mutex> lock(s_mu);
@@ -115,8 +122,15 @@ unsigned Pending() {
 void SetMounted(bool mounted) {
     std::lock_guard<std::mutex> lock(s_mu);
     s_mounted = mounted;
+    ++s_mount_generation;
+}
+unsigned MountGeneration() {
+    std::lock_guard<std::mutex> lock(s_mu);
+    return s_mount_generation;
 }
 Transition::Transition(unsigned timeout_ms) {
+    SdCancelDirectoryPages();
+    reader::ClearListThumbnailCache();
     const auto task = xTaskGetCurrentTaskHandle();
     const auto start = xTaskGetTickCount();
     const auto timeout = pdMS_TO_TICKS(timeout_ms);

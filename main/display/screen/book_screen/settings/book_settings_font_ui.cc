@@ -20,7 +20,7 @@ void SettingsSheetPopulateFont(BookUiState& st, lv_obj_t* parent) {
     const int font_i = CurrentFontIndex();
     const int font_n = static_cast<int>(st.settings.font_entries.size());
     const int font_pages = FontListPageCount();
-    const int font_page_start = st.settings.font_list_page * kFontListPageSize;
+    const int font_page_start = 0;
 
 // 字体：标题行（标题 + 导入 TTF）；多选时标题下多出操作行；底栏 ▲▼ 始终可翻页
 lv_obj_t* font_title_row = lv_obj_create(parent);

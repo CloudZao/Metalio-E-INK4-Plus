@@ -43,7 +43,7 @@ std::mutex s_mu;
 bool s_hydrated = false;
 /** NoteOpenedBook / RemoveBook 已改内存时，Hydrate 不得用 NVS 覆盖 MRU */
 bool s_recent_dirty = false;
-/** StoreAggregateStats 已写入内存时，Hydrate 不得用旧 NVS 覆盖聚合 */
+/** 统计已增量更新时，Hydrate 不得用旧 NVS 覆盖内存摘要 */
 bool s_agg_dirty = false;
 std::string s_recent_rel[kRecentMax];
 AggregateStats s_agg;
@@ -67,7 +67,6 @@ std::atomic<bool> s_persist_recent_pending{false};
 std::atomic<bool> s_persist_agg_pending{false};
 std::atomic<bool> s_persist_task_running{false};
 /** 删书等变更代数（仅 RemoveBook 递增） */
-std::atomic<uint32_t> s_mutation_epoch{0};
 
 const char* BooksRoot() {
     return kDefaultBooksDir;
@@ -140,13 +139,6 @@ std::string RelToAbs(const std::string& rel) {
     return abs;
 }
 
-bool FileExists(const char* path) {
-    if (path == nullptr || path[0] == '\0') {
-        return false;
-    }
-    struct stat st {};
-    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
-}
 
 void CompactRecentLocked() {
     size_t w = 0;
@@ -345,7 +337,7 @@ void HydrateFromNvs() {
 void NoteOpenedBook(const char* book_abs_path) {
     std::string rel;
     if (!AbsToRel(book_abs_path, rel)) {
-        ESP_LOGW(TAG, "note recent skip (bad path): %s", book_abs_path ? book_abs_path : "(null)");
+        ESP_LOGW(TAG, "recent record rejected: invalid book path");
         return;
     }
 
@@ -374,7 +366,7 @@ void NoteOpenedBook(const char* book_abs_path) {
         }
         s_recent_dirty = true;
         changed = true;
-        ESP_LOGI(TAG, "recent MRU head=%s n=%u", s_recent_rel[0].c_str(), static_cast<unsigned>(w));
+        ESP_LOGI(TAG, "recent records updated count=%u", static_cast<unsigned>(w));
     }
     if (changed) {
         SchedulePersist(true, false);
@@ -388,7 +380,6 @@ void RemoveBook(const char* book_abs_path) {
     }
 
     // 无论是否在 MRU：删书都推进代数，供 sync 检测 Peek 窗口内库变更
-    s_mutation_epoch.fetch_add(1, std::memory_order_acq_rel);
 
     bool changed = false;
     {
@@ -402,7 +393,7 @@ void RemoveBook(const char* book_abs_path) {
         if (changed) {
             CompactRecentLocked();
             s_recent_dirty = true;
-            ESP_LOGI(TAG, "recent pruned %s", rel.c_str());
+            ESP_LOGI(TAG, "recent record removed");
         }
     }
     if (changed) {
@@ -454,48 +445,11 @@ std::string LoadLatestAbsPath() {
 
 size_t LoadRecentAbsPaths(std::vector<std::string>& out) {
     out.clear();
-
-    std::string rels[kRecentMax];
-    {
-        std::lock_guard<std::mutex> lock(s_mu);
-        // UI 路径：禁止 NVS；未 hydrate 则空列表
-        for (size_t i = 0; i < kRecentMax; ++i) {
-            rels[i] = s_recent_rel[i];
-        }
-    }
-
-    bool drop[kRecentMax] = {};
-    bool any_drop = false;
-    for (size_t i = 0; i < kRecentMax; ++i) {
-        if (rels[i].empty()) {
-            continue;
-        }
-        const std::string abs = RelToAbs(rels[i]);
-        if (abs.empty() || !FileExists(abs.c_str())) {
-            ESP_LOGW(TAG, "recent stale, drop %s", rels[i].c_str());
-            drop[i] = true;
-            any_drop = true;
-            continue;
-        }
-        out.push_back(abs);
-    }
-
-    if (any_drop) {
-        {
-            std::lock_guard<std::mutex> lock(s_mu);
-            for (size_t i = 0; i < kRecentMax; ++i) {
-                if (drop[i] && !rels[i].empty()) {
-                    for (size_t j = 0; j < kRecentMax; ++j) {
-                        if (s_recent_rel[j] == rels[i]) {
-                            s_recent_rel[j].clear();
-                        }
-                    }
-                }
-            }
-            CompactRecentLocked();
-            s_recent_dirty = true;
-        }
-        SchedulePersist(true, false);
+    std::lock_guard<std::mutex> lock(s_mu);
+    for (const auto& relative : s_recent_rel) {
+        if (relative.empty()) continue;
+        const std::string absolute = RelToAbs(relative);
+        if (!absolute.empty()) out.push_back(absolute);
     }
     return out.size();
 }
@@ -506,20 +460,16 @@ AggregateStats LoadAggregateStats() {
     return s_agg;
 }
 
-void StoreAggregateStats(uint32_t total_seconds, int finished_count) {
-    if (finished_count < 0) {
-        finished_count = 0;
-    }
+void UpdateAggregateProgress(uint32_t old_seconds, bool old_finished, uint32_t seconds, bool finished) {
+    if (old_seconds == seconds && old_finished == finished) return;
     {
         std::lock_guard<std::mutex> lock(s_mu);
+        const int64_t total = int64_t(s_agg.total_seconds) + int64_t(seconds) - old_seconds;
+        s_agg.total_seconds = static_cast<uint32_t>(std::max<int64_t>(0, std::min<int64_t>(UINT32_MAX, total)));
+        s_agg.finished_count = std::max(0, s_agg.finished_count + int(finished) - int(old_finished));
         s_agg.valid = true;
-        s_agg.total_seconds = total_seconds;
-        s_agg.finished_count = finished_count;
-        s_agg_dirty = true;  // 内存已是权威，避免之后 Hydrate 用旧 NVS 覆盖
-        ESP_LOGI(TAG, "aggregate stored sec=%u finished=%d", static_cast<unsigned>(total_seconds),
-                 finished_count);
+        s_agg_dirty = true;
     }
-    // 开机 sync 在 DRAM 栈：可同步写；统一走异步亦安全
     SchedulePersist(false, true);
 }
 
@@ -570,10 +520,6 @@ WeekStats LoadWeekStats() {
         result.total_seconds += result.seconds[i];
     }
     return result;
-}
-
-uint32_t MutationEpoch() {
-    return s_mutation_epoch.load(std::memory_order_acquire);
 }
 
 }  // namespace book_home_snapshot

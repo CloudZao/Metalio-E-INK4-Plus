@@ -21,6 +21,12 @@ void RefreshShelfViewToggleUi();
 void UpdateShelfTitleLabel();
 /** @brief 重新加载当前目录条目 */
 void ReloadShelfDirListing();
+/** @brief 确保当前目录页已请求，未就绪时返回 false */
+bool EnsureShelfDirectoryPage();
+/** @brief 返回当前目录已知页数 */
+int ShelfDirectoryPages();
+/** @brief 释放目录分页任务和句柄 */
+void CancelShelfDirectory();
 /** @brief 扫盘 + 刷列表；须在 LVGL/异步任务跑，禁止 touch_feed 同步调用 */
 void ShelfReloadAndRenderAsync(void* user_data);
 /** @brief 按视图模式应用列表分页大小 */
@@ -38,15 +44,15 @@ void OnShelfViewListClicked(lv_event_t* e);
 /** @brief 渲染书架列表视图当前页 */
 void RenderBookshelfListPage();
 
-/** @brief 删除书库中的单本书及进度旁路 */
-bool DeleteLibraryBookFile(const reader::BookInfo& info, std::string& err_out);
-/** @brief 递归删除书库文件夹 */
-bool DeleteLibraryFolder(const std::string& dir, std::string& err_out);
+/** @brief 后台删除当前已选书籍和文件夹，不阻塞 UI */
+void StartShelfDelete();
+/** @brief 请求在当前单书清理完成后停止删除 */
+void CancelShelfDelete();
+/** @brief 查询书架删除任务是否尚未完成 */
+bool ShelfDeleteBusy();
 
 /** @brief 请求刷书架勾选 */
 void RequestShelfCheckMarksPaint();
-/** @brief 同步书架多选集合容量 */
-void SyncShelfSelectedSize();
 /** @brief 书架已选数量 */
 int ShelfSelectedCount();
 /** @brief 书架项是否已选 */
@@ -73,3 +79,6 @@ void OnShelfMultiRemove(lv_event_t* e);
 void OnBookRowLongPressed(lv_event_t* e);
 /** @brief 书架行点击 */
 void OnBookRowClicked(lv_event_t* e);
+
+/** @brief 将当前页后台读取的文件属性和进度更新到对应控件 */
+void ApplyShelfEntryMetadata(const reader::BookInfo& info, lv_obj_t* host, bool progress_ready);

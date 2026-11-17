@@ -252,3 +252,43 @@ INT disable RX:   A5 01 06 83 00 02 12 00 03 3D
 当前 `SimpleUart` 可以收发原始字节，但上层仅有 AT 文本解析，未见此协议的帧解析、CRC、序号匹配或 EVENT 分发。接入前应在共享 UART 接收层分流文本与二进制，并处理并发事件、超时及残帧；不能把二进制直接交给按换行解析的页面处理器。
 
 SimpleUart transports raw bytes, but the current upper layer has no GPIO framing, CRC, sequence matching or event dispatch. Integration requires shared UART demultiplexing plus event, timeout and incomplete-frame handling before binary data reaches the line-oriented page parser.
+
+## 8. 自定义键值持久化 / Persistent custom key-value storage
+
+需要 **BH1098 蓝牙固件 1.08 及以上**。本接口以数字编号 X 作为键、用户数据 Y 作为值；不是主控 NVS，也不写入 eFuse。旧版蓝牙固件不支持本节的用户数据存储命令。
+
+Requires **BH1098 Bluetooth firmware 1.08 or later**. Numeric index X is the key and user data Y is the value. This is module storage, separate from host NVS and eFuse. Earlier Bluetooth firmware does not support these user-data commands.
+
+```text
+AT+WDATA=X,Y\r\n
+  AT+WDATA=OK
+AT+RDATA=X\r\n
+  AT+RDATA=X,Y
+AT+FLUSHDATA=1\r\n
+  AT+FLUSHDATA=OK
+```
+
+X 为 0～999，Y 不超过 200 字节。断电前必须执行 FLUSHDATA 并确认成功，WDATA 应答不等于已持久保存。协议未提供独立的修复、删除或恢复默认命令，也未定义空记录、完整错误应答、Flash 原子性和寿命。
+
+X ranges from 0 to 999; Y is at most 200 bytes. Confirm FLUSHDATA before power removal; WDATA acknowledgement alone does not establish persistence. Dedicated repair, deletion, factory reset, empty-record behavior, full error responses, Flash atomicity and endurance are unspecified.
+
+设置、持久保存与读取示例（编号 123 仅为示例，使用前确认未被其他功能占用）：
+
+Example write, persistent save and read using index 123; confirm the index is unused before assigning it:
+
+```text
+AT+WDATA=123,factory_value\r\n
+  AT+WDATA=OK
+AT+FLUSHDATA=1\r\n
+  AT+FLUSHDATA=OK
+AT+RDATA=123\r\n
+  AT+RDATA=123,factory_value
+```
+
+修改同一键时重新执行 WDATA 和 FLUSHDATA，再通过 RDATA 核对。读取不会保存待写数据；验证断电持久性需要重新上电后再次读取。
+
+To update a key, repeat WDATA and FLUSHDATA, then verify with RDATA. Reading does not flush pending writes. Power-cycle and read again to verify persistence.
+
+470 使用编号 470 保存屏幕校准记录，依次写入、刷 Flash、回读比对；持续观察者处理应答，多指令事务与模式命令、共享电源复位共用串口锁。数据格式及工具见 [VCOM 产测说明](../tools/vcom/README_zn.md)。
+
+The 470 firmware reserves slot 470 for panel calibration, using write, Flash flush and readback verification. A persistent observer handles responses; transactions, mode commands and shared-power reset share the UART mutex. See the [VCOM factory guide](../tools/vcom/README.md) for storage and tool details.

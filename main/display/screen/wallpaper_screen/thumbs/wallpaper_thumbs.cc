@@ -16,6 +16,7 @@
 #include <freertos/idf_additions.h>
 
 #include "reader/reader.h"
+#include "reader/list_thumbnail_cache.h"
 #include "screen_common.h"
 
 namespace {
@@ -23,6 +24,7 @@ namespace {
 struct ThumbWorkItem {
     int index = -1; // 文件列表索引
     char path[SD_FILE_PATH_CAPACITY] = {}; // 图片文件路径
+    int64_t mtime = 0; // 文件版本
     size_t bytes = 0; // 列表收集的文件长度
     uint64_t cost = 0; // 仅影响后台处理顺序的预计成本
 };
@@ -57,7 +59,7 @@ void ApplyThumbOne(void* p) {
         !Wallpaper_State().decode_paused.load() &&
         msg->generation == Wallpaper_State().decode_generation.load();
     const int per_page = Wallpaper_State().list.list_per_page;
-    const int start = Wallpaper_State().list.list_page * per_page;
+    const int start = 0;
     const bool slot_ok = alive && msg->img != nullptr && msg->index >= 0 &&
                          msg->index >= start - per_page && msg->index < start + 2 * per_page &&
                          msg->index < static_cast<int>(Wallpaper_State().list.thumbs.size()) &&
@@ -109,9 +111,8 @@ void RunThumbWork(ThumbFillWork* work) {
         const bool ok = reader::DecodeImageFileToL8(item.path, work->decode_w, work->decode_h,
                                                    *img, cancelled, &cancel, &error) && !img->empty();
         if (cancelled(&cancel)) { delete img; break; }
-        if (!ok) {
-            img->Reset();
-        }
+        if (!ok) img->Reset();
+        else reader::CacheListThumbnail(item.path, work->decode_w, work->decode_h, item.bytes, item.mtime, *img);
         if (Wallpaper_State().epoch != work->epoch) {
             delete img;
             break;
@@ -186,7 +187,7 @@ void CancelThumbFill() {
 }
 
 void ScheduleThumbFill() try {
-    if (Wallpaper_State().decode_paused.load()) return;
+    if (Wallpaper_State().decode_paused.load() || Wallpaper_State().list.loading) return;
     if (!Wallpaper_State().screen_alive || Wallpaper_State().list.files.empty()) {
         CancelThumbFill();
         return;
@@ -195,7 +196,7 @@ void ScheduleThumbFill() try {
         return;
     }
     Wallpaper_ClampListPage();
-    const int start = Wallpaper_State().list.list_page * Wallpaper_State().list.list_per_page;
+    const int start = 0;
     const int end = std::min(start + Wallpaper_State().list.list_per_page,
                              static_cast<int>(Wallpaper_State().list.files.size()));
     auto work = std::make_unique<ThumbFillWork>();
@@ -214,6 +215,7 @@ void ScheduleThumbFill() try {
         ThumbWorkItem item;
         item.index = i;
         item.bytes = Wallpaper_State().list.files[static_cast<size_t>(i)].size_bytes;
+        item.mtime = Wallpaper_State().list.files[i].mtime;
         std::snprintf(item.path, sizeof(item.path), "%s", Wallpaper_State().list.files[static_cast<size_t>(i)].path);
         work->items.push_back(item);
     }

@@ -179,7 +179,9 @@ void OnSheetFontPagePrev(lv_event_t* e) {
     if (st.settings.font_list_page <= 0) {
         return;
     }
+    if (st.settings.font_scan_loading) return;
     st.settings.font_list_page -= 1;
+    StartReadFontScan();
     RequestSettingsSheetPaint();
 }
 
@@ -189,7 +191,9 @@ void OnSheetFontPageNext(lv_event_t* e) {
     if (st.settings.font_list_page + 1 >= FontListPageCount()) {
         return;
     }
+    if (st.settings.font_scan_loading) return;
     st.settings.font_list_page += 1;
+    StartReadFontScan();
     RequestSettingsSheetPaint();
 }
 
@@ -352,7 +356,7 @@ void RebuildSettingsSheet() {
 namespace {
 constexpr int kDurationTab = 4;
 constexpr int kReadingCardSideInset = 4; // 主卡片左右内收的物理像素
-constexpr int kReadingCardBorderWidth = 2; // 顶部、两侧及导航分隔线宽度
+constexpr int kReadingCardBorderWidth = 2; // 顶部及导航横向分隔线宽度
 struct SheetBinding { lv_obj_t* button;lv_event_cb_t event;int value;bool mask; };
 static std::vector<SheetBinding> s_sheet_bindings;
 static int s_toc_count = 0;
@@ -482,11 +486,23 @@ static void SheetTabEvent(lv_event_t* e) {
 }
 static void SheetClose(lv_event_t* e) {
     lv_event_stop_bubbling(e);
-    BookLvAsync(AsyncHideReadChrome);
+    const auto& st = Book_State();
+    if (st.ttf.ttf_multi) {
+        OnTtfMultiCancel(e);
+    } else if (st.settings.font_multi) {
+        ExitFontMultiMode(true);
+    } else if (st.settings.bookmark_multi) {
+        ResetBookmarkSelection();
+        RequestSettingsSheetPaint();
+    } else {
+        BookLvAsync(AsyncHideReadChrome);
+    }
 }
 static void SheetScrollBegin(lv_event_t* e) {
     auto& settings = Book_State().settings;
-    if (lv_event_get_target(e) != settings.reader_sheet_scroll) return;
+    if (lv_event_get_target(e) != settings.reader_sheet_scroll) {
+        return;
+    }
     settings.reader_scroll_last = lv_obj_get_scroll_y(settings.reader_sheet_scroll);
     settings.reader_sheet_scrolling = true;
     EpdSetUiScrolling(true);
@@ -632,9 +648,11 @@ static lv_obj_t* SettingsRow(lv_obj_t* parent, const char* title, int count, con
     const int w = lv_obj_get_content_width(parent);
     const int h = row_height > 0 ? row_height : UiSy(60);
     auto* row = SheetBox(parent, w, h);
-    auto* label = SheetLabel(row, title);
     const int start = column > 0 ? column : SettingsColumn(parent, {title});
-    PlaceSettingsCaption(label, start);
+    if (title && *title) {
+        auto* label = SheetLabel(row, title);
+        PlaceSettingsCaption(label, start);
+    }
     const int gap = UiSx(8);
     const int columns = slots > count ? slots : count;
     const int bw = std::max<int>(1, (static_cast<int>(w) - start - static_cast<int>(gap) * (columns - 1)) / columns);
@@ -650,6 +668,7 @@ enum SettingsPage { kSettingsHome, kSettingsRotation, kSettingsFooter, kSettings
     kSettingsWriting, kSettingsAntialias, kSettingsSpacing, kSettingsUnderline, kSettingsTurning };
 constexpr int kAdjustFont = 100;
 constexpr int kAdjustAutoTurn = 101;
+static BookTextOption s_margin_option = BookTextOption::MarginTop; // 当前选中的阅读边距
 struct NumericRow {
     int option = 0, value = 0, original = 0, minimum = 0, maximum = 0, step = 1; // 手势内的参数快照
     lv_obj_t* label = nullptr; // 数值显示，重建前清理
@@ -704,10 +723,18 @@ static const char* SettingsPageTitle(int page) {
 }
 static int TextValue(BookTextOption option) {
     const int value = BookReaderPrefsTextValue(option);
-    if (value >= 0 || (option != BookTextOption::ParaGap && option != BookTextOption::LineGap && option != BookTextOption::Margin)) return value;
-    if (option == BookTextOption::ParaGap) return BookReaderPrefsParaGap();
-    if (option == BookTextOption::Margin) return BookReaderPrefsMarginLeft();
-    return (BookFont()->line_height * BookReaderPrefsLineSpacingPercent() + 50) / 100;
+    if (value >= 0) return value;
+    switch (option) {
+        case BookTextOption::ParaGap: return BookReaderPrefsParaGap();
+        case BookTextOption::LineGap:
+            return (BookFont()->line_height * BookReaderPrefsLineSpacingPercent() + 50) / 100;
+        case BookTextOption::Margin: return BookReaderPrefsMarginLeft();
+        case BookTextOption::MarginTop: return BookReaderPrefsMarginTop();
+        case BookTextOption::MarginBottom: return BookReaderPrefsMarginBottom();
+        case BookTextOption::MarginLeft: return BookReaderPrefsMarginLeft();
+        case BookTextOption::MarginRight: return BookReaderPrefsMarginRight();
+        default: return value;
+    }
 }
 static void RedrawReadingText() {
     if (DeferComicTextSetting()) return;
@@ -759,14 +786,16 @@ static void AddNumericRow(lv_obj_t* parent, const char* title, int option, int v
                            int minimum, int maximum, int step, bool enabled = true, int column = 0, int row_height = 0) {
     lv_obj_update_layout(parent);
     const int width = lv_obj_get_content_width(parent), height = row_height > 0 ? row_height : UiSy(60);
-    const int start = title && *title ? (column > 0 ? column : SettingsColumn(parent, {title})) : 0;
+    const int start = column > 0 ? column : (title && *title ? SettingsColumn(parent, {title}) : 0);
     const int gap = UiSx(8);
     const int value_width = std::max<int>(static_cast<int>(UiSx(88)),
         static_cast<int>(Book_MeasureTextWidth(Book_ItemFont(), "-00")) + static_cast<int>(Book_MeasureTextWidth(Book_ItemFont(), "px")) + static_cast<int>(UiSx(16)));
     const int button_width = std::max<int>(1, (static_cast<int>(width) - start - value_width - 2 * static_cast<int>(gap)) / 2);
     auto* row = SheetBox(parent, width, height);
-    auto* caption = SheetLabel(row, title);
-    if (start > 0) PlaceSettingsCaption(caption, start);
+    if (title && *title) {
+        auto* caption = SheetLabel(row, title);
+        if (start > 0) PlaceSettingsCaption(caption, start);
+    }
     const int index = static_cast<int>(s_numeric_rows.size());
     auto* dec = SheetButton(row, option == kAdjustFont ? Lang::Strings::BOOK_FONT_DECREASE : Lang::Strings::BOOK_DECREASE, button_width, UiSy(40), NumericEvent, -index - 1, false, UiSx(7));
     auto* val = SheetButton(row, "", value_width, UiSy(40), nullptr, 0, true, UiSx(7));
@@ -789,6 +818,14 @@ static void AddNumericRow(lv_obj_t* parent, const char* title, int option, int v
     }
     UpdateNumericBounds(s_numeric_rows.back());
 }
+static void OnMarginSide(lv_event_t* event) {
+    lv_event_stop_bubbling(event);
+    const auto option = static_cast<BookTextOption>(reinterpret_cast<intptr_t>(lv_event_get_user_data(event)));
+    if (option == s_margin_option) return;
+    s_margin_option = option;
+    RequestSettingsSheetPaint();
+}
+
 static void SettingsNavigate(lv_event_t* event) {
     lv_event_stop_bubbling(event);
     Book_State().settings.reader_settings_page = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(event)));
@@ -1024,12 +1061,22 @@ static void BuildSheetSettings(lv_obj_t* body) {
         const char* strengths[] = {BOOK_AA_LOW, BOOK_AA_MEDIUM, BOOK_AA_HIGH}; const int levels[] = {10, 11, 12};
         SettingsRow(body, BOOK_AA_STRENGTH, 3, strengths, TextChoice, levels, 10 + TextValue(BookTextOption::AaStrength), false, 0, column);
     } else if (page == kSettingsSpacing) {
-        const int row_height = LV_HOR_RES > LV_VER_RES ? std::min<int>(UiSy(52), lv_obj_get_content_height(body) / 5) : UiSy(60);
+        const int row_height = LV_HOR_RES > LV_VER_RES
+            ? std::max<int>(UiSy(40), std::min<int>(UiSy(52), lv_obj_get_content_height(body) / 6)) : UiSy(60);
         const int column = SettingsColumn(body, {BOOK_PARA_GAP_TITLE, BOOK_LETTER_GAP, BOOK_LINE_GAP, BOOK_MARGIN, BOOK_INDENT});
         AddNumericRow(body, BOOK_PARA_GAP_TITLE, static_cast<int>(BookTextOption::ParaGap), TextValue(BookTextOption::ParaGap), 0, 104, 2, true, column, row_height);
         AddNumericRow(body, BOOK_LETTER_GAP, static_cast<int>(BookTextOption::LetterGap), TextValue(BookTextOption::LetterGap), -2, 12, 1, true, column, row_height);
         AddNumericRow(body, BOOK_LINE_GAP, static_cast<int>(BookTextOption::LineGap), TextValue(BookTextOption::LineGap), 0, 48, 1, true, column, row_height);
-        AddNumericRow(body, BOOK_MARGIN, static_cast<int>(BookTextOption::Margin), TextValue(BookTextOption::Margin), 0, 64, 2, true, column, row_height);
+        const char* sides[] = {BOOK_MARGIN_TOP, BOOK_MARGIN_BOTTOM, BOOK_MARGIN_LEFT, BOOK_MARGIN_RIGHT};
+        const int options[] = {static_cast<int>(BookTextOption::MarginTop), static_cast<int>(BookTextOption::MarginBottom),
+                               static_cast<int>(BookTextOption::MarginLeft), static_cast<int>(BookTextOption::MarginRight)};
+        auto* margin = SheetBox(body, width, row_height * 2);
+        lv_obj_set_flex_flow(margin, LV_FLEX_FLOW_COLUMN);
+        auto* caption = SheetLabel(margin, BOOK_MARGIN);
+        lv_obj_add_flag(caption, LV_OBJ_FLAG_FLOATING);
+        PlaceSettingsCaption(caption, column);
+        SettingsRow(margin, "", 4, sides, OnMarginSide, options, static_cast<int>(s_margin_option), false, 0, column, row_height);
+        AddNumericRow(margin, "", static_cast<int>(s_margin_option), TextValue(s_margin_option), 0, 64, 2, true, column, row_height);
         const char* labels[] = {BOOK_TAP_ZONE_NONE, BOOK_INDENT_ONE, BOOK_INDENT_TWO, BOOK_INDENT_THREE}; const int values[] = {0, 1, 2, 3};
         SettingsRow(body, BOOK_INDENT, 4, labels, TextChoice, values, TextValue(BookTextOption::Indent), false, 0, column, row_height);
     } else if (page == kSettingsUnderline) {
@@ -1067,7 +1114,7 @@ static int SettingsBodyHeight(int page) {
             content = row * (BookReaderPrefsWritingMode() ? 2 : 1);
             break;
         case kSettingsSpacing:
-            content = (LV_HOR_RES > LV_VER_RES ? UiSy(52) : row) * 5;
+            content = (LV_HOR_RES > LV_VER_RES ? UiSy(52) : row) * 6;
             break;
         case kSettingsTurning:
             content = row * 3;
@@ -1113,6 +1160,16 @@ struct SheetPageGesture {
 };
 static SheetPageGesture s_font_pages, s_toc_pages;
 static void ChangeSheetListPage(SheetPageGesture& pages, int direction) {
+    if (&pages == &s_font_pages) {
+        auto& settings = Book_State().settings;
+        if (settings.font_scan_loading) return;
+        const int page = settings.font_list_page + direction;
+        if (page < 0 || page >= FontListPageCount()) return;
+        settings.font_list_page = page;
+        StartReadFontScan();
+        RequestSettingsSheetPaint();
+        return;
+    }
     if (!pages.list || pages.pages <= 1) return;
     const int current = lv_obj_get_scroll_y(pages.list) / pages.stride;
     const int target = std::clamp(current + direction, 0, pages.pages - 1);
@@ -1133,14 +1190,16 @@ static void SheetListGesture(lv_event_t* event) {
 }
 static void DrawSheetPageIndicator(lv_event_t* event) {
     const auto* pages = static_cast<const SheetPageGesture*>(lv_event_get_user_data(event));
-    if (!pages || pages->pages <= 1) return;
+    if (!pages) return;
+    const int count = pages == &s_font_pages ? FontListPageCount() : pages->pages;
+    if (count <= 1) return;
     lv_area_t area;
     lv_obj_get_coords(pages->list, &area);
     const int inset = UiSy(4);
     const int track = std::max<int>(1, lv_area_get_height(&area) - 2 * inset);
-    const int length = std::min(track, std::max<int>(UiSy(12), track / pages->pages));
-    const int page = std::clamp<int>(lv_obj_get_scroll_y(pages->list) / pages->stride, 0, pages->pages - 1);
-    area.y1 += inset + (track - length) * page / (pages->pages - 1);
+    const int length = std::min(track, std::max<int>(UiSy(12), track / count));
+    const int page = pages == &s_font_pages ? Book_State().settings.font_list_page : std::clamp<int>(lv_obj_get_scroll_y(pages->list) / pages->stride, 0, count - 1);
+    area.y1 += inset + (track - length) * page / (count - 1);
     area.y2 = area.y1 + length - 1;
     area.x2 -= 1;
     area.x1 = area.x2 - UiSx(5) + 1;
@@ -1255,18 +1314,19 @@ static void BuildSheetFonts(lv_obj_t* body) {
     lv_obj_set_style_clip_corner(frame, true, 0);
     auto* list = SheetBox(frame, width - 4, height - 8);
     lv_obj_set_style_pad_all(list, gap, 0);
-    ConfigureSheetScroll(list);
+    Book_DisableScroll(list);
     lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
     lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     lv_obj_update_layout(list);
     const int card_w = (lv_obj_get_content_width(list) - 2 * gap) / 3;
     const int card_h = std::max<int>(UiSy(28), (lv_obj_get_content_height(list) - 2 * gap) / 3);
-    if (st.settings.font_scan_loading || st.settings.font_scan_failed || st.settings.font_entries.empty()) {
+    const bool show_loading = st.settings.font_scan_loading &&
+        (st.settings.font_entries.empty() || esp_timer_get_time() - st.settings.font_requested_us >= 180000);
+    if (show_loading || st.settings.font_scan_failed || st.settings.font_entries.empty()) {
         Book_DisableScroll(list);
         Book_ShowMessage(list, st.settings.font_scan_loading ? Lang::Strings::BOOK_FONT_LOADING :
-            st.settings.font_scan_failed ? Lang::Strings::BOOK_FONT_REOPEN : Lang::Strings::BOOK_FONT_EMPTY, Book_ItemFont());
+            st.settings.font_scan_failed ? Lang::Strings::DIRECTORY_READ_FAILED : Lang::Strings::BOOK_FONT_EMPTY, Book_ItemFont());
     } else {
-        lv_obj_t* current = nullptr;
         for (int i = 0; i < static_cast<int>(st.settings.font_entries.size()); ++i) {
             const auto& entry = st.settings.font_entries[i];
             const bool active = st.settings.font_multi ? FontItemSelected(i) : entry.file == BookReaderPrefsFontFile();
@@ -1277,13 +1337,16 @@ static void BuildSheetFonts(lv_obj_t* body) {
             if (i % 9 == 0) lv_obj_add_flag(card, LV_OBJ_FLAG_SNAPPABLE);
             else lv_obj_remove_flag(card, LV_OBJ_FLAG_SNAPPABLE);
             auto* label = lv_obj_get_child(card, 0);
-            char name[SD_FILE_NAME_CAPACITY]; FormatFontListName(entry.file, name, sizeof(name));
+            char name[SD_FILE_NAME_CAPACITY];
+            const std::string basename = entry.file.substr(entry.file.find_last_of('/') + 1);
+            FormatFontListName(basename, name, sizeof(name));
             lv_label_set_text(label, name);
             lv_obj_set_width(label, card_w - UiSx(12));
             lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
             ScreenFitLabel(label, card_w - UiSx(12), card_h / 2, SheetUiFont(20, false, name));
             lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
             lv_obj_set_height(label, lv_obj_get_style_text_font(label, LV_PART_MAIN)->line_height);
+            lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_align(label, LV_ALIGN_CENTER, 0, -card_h / 6);
             char meta[32];
             if (IsTtfFileName(entry.file.c_str())) std::snprintf(meta, sizeof(meta), "%s%s", strcasecmp(entry.file.c_str() + entry.file.size() - 4, ".otf") == 0 ? "OTF" : "TTF", st.settings.font_multi && active ? " *" : "");
@@ -1292,14 +1355,14 @@ static void BuildSheetFonts(lv_obj_t* body) {
             lv_obj_set_style_text_color(info, active ? lv_color_white() : lv_color_black(), 0);
             ScreenFitLabel(info, card_w - UiSx(12), card_h / 3, SheetUiFont(14));
             lv_obj_align(info, LV_ALIGN_CENTER, 0, card_h / 4);
-            if (!st.settings.font_multi && active) current = card;
         }
-        if (st.settings.reader_scroll[1] < 0) st.settings.reader_scroll[1] = current ? lv_obj_get_y(current) / (3 * (card_h + gap)) * (3 * (card_h + gap)) : 0;
-        const int pages = (static_cast<int>(st.settings.font_entries.size()) + 8) / 9;
-        const int stride = 3 * (card_h + gap);
-        auto* extent = SheetBox(list, 1, 1);
-        lv_obj_set_pos(extent, 0, (pages - 1) * stride + lv_obj_get_content_height(list) - 1);
-        ConfigureSheetPaging(list, s_font_pages, stride, pages);
+        s_font_pages.list = list;
+        s_font_pages.pages = FontListPageCount();
+        lv_obj_add_flag(list, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(list, kTouchUiPagedVerticalDrag);
+        lv_obj_clear_flag(list, LV_OBJ_FLAG_GESTURE_BUBBLE);
+        lv_obj_add_event_cb(list, SheetListGesture, LV_EVENT_GESTURE, &s_font_pages);
+        lv_obj_add_event_cb(list, DrawSheetPageIndicator, LV_EVENT_DRAW_POST_END, &s_font_pages);
     }
     if (!st.settings.font_multi) {
         const bool vector = BookReaderPrefsFontSize() > 0;
@@ -1600,7 +1663,11 @@ static void BuildSheetBookmarks(lv_obj_t* body) {
         EnqueueListCoverFill(session.Info(),CoverFrameInner(cw),CoverFrameInner(ch),cover,&st.settings.reader_sheet_cover);
         ScheduleListCoverFill();
     } else if(st.settings.reader_sheet_cover.empty()) {
-        auto* name=lv_obj_get_child(cover,0);
+        auto* name=lv_obj_get_child_by_type(cover,0,&lv_label_class);
+        if (!name) {
+            ESP_LOGE("BookScreen", "bookmark cover placeholder label missing");
+            return;
+        }
         lv_label_set_text(name,session.Title().c_str());
         lv_obj_set_width(name,cw-UiSx(12));lv_obj_set_height(name,Book_ItemFont()->line_height*4);
         lv_obj_set_style_text_font(name,Book_ItemFont(),0);
@@ -1797,6 +1864,10 @@ bool RefreshReadingSheetInPlace() {
     RefreshSwitchRows();
     for (auto& row : s_numeric_rows) {
         if (row.active) continue;
+        if (row.option >= static_cast<int>(BookTextOption::MarginTop) &&
+            row.option <= static_cast<int>(BookTextOption::MarginRight)) {
+            row.option = static_cast<int>(s_margin_option);
+        }
         if (row.option < static_cast<int>(BookTextOption::Count)) row.value = TextValue(static_cast<BookTextOption>(row.option));
         UpdateNumericValue(row);
         UpdateNumericBounds(row);
@@ -1812,6 +1883,7 @@ bool RefreshReadingSheetInPlace() {
         else if(binding.event==SheetAntialias)selected=BookReaderPrefsAntialias();
         else if(binding.event==OnSheetFooterBitToggle)selected=BookReaderPrefsFooterMask();
         else if(binding.event==OnSheetUnderlineMode)selected=BookReaderPrefsUnderlineMode();
+        else if(binding.event==OnMarginSide)selected=static_cast<int>(s_margin_option);
         else if(binding.event==TextChoice)selected=binding.value>=10?10+TextValue(BookTextOption::AaStrength):TextValue(BookTextOption::Indent);
         else continue;
         SetLiveSheetButton(binding.button,binding.mask?(selected&binding.value)!=0:selected==binding.value);
@@ -1851,10 +1923,9 @@ bool CancelBookmarkMultiSelection() {
 }
 void ApplyReadingPanelRules(lv_obj_t* panel, int bottom_gap) {
     if (!panel || !lv_obj_is_valid(panel)) return;
-    lv_obj_set_style_radius(panel, UiSx(12), 0);
+    lv_obj_set_style_radius(panel, 0, 0);
     lv_obj_set_style_border_width(panel, kReadingCardBorderWidth, 0);
     lv_obj_set_style_border_color(panel, lv_color_black(), 0);
-    lv_obj_set_style_border_side(panel, static_cast<lv_border_side_t>(LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_LEFT | LV_BORDER_SIDE_RIGHT), 0);
     lv_obj_set_style_border_post(panel, true, 0);
     lv_obj_update_layout(panel);
     static int nav_rule_tag;
@@ -1893,7 +1964,9 @@ void ResizeReadingBottomSheet() {
         ? LV_VER_RES : LV_VER_RES - (st.reader.status_h > 0 ? st.reader.status_h : 40);
     const int status_h = st.reader.status_h > 0 ? st.reader.status_h : 40;
     const int available = std::max<int>(1, LV_VER_RES - status_h);
-    lv_obj_set_size(sheet, std::max<int>(1, LV_HOR_RES - 2 * kReadingCardSideInset), std::min<int>(desired, std::min(limit, available)));
+    const int height = std::min<int>(desired, std::min(limit, available));
+    lv_obj_set_size(sheet, std::max<int>(1, LV_HOR_RES - 2 * kReadingCardSideInset), height);
+    lv_obj_set_style_border_side(sheet, height == available ? LV_BORDER_SIDE_NONE : LV_BORDER_SIDE_TOP, 0);
     lv_obj_align(sheet, LV_ALIGN_BOTTOM_MID, 0, 0);
 }
 int ReadingSheetHeaderHeight() {
@@ -2022,8 +2095,8 @@ void BuildReadingBottomSheet() {
             if(i==2)SetSheetBtnEnabled(button,!st.settings.bookmark_selected.empty());
         }
     } else if (st.settings.reader_tab == 1 &&
-               (st.settings.font_multi || !st.ttf.ttf_selected.empty())) {
-        const bool ttf_multi = !st.ttf.ttf_selected.empty();
+               (st.settings.font_multi || st.ttf.ttf_multi)) {
+        const bool ttf_multi = st.ttf.ttf_multi;
         const char* actions[] = {Lang::Strings::COMMON_CANCEL, Lang::Strings::COMMON_SELECT_ALL, Lang::Strings::COMMON_REMOVE};
         const lv_event_cb_t callbacks[] = {
             ttf_multi ? OnTtfMultiCancel : OnFontMultiCancel,

@@ -3,25 +3,36 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-// Clear: complete GC/GL (48 phases) and DU (20 phases).
-extern const EpdWaveform MY_WAVEFORM;
-// Initialize both immutable profiles before epd_hl_init().
+
+extern const EpdWaveform MY_WAVEFORM; // 清晰档完整刷新波形
+
+/** @brief 在高层驱动初始化前准备刷新波形 */
 void my_waveform_init(void);
-// Balanced: trimmed GC/GL (36/37 phases), unchanged DU; NULL if unavailable.
+
+/** @brief 获取均衡及快速档的灰阶波形，不可用时返回 NULL */
 const EpdWaveform* my_waveform_fast(void);
-// Extreme: 30-phase, 8-gray GL only; GC uses the 16-gray profiles.
+
+/** @brief 获取阅读抗锯齿使用的八级灰 GL 波形 */
 const EpdWaveform* my_waveform_gray8(void);
+
+/** @brief 获取短 DU 局刷波形 */
 const EpdWaveform* my_waveform_short_du(void);
-/**
- * @brief 获取快速档普通局刷使用的十四相 DU 波形
- */
+
+/** @brief 获取快速档普通局刷使用的十四相 DU 波形 */
 const EpdWaveform* my_waveform_fast_du(void);
-// Binary wipe + reveal: band in target index, old/new binary flags in source.
+
+/** @brief 获取黑白切页的条带擦白与重绘波形 */
 const EpdWaveform* my_waveform_wipe_reveal(void);
+
+/** @brief 获取黑白切页使用的短条带擦白与重绘波形 */
 const EpdWaveform* my_waveform_wipe_reveal_short(void);
-// Profile DU white conditioning (20/8 phases) + profile GL from white.
-// The renderer adds spatial band delays without consuming gray indices.
+
+/**
+ * @brief 获取指定刷新档位的 DU 擦白与 GL 灰阶重绘波形
+ * @note 空间条带延迟由渲染器添加，不占用灰阶索引
+ */
 const EpdWaveform* my_waveform_wipe_gl(int profile);
+
 #ifdef __cplusplus
 }
 #endif

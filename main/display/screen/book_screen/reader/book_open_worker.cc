@@ -1,3 +1,4 @@
+#include "book_screen/shelf/book_shelf_ops.h"
 #pragma GCC optimize("O1")
 
 #include "assets/lang_reader.h"
@@ -345,6 +346,8 @@ void BackToDetailAsync(void* /*user_data*/) {
 }
 
 void OpenDetailAsync(void* user_data) {
+    CancelListCoverFill();
+    CancelShelfDirectory();
     const int index = static_cast<int>(reinterpret_cast<intptr_t>(user_data));
     auto& st = Book_State();
     if (index < 0 || index >= static_cast<int>(st.shelf.books.size())) {

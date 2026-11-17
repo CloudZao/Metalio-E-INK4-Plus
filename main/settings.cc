@@ -15,8 +15,7 @@ Settings::Settings(const std::string& ns, bool read_write) : ns_(ns), read_write
 Settings::~Settings() {
     if (nvs_handle_ != 0) {
         if (read_write_ && dirty_) {
-            const esp_err_t result = nvs_commit(nvs_handle_);
-            if (result != ESP_OK) ESP_LOGE(TAG, "preference commit failed code=0x%x", static_cast<unsigned>(result));
+            Commit();
         }
         nvs_close(nvs_handle_);
     }
@@ -61,15 +60,29 @@ int32_t Settings::GetInt(const std::string& key, int32_t default_value) {
     return value;
 }
 
-void Settings::SetInt(const std::string& key, int32_t value) {
-    if (read_write_) {
-        if (nvs_handle_ == 0) return;
-        const esp_err_t result = nvs_set_i32(nvs_handle_, key.c_str(), value);
-        if (result == ESP_OK) dirty_ = true;
-        else ESP_LOGE(TAG, "preference write failed type=integer code=0x%x", static_cast<unsigned>(result));
-    } else {
+bool Settings::SetInt(const std::string& key, int32_t value) {
+    if (!read_write_) {
         ESP_LOGE(TAG, "preference write rejected: read-only");
+        return false;
     }
+    if (nvs_handle_ == 0) return false;
+    const esp_err_t result = nvs_set_i32(nvs_handle_, key.c_str(), value);
+    if (result != ESP_OK) {
+        ESP_LOGE(TAG, "preference write failed type=integer code=0x%x", static_cast<unsigned>(result));
+        return false;
+    }
+    dirty_ = true;
+    return true;
+}
+
+bool Settings::Commit() {
+    if (nvs_handle_ == 0 || !read_write_) return false;
+    if (!dirty_) return !commit_failed_;
+    dirty_ = false;
+    const esp_err_t result = nvs_commit(nvs_handle_);
+    commit_failed_ = result != ESP_OK;
+    if (commit_failed_) ESP_LOGE(TAG, "preference commit failed code=0x%x", static_cast<unsigned>(result));
+    return !commit_failed_;
 }
 
 bool Settings::GetBool(const std::string& key, bool default_value) {

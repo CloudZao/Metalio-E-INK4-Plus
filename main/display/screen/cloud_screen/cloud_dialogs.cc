@@ -48,16 +48,10 @@ void EnsureDlProgressPageBuilt() {
     lv_obj_remove_style_all(card);
     lv_obj_set_size(card, LV_HOR_RES - kDialogCardMargin, LV_SIZE_CONTENT);
     lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, kRowBorderW, 0);
-    lv_obj_set_style_radius(card, kRowRadius, 0);
-    lv_obj_set_style_pad_all(card, kDialogCardPad, 0);
+    ScreenStyleDialogCard(card, kDialogCardPad);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(card, kDialogRowGap, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(card, [](lv_event_t* e) { lv_event_stop_bubbling(e); }, LV_EVENT_CLICKED,
                         nullptr);
@@ -377,17 +371,11 @@ static void ShowResourceDialog(int cloud_index, bool conflict) {
     lv_obj_set_size(card, card_w, LV_SIZE_CONTENT);
     lv_obj_set_style_min_height(card, UiSy(144), 0);
     lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, kRowBorderW, 0);
-    lv_obj_set_style_radius(card, kRowRadius, 0);
-    lv_obj_set_style_pad_all(card, kDialogCardPadSmall, 0);
+    ScreenStyleDialogCard(card, kDialogCardPadSmall);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(card, kDialogRowGapSmall, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(card, [](lv_event_t* e) { lv_event_stop_bubbling(e); }, LV_EVENT_CLICKED,
                         nullptr);

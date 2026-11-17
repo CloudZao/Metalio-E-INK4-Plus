@@ -33,11 +33,10 @@
 #endif
 #include "ota_ignore.h"
 #include "reader/book_home_snapshot.h"
-#include "reader/book_progress_sync.h"
-#include "reader/book_library_warmup.h"
 #include "device_wifi_location.h"
 #include "api_endpoints.h"
 #include "chat_cloud.h"
+#include "yunxin_binding/yunxin_binding.h"
 #include "firmware_memory.h"
 #include "SdCardManager.hpp"
 #include "sd_log_writer.h"
@@ -304,6 +303,7 @@ void Application::CheckChatActivation() {
         return !ws.GetString("url").empty() || !mqtt.GetString("endpoint").empty();
     };
     if (chat_config_ready_ && !chat_activation_pending_) { return; }
+    if (YunxinBinding::Enabled() && !YunxinBinding::IsDue()) { return; }
 
     {
         std::lock_guard<std::mutex> lock(activation_poll_mutex_);
@@ -321,61 +321,68 @@ void Application::CheckChatActivation() {
         ~LoadingGuard() { loading.store(false, std::memory_order_release); }
     } guard{chat_config_loading_};
     // Run at boot after the firmware check, then retry independently of chat entry.
-    Ota ota;
-    ESP_LOGI(TAG, "Chat activation check provider=%d pending=%d",
-             static_cast<int>(chat_cloud::ActiveProvider()), chat_activation_pending_.load());
-    esp_err_t err = ota.CheckChatConfiguration();
-    if (ota.HasServerTime()) {
-        has_network_time_.store(true);
-        board.OnNetworkTimeSynced();
-    }
-    if (activation_paused_.load(std::memory_order_acquire)) {
-        return;
-    }
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Chat activation check failed: %d", err);
-        return;
-    }
-    ESP_LOGI(TAG, "Chat configuration response: code=%d challenge=%d websocket=%d mqtt=%d",
-             ota.HasActivationCode(), ota.HasActivationChallenge(),
-             ota.HasWebsocketConfig(), ota.HasMqttConfig());
-    if (ota.HasActivationChallenge()) {
-        chat_activation_pending_ = true;
-        if (ota.HasActivationCode() && ota.GetActivationCode() != GetPendingActivationCode()) {
-            ShowActivationCode(ota.GetActivationCode());
+    if (YunxinBinding::Enabled()) {
+        bool active = false;
+        const esp_err_t err = YunxinBinding::Check(active);
+        chat_activation_pending_ = !active;
+        if (err != ESP_OK || !active) return;
+    } else {
+        Ota ota;
+        ESP_LOGI(TAG, "Chat activation check provider=%d pending=%d",
+                 static_cast<int>(chat_cloud::ActiveProvider()), chat_activation_pending_.load());
+        esp_err_t err = ota.CheckChatConfiguration();
+        if (ota.HasServerTime()) {
+            has_network_time_.store(true);
+            board.OnNetworkTimeSynced();
         }
-        err = ota.Activate();
         if (activation_paused_.load(std::memory_order_acquire)) {
             return;
         }
-        if (err == ESP_OK) {
-            err = ota.CheckChatConfiguration();
-            if (ota.HasServerTime()) {
-                has_network_time_.store(true);
-                board.OnNetworkTimeSynced();
-            }
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Chat activation check failed: %d", err);
+            return;
         }
-    }
-    if (ota.HasActivationCode() || ota.HasActivationChallenge()) {
-        ESP_LOGI(TAG, "Chat activation still pending; retry remains enabled");
-        chat_activation_pending_ = true;
-        if (ota.HasActivationCode()) {
-            if (ota.GetActivationCode() != GetPendingActivationCode()) {
+        ESP_LOGI(TAG, "Chat configuration response: code=%d challenge=%d websocket=%d mqtt=%d",
+                 ota.HasActivationCode(), ota.HasActivationChallenge(),
+                 ota.HasWebsocketConfig(), ota.HasMqttConfig());
+        if (ota.HasActivationChallenge()) {
+            chat_activation_pending_ = true;
+            if (ota.HasActivationCode() && ota.GetActivationCode() != GetPendingActivationCode()) {
                 ShowActivationCode(ota.GetActivationCode());
             }
-        } else {
-            board.GetDisplay()->SetStatus(Lang::Strings::ACTIVATION);
+            err = ota.Activate();
+            if (activation_paused_.load(std::memory_order_acquire)) {
+                return;
+            }
+            if (err == ESP_OK) {
+                err = ota.CheckChatConfiguration();
+                if (ota.HasServerTime()) {
+                    has_network_time_.store(true);
+                    board.OnNetworkTimeSynced();
+                }
+            }
         }
-        return;
-    }
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Chat activation failed: %d", err);
-        return;
-    }
-    if (!has_endpoint()) {
-        ESP_LOGE(TAG, "Chat OTA configuration unavailable: err=%d websocket=%d mqtt=%d",
-                 err, ota.HasWebsocketConfig(), ota.HasMqttConfig());
-        return;
+        if (ota.HasActivationCode() || ota.HasActivationChallenge()) {
+            ESP_LOGI(TAG, "Chat activation still pending; retry remains enabled");
+            chat_activation_pending_ = true;
+            if (ota.HasActivationCode()) {
+                if (ota.GetActivationCode() != GetPendingActivationCode()) {
+                    ShowActivationCode(ota.GetActivationCode());
+                }
+            } else {
+                board.GetDisplay()->SetStatus(Lang::Strings::ACTIVATION);
+            }
+            return;
+        }
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Chat activation failed: %d", err);
+            return;
+        }
+        if (!has_endpoint()) {
+            ESP_LOGE(TAG, "Chat OTA configuration unavailable: err=%d websocket=%d mqtt=%d",
+                     err, ota.HasWebsocketConfig(), ota.HasMqttConfig());
+            return;
+        }
     }
     ClearActivationCode();
     chat_activation_pending_ = false;
@@ -383,7 +390,7 @@ void Application::CheckChatActivation() {
     ESP_LOGI(TAG, "Chat activation confirmed; cached code cleared");
     {
         std::lock_guard<std::mutex> lock(activation_state_mutex_);
-        current_version_ = ota.GetCurrentVersion();
+        current_version_ = esp_app_get_description()->version;
     }
     if (device_state_ == kDeviceStateIdle) { ApplyIdleStatusBar(); }
     if (boot_ready_.load(std::memory_order_acquire) && AssistantScreen::IsActive()) {
@@ -1394,7 +1401,8 @@ void Application::DismissAlert() {
 
 bool Application::RejectUnactivatedListening() {
     if (!AssistantScreen::IsActive() || StandbyScreen::IsActive() ||
-        (!chat_activation_pending_.load() && !HasPendingActivationCode())) return false;
+        (!chat_activation_pending_.load() && !HasPendingActivationCode() && !YunxinBinding::NeedsBinding())) return false;
+    if (YunxinBinding::NeedsBinding()) return true;
     auto notify = [](void*) {
         auto& app = Application::GetInstance();
         if (AssistantScreen::IsActive() && !StandbyScreen::IsActive() &&
@@ -1752,9 +1760,8 @@ void Application::Start() {
     TrySdCardFirmwareUpgrade();
     BootStandbyCheckpoint();
 
-    // 书库预热须在 StartNetwork 之前（仅创建后台任务）。
+    // 首页仅恢复已有 NVS 快照，不扫描 SD 书库。
     reader::book_home_snapshot::HydrateFromNvs();
-    reader::book_library_warmup::RequestBootWarmup();
 
     /* 有已存 WiFi：等保网时长；失败不 SoftAP。无 SSID 跳过联网，到设置→网络机上配网 */
     board.StartNetwork();
@@ -1828,11 +1835,10 @@ void Application::Start() {
     if (board.IsNetworkReady() && !board.IsWifiConfigMode()) {
         if (api::HasHost()) {
             TaskScreen::EnsureCacheSynced();
-            // sync 仅 POST：等 warmup 缓存就绪后组包，不再扫盘 Peek
-            reader::book_progress_sync::RequestBootReport();
+            // 全库上报依赖完整扫描，按需目录浏览不在开机触发该操作。
             device_wifi_location::RequestBootReport();
         } else {
-            ESP_LOGI(TAG, "skip boot checklist/book sync/wifi-loc: cloud endpoints blank");
+            ESP_LOGI(TAG, "skip boot checklist/wifi-loc: cloud endpoints blank");
         }
     } else {
         ESP_LOGW(TAG, "skip boot checklist/book sync/wifi-loc: network not ready");
@@ -1967,7 +1973,7 @@ void Application::DispatchClockTick() {
     }
     const bool kick = activation_kick_.load(std::memory_order_acquire);
     if (boot_ready_.load(std::memory_order_acquire) && !chat_config_ready_.load() &&
-        (tick % 10 == 0 || kick) && !StandbyScreen::IsActive() &&
+        ((YunxinBinding::Enabled() ? YunxinBinding::IsDue() : tick % 10 == 0) || kick) && !StandbyScreen::IsActive() &&
         !activation_paused_.load() && !activation_work_queued_.exchange(true)) {
         if (!Schedule([this]() {
             auto& board = Board::GetInstance();

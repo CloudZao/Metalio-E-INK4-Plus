@@ -4,7 +4,7 @@
 #include "assets/lang_config.h"
 #include "board.h"
 #include "device_state.h"
-#include "factory-test-assets/factory_test_assets.h"
+#include "assets/factory_test_assets.h"
 #include "fontpack_lvgl.h"
 #include "lv_adapter_display.h"
 #include "power_policy.h"

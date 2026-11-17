@@ -1,6 +1,7 @@
 #include "zip_reader.h"
 
 #include <cstdio>
+#include <cerrno>
 #include <cstring>
 
 #include <esp_heap_caps.h>
@@ -63,7 +64,7 @@ bool ZipReader::Open(const char* path) {
     fp_ = std::fopen(path, "rb");
     if (!fp_) error_ = BookReadError::kFileIo;
     if (fp_ == nullptr) {
-        ESP_LOGE(TAG, "open failed: %s", path);
+        ESP_LOGE(TAG, "archive open failed errno=%d", errno);
         return false;
     }
     path_ = path;
@@ -104,7 +105,7 @@ bool ZipReader::ReattachFile() {
     }
     fp_ = std::fopen(path_.c_str(), "rb");
     if (fp_ == nullptr) {
-        ESP_LOGW(TAG, "reattach fail: %s", path_.c_str());
+        ESP_LOGW(TAG, "archive reattach failed errno=%d", errno);
         return false;
     }
     return true;
@@ -142,7 +143,7 @@ bool ZipReader::LoadCentralDirectory() {
         }
     }
     if (eocd < 0) {
-        ESP_LOGE(TAG, "EOCD not found: %s", path_.c_str());
+        ESP_LOGE(TAG, "archive central directory end not found");
         return false;
     }
 
@@ -200,7 +201,7 @@ bool ZipReader::LoadCentralDirectory() {
     }
 
     cd_loaded_ = true;
-    ESP_LOGI(TAG, "loaded %u entries from %s", static_cast<unsigned>(entries_.size()), path_.c_str());
+    ESP_LOGD(TAG, "archive directory loaded entries=%u", static_cast<unsigned>(entries_.size()));
     return !entries_.empty();
 }
 
@@ -313,7 +314,7 @@ bool ZipReader::ReadEntry(const char* name, std::vector<uint8_t>& out, size_t ma
     std::lock_guard<std::mutex> lock(io_mutex_);
     Entry e;
     if (!FindEntry(name, &e)) {
-        ESP_LOGW(TAG, "missing entry: %s", name);
+        ESP_LOGW(TAG, "archive entry not found");
         out.clear();
         return false;
     }

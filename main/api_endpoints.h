@@ -6,6 +6,7 @@
 
 namespace api {
 
+inline const char* const kDefaultAppStoreUrl = cloudzao_app_store_url;
 inline const char* const kHost = cloudzao_host;
 inline const char* const kDefaultOtaUrl = cloudzao_ota_url;
 inline const char* const kBookToolsUrl = cloudzao_book_tools_url;

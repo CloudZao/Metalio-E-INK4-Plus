@@ -16,24 +16,23 @@ Standby, shutdown, and reading-background decoders resolve wallpaper selections 
 
 Once the home screen is ready, startup first performs one complete 48-phase GC16 refresh to white, then reveals the home screen with a wipe. The home screen is not drawn during cleaning. The reserved border receives only whitening pulses during the full refresh and remains undriven after success. Refresh failures retain the existing clear-and-recover path. Later clock, battery and network updates use the ordinary refresh policy.
 
-入口：**设置 → 屏幕**。刷新模式与黑色深度独立保存，重启后恢复。刷新选项分两行：清晰 / 均衡、快速 / 极速；电压和波形相数只在本说明中列出，设备界面不显示。
+入口：**设置 → 屏幕**。刷新模式与黑色深度独立保存，重启后恢复。刷新选项同一行显示：清晰 / 均衡 / 快速；电压和波形相数只在本说明中列出，设备界面不显示。
 
-普通 App 页面切换使用从左向右的 10 条窄条推进（随屏幕旋转），一次连续驱动完成擦白和新页显示。清晰 / 均衡的擦白和黑白重绘使用完整 20 相 DU，快速使用 8 相短 DU；极速恢复8相短DU擦白和8相短DU重绘；10 个条带各错开 1 相启动。纯黑白应用切页：清晰 / 均衡为 20+20+9=49 相，快速为 8+8+9=25 相，极速为8+8+9=25相。任一页面含灰阶时，条带擦白后立即使用当前档位 GL16 绘制新灰度：清晰 20+48+9=77 相、均衡 20+37+9=66 相、快速 8+37+9=54 相、极速8+30+9=47相。白到白像素保持不驱动，成功后才提交新页作为面板基线；灰度与条带延迟分别保存。擦白只属于应用切页动画，普通 DU / GL 更新不必预先擦白。缺少动画缓冲或动画失败时回退完整 GC16。实际耗时和残影需上机观察。
+普通 App 页面切换使用从左向右的 10 条窄条推进（随屏幕旋转），一次连续驱动完成擦白和新页显示。清晰 / 均衡的擦白和黑白重绘使用完整 20 相 DU，快速使用 8 相短 DU；10 个条带各错开 1 相启动。纯黑白应用切页：清晰 / 均衡为 20+20+9=49 相，快速为 8+8+9=25 相。任一页面含灰阶时，条带擦白后立即使用当前档位 GL16 绘制新灰度：清晰 20+48+9=77 相、均衡 20+37+9=66 相、快速 8+37+9=54 相。白到白像素保持不驱动，成功后才提交新页作为面板基线；灰度与条带延迟分别保存。擦白只属于应用切页动画，普通 DU / GL 更新不必预先擦白。缺少动画缓冲或动画失败时回退完整 GC16。实际耗时和残影需上机观察。
 
-### 四种刷新模式
+### 三种刷新模式
 
 进入待机、退出待机和关机共用开机的清理顺序：先用完整 48 相 GC16 将旧画面全刷至白底，再推白显示目标画面。白屏清理中的白到白像素也执行完整调理脉冲，不因像素相同而跳过。两个阶段由同一刷新任务顺序完成，复用已有动画缓冲，不增加全屏缓存；清理失败时停止后续绘制，待机和关机继续沿用原有失败重试。待机定格或断电须等待目标画面完成，唤醒前光在目标画面完成后恢复。该流程增加等待时间并产生可见闪屏，普通页面切换和壁纸加载提示沿用原有策略。
 
 Entering or leaving standby and shutting down use the same cleaning sequence as startup: refresh the old frame to white with the complete 48-phase GC16 waveform, then reveal the target with a wipe. Equal white pixels retain conditioning pulses during cleaning. One refresh worker runs both stages using the existing animation buffer, with no additional full-screen allocation. A cleaning failure stops subsequent drawing; standby and shutdown retain their existing retry behavior. Parking or power-off waits for the target frame, and wake restores the frontlight after that frame completes. These transitions take longer and visibly flash; ordinary navigation and wallpaper loading notices keep their existing policy.
 
-- **清晰**：优先显示细节与擦除余量。图片和灰阶界面使用完整 16 级灰阶表，GC16 / GL16 各 48 相；黑白局部刷新使用 20 相 DU。适合重视图片层次、字体边缘和残影控制的场景，刷新相对较慢。
-- **均衡（新设备默认）**：保留 16 级灰阶，GC16 / GL16 裁剪为 36 / 37 相，黑白局部刷新仍为 20 相 DU。兼顾显示效果和速度，建议作为日常起点。
+- **清晰（默认）**：优先显示细节与擦除余量。图片和灰阶界面使用完整 16 级灰阶表，GC16 / GL16 各 48 相；黑白局部刷新使用 20 相 DU。适合重视图片层次、字体边缘和残影控制的场景，刷新相对较慢。
+- **均衡**：保留 16 级灰阶，GC16 / GL16 裁剪为 36 / 37 相，黑白局部刷新仍为 20 相 DU。兼顾显示效果和速度。
 - **快速**：GC16 / GL16 使用 36 / 37 相裁剪表，保留 16 级灰阶；普通 DU 在按钮、滚动和阅读中使用 14 相表，黑向推 13 相、白向推 14 相；切页擦白和黑白重绘仍使用 8 相短表。速度优先，可能增加残影。
-- **极速**：GC16仍使用16级、36相裁剪表；GL16使用8级、30相表；DU各场景恢复8相短表，包括按钮、滚动、阅读、切页擦白和黑白重绘。黑向推7相、白向推8相。灰阶层次减少，可能增加残影。
 
-**完整 GC 清理是四档共同的例外。** 开机、进出待机和关机前的白屏清理、模式切换后的首帧、手动全刷、周期清残影、故障恢复均使用完整 48 相 GC。普通波形测试遵循所选档位，明确要求 GC 深度清理时也使用完整表。刷新相数不等于实际耗时，驱动准备、供电和扫描也占用时间。
+**完整 GC 清理是三档共同的例外。** 开机、进出待机和关机前的白屏清理、模式切换后的首帧、手动全刷、周期清残影、故障恢复均使用完整 48 相 GC。普通波形测试遵循所选档位，明确要求 GC 深度清理时也使用完整表。刷新相数不等于实际耗时，驱动准备、供电和扫描也占用时间。
 
-升级时保留旧档位的对应行为：原“均衡（完整表）”映射到清晰，原“快速（裁剪表）”映射到均衡；已经保存的新档位不变。当前不使用文字专用 GL16 波形。
+升级时保留旧档位的对应行为：原“均衡（完整表）”映射到清晰，原“快速（裁剪表）”映射到均衡；已保存的清晰、均衡、快速档位保持不变，原极速档位改用快速。当前不使用文字专用 GL16 波形。
 
 ### 行供数不足与 GC 恢复
 
@@ -63,7 +62,7 @@ Image tone mapping is applied when an image is drawn into either the L8 main lay
 
 Reading text antialiasing preserves glyph coverage during rasterization and darkens gray edges by approximately 80% toward black. After glyph overlaps are blended, 32-bit block checks skip blocks containing only pure black and white; only intermediate grays in the remaining blocks are processed, without rewriting pure-black pixels. Disabling antialiasing renders text in black and white without affecting image grayscale. `epd_reader_aa` stores only the reading state needed for waveform selection; the submission queue captures a snapshot. Existing grayscale differential updates, clearing, scroll completion and reading waveform policies remain unchanged.
 
-清晰 / 均衡的普通 DU 局刷在第 17～20 相对活动脏行与脏列交集中的黑→黑像素补黑四相，总相数仍为 20；快速档普通 DU 在第 11～14 相补黑四相，总相数为 14；极速及 OTA 进度使用的短 DU 在第 5～8 相补黑四相，总相数为 8。应用切页动画保持原有波形。补黑对残影、黑色深度及连续刷新后擦除效果的影响需实屏确认。普通差分刷新在公共 highlevel 局刷入口启用 `MODE_SKIP_UNCHANGED`：逐相构建 LUT 时，DU 保留黑→黑补黑；GL16 对变化后的纯黑目标仅保留原表推黑段，不先推白，黑→黑则复用该表白→黑的最后四次推黑补黑。两者仅在活动脏行与脏列交集内驱动，未变化的灰色和白色像素保持不驱动；GL16 其他变化的灰阶目标沿用原表。源波形表保持只读，不增加相数，也不在逐像素输出热路径增加判断。提交前按实际旧/新缓冲核对普通 DU：只要变化涉及任一中间灰，就改用灰阶波形；静止灰底不影响黑白转换继续使用 DU。全刷、清理恢复、诊断图案、滚动收尾的整帧 GL 和主动擦除动画保留原有调理脉冲。
+清晰 / 均衡的普通 DU 局刷在第 17～20 相对活动脏行与脏列交集中的黑→黑像素补黑四相，总相数仍为 20；快速档普通 DU 在第 11～14 相补黑四相，总相数为 14；OTA 进度使用的短 DU 在第 5～8 相补黑四相，总相数为 8。应用切页动画保持原有波形。补黑对残影、黑色深度及连续刷新后擦除效果的影响需实屏确认。普通差分刷新在公共 highlevel 局刷入口启用 `MODE_SKIP_UNCHANGED`：逐相构建 LUT 时，DU 保留黑→黑补黑；GL16 对变化后的纯黑目标仅保留原表推黑段，不先推白，黑→黑则复用该表白→黑的最后四次推黑补黑。两者仅在活动脏行与脏列交集内驱动，未变化的灰色和白色像素保持不驱动；GL16 其他变化的灰阶目标沿用原表。源波形表保持只读，不增加相数，也不在逐像素输出热路径增加判断。提交前按实际旧/新缓冲核对普通 DU：只要变化涉及任一中间灰，就改用灰阶波形；静止灰底不影响黑白转换继续使用 DU。全刷、清理恢复、诊断图案、滚动收尾的整帧 GL 和主动擦除动画保留原有调理脉冲。
 
 Ordinary differential updates retain DU black-to-black reinforcement. For changed pixels targeting pure black, GL16 keeps the source table's black-driving pulses and suppresses whitening. Unchanged black pixels receive reinforcement during the selected table's last four white-to-black driving pulses. Both modes operate within the intersection of active dirty rows and columns. Unchanged gray and white pixels remain undriven; other changed GL16 targets use the original table. Source tables remain read-only, with no extra phases or per-pixel output checks. Full refreshes, recovery, diagnostic patterns, full-frame GL scroll settling and erase animations retain their original conditioning. Effects on ghosting, black depth and subsequent erasure require panel verification.
 
@@ -79,15 +78,13 @@ Fast waveform initialization processes gray transitions in two passes: it measur
 
 Home icons use the LVGL decoder interface and retain SPNG’s 16-row tile boundaries. `tools/generate_home_icon_pixels.py` packs the source PNGs into independent lossless zlib tiles, preserving ARGB8888 or A8 pixels. ARGB8888 sessions allocate a 16-row buffer in PSRAM; A8 icons use a temporary full-image buffer to preserve native scaling boundaries. Both free their buffers on close without retaining an image cache. Other resources retain their original paths. Both built-in shutdown images are packed by `tools/compress_binary.py` as their original length followed by zlib data, with temporary decode storage freed after use. The artwork, complete font pack and dual OTA partition layout are preserved.
 
-### 黑色深度（黑色强度）
+### 黑色深度
 
-- **默认**：VCOM −1.2V，推荐优先使用。
-- **中**：VCOM −1.6V。
-- **强**：VCOM −2.0V。
+“黑色深度”显示 BH1098 最近读取并校验通过的屏幕 VCOM，例如 `黑色深度：-1300mv`。不再提供固定电压档位，不加载旧档位设置。显示刷新线程在当前波形结束后应用校准值，不在扫描中途修改电压；此数值是驱动配置，不是电压实测值。
 
-选择后自动保存，由屏幕刷新任务在两次扫描之间应用；不会在扫描中途改电压。此选项调整驱动电压，不改变字体粗细、灰阶数量或刷新模式。更高强度不保证每块屏幕都更黑，需要结合屏幕标定值、残影及底色观察。
+VCOM 校准通过 HTML 产测工具读取、写入并同步云端；设备测试菜单不提供校准入口。扫码工具、存储格式、失败处理和限制见 [VCOM 产测说明](../../tools/vcom/README_zn.md)，[English](../../tools/vcom/README.md)。
 
-选择中或强时，界面提示：**提高黑色深度可能影响屏幕寿命，并增加底色变化风险，建议优先使用默认档。** 此功能未针对每块屏自动标定。若出现底色变化、残影加重或深浅异常，恢复默认，并执行全刷对比。
+Black depth displays the latest validated BH1098 VCOM in millivolts. The display worker applies it after the current waveform; it is a driver setting, not a voltage measurement. The HTML factory tool handles calibration and cloud sync. See the [factory guide](../../tools/vcom/README.md) for storage, recovery and limits.
 
 30 相图片表参考来自 [read-pico-reader](https://github.com/wegooo-cell/read-pico-reader/tree/main/components/e0470_epaper_waveform)，保留 Apache-2.0 许可证。我们保留 S31 / E0470A14-AF 的扫描时序与 TPS65185 电源驱动，显示效果须在本机验收。
 

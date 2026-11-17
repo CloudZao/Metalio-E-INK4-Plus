@@ -1,6 +1,11 @@
 #include "home_screen/home_screen_priv.h"
 
 #include "home_screen_priv.h"
+#include "app_store/app_store.h"
+#include "app_store/app_store_icons.h"
+#include "SdCardManager.hpp"
+#include "app_store_screen/app_store_screen.h"
+#include "assets/lang_app_store.h"
 #include "home_screen_ui.h"
 #include "home_apps_slash.h"
 #include "home_icon_source.h"
@@ -25,6 +30,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <new>
 
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -61,7 +68,7 @@ void Home_OnAppNameDraw(lv_event_t* e)
     const char* Home_AppNameWorkBuddy() { return "workbuddy"; }
     #endif
 
-    extern const AppEntry kApps[] = {
+    const AppEntry kBuiltinApps[] = {
         {"A:ic_app_home_task.spng", Home_AppNameTask, TaskScreen::Create},
         {"A:ic_app_home_teacher.spng", Home_AppNameAssistant, AssistantScreen::Create},
         {"A:ic_app_home_book.spng", Home_AppNameBook, BookScreen::Create},
@@ -74,7 +81,7 @@ void Home_OnAppNameDraw(lv_event_t* e)
     };
 
     // 仅对外展示用户可见的应用，保持首页与设计稿一致。
-    extern const AppEntry kSlashApps[] = {
+    const AppEntry kBuiltinSlashApps[] = {
         {"A:ic_app_home_book.spng", Home_AppNameBook, BookScreen::Create},
         {"A:ic_app_home_wallpaper.spng", Home_AppNameWallpaper, WallpaperScreen::Create},
         {"A:ic_app_home_teacher.spng", Home_AppNameAssistant, AssistantScreen::Create},
@@ -87,8 +94,70 @@ void Home_OnAppNameDraw(lv_event_t* e)
     };
 
     // 每页六个应用，新增应用自动进入后续页。
-    extern const int kTotalApps = static_cast<int>(sizeof(kApps) / sizeof(kApps[0]));
-    extern const int kSlashAppCount = static_cast<int>(sizeof(kSlashApps) / sizeof(kSlashApps[0]));
+    std::vector<AppEntry> kApps;
+    std::vector<AppEntry> kSlashApps;
+    int kTotalApps = 0;
+    int kSlashAppCount = 0;
+    static std::vector<AppStore::Item> s_home_installed;
+
+    const char* Home_AppLabel(const AppEntry& entry) {
+        if (entry.installed_id.empty()) return entry.name();
+        return std::strcmp(Lang::Current(), "zh-CN") == 0 ? entry.installed_name.c_str() : entry.installed_name_en.c_str();
+    }
+    const void* Home_AppIcon(const AppEntry& entry, const char* fallback) {
+        if (entry.create == AppStoreScreen::Create) return AppStoreIcons::Source("app-store");
+        if (!entry.installed_id.empty()) {
+            for (const auto& item : s_home_installed) if (item.app_id == entry.installed_id) return AppStoreIcons::Source(item);
+            return AppStoreIcons::Source(nullptr);
+        }
+        return HomeIconSource(fallback ? fallback : entry.icon_path);
+    }
+    static const char* Home_AppNameStore() { return Lang::Strings::STORE_TITLE; }
+    static void Home_RefreshInstalledApps() {
+        kApps.assign(std::begin(kBuiltinApps), std::end(kBuiltinApps));
+        kSlashApps.assign(std::begin(kBuiltinSlashApps), std::end(kBuiltinSlashApps));
+        const AppEntry store = {"A:ic_app_home_cloud.spng", Home_AppNameStore, AppStoreScreen::Create};
+        kApps.push_back(store);
+        kSlashApps.push_back(store);
+        std::string error;
+        AppStore::Scan(s_home_installed, error);
+        for (const auto& item : s_home_installed) {
+            const AppEntry entry = {"A:ic_app_home_task.spng", nullptr, nullptr, item.app_id, item.name, item.name_en};
+            kApps.push_back(entry);
+            kSlashApps.push_back(entry);
+        }
+        kTotalApps = static_cast<int>(kApps.size());
+        kSlashAppCount = static_cast<int>(kSlashApps.size());
+    }
+
+namespace {
+struct HomeStorageWait {
+    lv_timer_t* timer; // 首次挂载等待定时器
+    unsigned ticks = 0; // 无卡时的有限等待次数
+};
+void Home_DeleteStorageWait(lv_event_t* event) {
+    auto* wait = static_cast<HomeStorageWait*>(lv_event_get_user_data(event));
+    if (wait->timer) lv_timer_delete(wait->timer);
+    delete wait;
+}
+void Home_StorageReady(lv_timer_t* timer) {
+    auto* wait = static_cast<HomeStorageWait*>(lv_timer_get_user_data(timer));
+    std::vector<AppStore::Item> items;
+    std::string error;
+    const bool ready = SdCardManager::GetInstance().IsMounted() && ScreenIsHome() &&
+                       AppStore::Scan(items, error);
+    if (!ready && ++wait->ticks < 120) return;
+    wait->timer = nullptr;
+    lv_timer_delete(timer);
+    if (ready && !items.empty()) ScreenNavigateTo(HomeScreen::Create);
+}
+void Home_WaitForStorage(lv_obj_t* screen) {
+    if (SdCardManager::GetInstance().IsMounted()) return;
+    auto* wait = new HomeStorageWait{};
+    wait->timer = lv_timer_create(Home_StorageReady, 500, wait);
+    lv_obj_add_event_cb(screen, Home_DeleteStorageWait, LV_EVENT_DELETE, wait);
+}
+}
 
 lv_obj_t *Home_apps = nullptr;
 lv_obj_t *Home_page_lbl = nullptr;
@@ -286,13 +355,17 @@ bool HomeScreen::GoToFirstPage() {
 
     void Home_LaunchAppAsync(void *user_data)
     {
-        const auto *entry = static_cast<const AppEntry *>(user_data);
-        if (entry == nullptr || entry->create == nullptr)
+        std::unique_ptr<AppEntry> entry(static_cast<AppEntry*>(user_data));
+        if (entry == nullptr || (entry->create == nullptr && entry->installed_id.empty()))
         {
             return;
         }
-        ESP_LOGI(TAG, "launch %s", entry->name());
-        ScreenNavigateTo(entry->create);
+        ESP_LOGI(TAG, "launch %s", Home_AppLabel(*entry));
+        if (!entry->installed_id.empty()) {
+            for (const auto& item : s_home_installed) {
+                if (item.app_id == entry->installed_id) { AppStoreScreen::Launch(item); break; }
+            }
+        } else { ScreenNavigateTo(entry->create); }
     }
 
     void Home_OnAppClicked(lv_event_t *e)
@@ -312,12 +385,13 @@ bool HomeScreen::GoToFirstPage() {
         {
             entry = static_cast<const AppEntry *>(lv_event_get_user_data(e));
         }
-        if (entry == nullptr || entry->create == nullptr)
+        if (entry == nullptr || (entry->create == nullptr && entry->installed_id.empty()))
         {
             return;
         }
         // 事件回调里删当前屏不安全，延后一拍再切（与返回键一致）
-        lv_async_call(Home_LaunchAppAsync, const_cast<AppEntry *>(entry));
+        auto* launch = new(std::nothrow) AppEntry(*entry);
+        if (launch && lv_async_call(Home_LaunchAppAsync, launch) != LV_RESULT_OK) delete launch;
     }
 
     lv_obj_t *Home_CreateAppCell(lv_obj_t *parent, const AppEntry &entry, int card_style)
@@ -325,7 +399,7 @@ bool HomeScreen::GoToFirstPage() {
         // 整卡为唯一点击热区；样式来自设置→主题（NVS）。
         lv_obj_t *cell = lv_obj_create(parent);
         lv_obj_remove_style_all(cell);
-        lv_obj_set_size(cell, HOME_APP_CARD_W, HOME_APP_CARD_H);
+        lv_obj_set_size(cell, HomeAppCardWidth(), HOME_APP_CARD_H);
         lv_obj_set_style_pad_all(cell, 0, 0);
         Home_ApplyCardStyle(cell, card_style);
         lv_obj_set_style_radius(cell, kCardRadius, 0);
@@ -337,15 +411,15 @@ bool HomeScreen::GoToFirstPage() {
         lv_obj_set_user_data(cell, const_cast<AppEntry *>(&entry));
         lv_obj_add_event_cb(cell, Home_OnAppClicked, LV_EVENT_CLICKED, const_cast<AppEntry *>(&entry));
         lv_obj_t *icon = lv_image_create(cell);
-        lv_image_set_src(icon, HomeIconSource(entry.icon_path));
+        lv_image_set_src(icon, Home_AppIcon(entry));
         lv_obj_set_style_image_recolor(icon, lv_color_black(), 0);
         lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
         lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, HOME_APP_CARD_ICON_PAD_TOP);
         lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_t *name = lv_label_create(cell);
-        lv_label_set_text(name, entry.name());
-        lv_obj_set_width(name, HOME_APP_CARD_W);
+        lv_label_set_text(name, Home_AppLabel(entry));
+        lv_obj_set_width(name, HomeAppCardWidth());
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_font(name, fontpack_lv_font_ui(), 0);
         lv_obj_add_event_cb(name, Home_OnAppNameDraw, LV_EVENT_DRAW_MAIN_END, nullptr);
@@ -414,8 +488,10 @@ void HomeScreen::SaveCardStyle(int style)
 lv_obj_t *HomeScreen::Create()
 {
     HomePixel_Stop();
+    Home_RefreshInstalledApps();
     lv_obj_t *scr = lv_obj_create(nullptr);
     Home_scr = scr;
+    Home_WaitForStorage(scr);
     lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_text_font(scr, fontpack_lv_font_ui(), 0);

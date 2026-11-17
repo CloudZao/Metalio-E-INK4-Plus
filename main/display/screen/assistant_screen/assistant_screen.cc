@@ -17,6 +17,7 @@
 #include "assets/lang_screen.h"
 #include "fontpack_lvgl.h"
 #include "chat_cloud.h"
+#include "yunxin_binding/yunxin_binding.h"
 #include "board.h"
 #include "boot_key_handler.h"
 #include "display.h"
@@ -541,6 +542,10 @@ lv_obj_t* AssistantScreen::Create() {
     }
     lv_obj_add_event_cb(scr, Assistant_OnAssistantLifecycle, LV_EVENT_SCREEN_LOADED, nullptr);
     lv_obj_add_event_cb(scr, Assistant_OnAssistantLifecycle, LV_EVENT_SCREEN_UNLOADED, nullptr);
+    if (auto* binding = YunxinBinding::CreatePanel(scr)) {
+        lv_obj_set_size(binding, LV_HOR_RES, body_h);
+        lv_obj_set_pos(binding, 0, header_h);
+    }
     FirmwareMemoryCheckpoint("assistant-screen-ready");
     return scr;
 }

@@ -4,6 +4,7 @@
 #include "assets/lang_screen.h"
 #include "application.h"
 #include "epd_refresh.h"
+#include "panel_vcom.h"
 #include "fontpack_lvgl.h"
 #include "frontlight.h"
 #include "haptic_feedback.h"
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <esp_log.h>
 
 namespace {
@@ -20,10 +22,10 @@ struct SettingsFrontlightUi {
     lv_obj_t* light_options[4] = {}; // 色温与关闭选项
     lv_obj_t* brightness_slider = nullptr; // 亮度滑条
     lv_obj_t* brightness_label = nullptr; // 目标亮度
-    lv_obj_t* profiles[4] = {}; // 刷新模式选项
+    lv_obj_t* profiles[3] = {}; // 刷新模式选项
     lv_obj_t* refresh_hint = nullptr; // 刷新模式说明
-    lv_obj_t* depths[3] = {}; // 黑色深度选项
-    lv_obj_t* depth_hint = nullptr; // 黑色深度说明
+    lv_obj_t* depth_label = nullptr; // BH 校准值
+    lv_timer_t* depth_timer = nullptr; // 页面存活期间更新校准值
 };
 
 static SettingsFrontlightUi s_ui;
@@ -46,6 +48,18 @@ static void SaveFrontlight() {
     }
 }
 
+static void RefreshDepth() {
+    if (s_ui.depth_label) {
+        const auto state = PanelVcomGetState();
+        char text[96];
+        if (state.ok && state.vcom_mv) snprintf(text, sizeof(text), "%s：%dmv",
+            Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_TITLE, state.vcom_mv);
+        else snprintf(text, sizeof(text), "%s：%s", Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_TITLE,
+            Lang::Strings::SETTINGS_VCOM_UNKNOWN);
+        if (strcmp(lv_label_get_text(s_ui.depth_label), text)) lv_label_set_text(s_ui.depth_label, text);
+    }
+}
+
 static void RefreshOptions() {
     auto& light = Frontlight::GetInstance();
     for (int i = 0; i < 4; ++i) {
@@ -60,31 +74,18 @@ static void RefreshOptions() {
         lv_label_set_text(s_ui.brightness_label, text);
     }
     const auto profile = EpdGetRefreshProfile();
-    for (int i=0;i<4;++i) {
+    for (int i=0;i<3;++i) {
         if (s_ui.profiles[i]) SettingsStyleSelectable(s_ui.profiles[i],
             lv_obj_get_child(s_ui.profiles[i],0),static_cast<int>(profile)==i);
     }
     if (s_ui.refresh_hint != nullptr) {
         const char* hints[]={Lang::Strings::SETTINGS_SCREEN_REFRESH_CLEAR_HINT,
-            Lang::Strings::SETTINGS_SCREEN_REFRESH_BALANCED_HINT,Lang::Strings::SETTINGS_SCREEN_REFRESH_FAST_HINT,
-            Lang::Strings::SETTINGS_SCREEN_REFRESH_EXTREME_HINT};
+            Lang::Strings::SETTINGS_SCREEN_REFRESH_BALANCED_HINT,Lang::Strings::SETTINGS_SCREEN_REFRESH_FAST_HINT};
         lv_label_set_text(s_ui.refresh_hint,hints[static_cast<int>(profile)]);
     }
-    const int depth=static_cast<int>(EpdGetBlackDepth());
-    for (int i=0;i<3;++i) {
-        if (s_ui.depths[i]) SettingsStyleSelectable(s_ui.depths[i],lv_obj_get_child(s_ui.depths[i],0),depth==i);
-    }
-    if (s_ui.depth_hint) {
-        if (depth==0) lv_obj_add_flag(s_ui.depth_hint,LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_clear_flag(s_ui.depth_hint,LV_OBJ_FLAG_HIDDEN);
-    }
-
+    RefreshDepth();
 }
 
-static void OnDepthClicked(lv_event_t* e) {
-    const auto depth=static_cast<EpdBlackDepth>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if (EpdSetBlackDepth(depth)) RefreshOptions();
-}
 static lv_obj_t* OptionRow(lv_obj_t* parent) {
     auto* row=lv_obj_create(parent);
     lv_obj_remove_style_all(row);
@@ -151,22 +152,21 @@ void SettingsFrontlightTab_Refresh() {
 }
 
 void SettingsFrontlightTab_Reset() {
+    if (s_ui.depth_timer) lv_timer_delete(s_ui.depth_timer);
     s_ui = {};
 }
 
 void SettingsFrontlightTab_Build(lv_obj_t* page) {
-    s_ui = {};
+    SettingsFrontlightTab_Reset();
 
     auto* refresh_title=lv_label_create(page);
     lv_label_set_text(refresh_title,Lang::Strings::SETTINGS_SCREEN_REFRESH_TITLE);
     lv_obj_set_style_text_font(refresh_title,fontpack_lv_font_ui(),0);
     lv_obj_set_style_text_color(refresh_title,lv_color_black(),0);
-    lv_obj_t* profile_row=nullptr;
+    auto* profile_row=OptionRow(page);
     const char* profile_names[]={Lang::Strings::SETTINGS_SCREEN_REFRESH_CLEAR,
-        Lang::Strings::SETTINGS_SCREEN_REFRESH_BALANCED,Lang::Strings::SETTINGS_SCREEN_REFRESH_FAST,
-        Lang::Strings::SETTINGS_SCREEN_REFRESH_EXTREME};
-    for (int i=0;i<4;++i) {
-        if (i%2==0) profile_row=OptionRow(page);
+        Lang::Strings::SETTINGS_SCREEN_REFRESH_BALANCED,Lang::Strings::SETTINGS_SCREEN_REFRESH_FAST};
+    for (int i=0;i<3;++i) {
         s_ui.profiles[i]=SettingsCreateSelectableOption(profile_row,profile_names[i],OnProfileClicked,i);
     }
     for (auto* button:s_ui.profiles) FitRowButton(button);
@@ -184,24 +184,17 @@ void SettingsFrontlightTab_Build(lv_obj_t* page) {
     lv_obj_set_style_bg_opa(refresh_separator,LV_OPA_COVER,0);
     lv_obj_clear_flag(refresh_separator,LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(refresh_separator,LV_OBJ_FLAG_SCROLLABLE);
-    auto* depth_title=lv_label_create(page);
-    lv_label_set_text(depth_title,Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_TITLE);
-    lv_obj_set_style_text_font(depth_title,fontpack_lv_font_ui(),0);
-    lv_obj_set_style_text_color(depth_title,lv_color_black(),0);
-    auto* depth_row=OptionRow(page);
-    const char* depth_names[]={Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_DEFAULT,
-        Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_MEDIUM,Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_STRONG};
-    for (int i=0;i<3;++i) {
-        s_ui.depths[i]=SettingsCreateSelectableOption(depth_row,depth_names[i],OnDepthClicked,i);
-        FitRowButton(s_ui.depths[i]);
-    }
-    s_ui.depth_hint=lv_label_create(page);
-    lv_label_set_text(s_ui.depth_hint,Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_HINT);
-    lv_obj_set_width(s_ui.depth_hint,lv_pct(100));
-    lv_label_set_long_mode(s_ui.depth_hint,LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(s_ui.depth_hint,fontpack_lv_font_ui(),0);
-    lv_obj_set_style_text_color(s_ui.depth_hint,lv_color_black(),0);
-    lv_obj_clear_flag(s_ui.depth_hint,LV_OBJ_FLAG_CLICKABLE);
+    s_ui.depth_label=lv_label_create(page);
+    lv_obj_set_width(s_ui.depth_label, lv_pct(100));
+    lv_label_set_long_mode(s_ui.depth_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(s_ui.depth_label,fontpack_lv_font_ui(),0);
+    lv_obj_set_style_text_color(s_ui.depth_label,lv_color_black(),0);
+    s_ui.depth_timer=lv_timer_create([](lv_timer_t*) { RefreshDepth(); }, 500, nullptr);
+    lv_obj_add_event_cb(s_ui.depth_label, [](lv_event_t*) {
+        if (s_ui.depth_timer) lv_timer_delete(s_ui.depth_timer);
+        s_ui.depth_timer=nullptr;
+        s_ui.depth_label=nullptr;
+    }, LV_EVENT_DELETE, nullptr);
     auto* separator = lv_obj_create(page);
     lv_obj_remove_style_all(separator);
     lv_obj_set_size(separator, lv_pct(100), kSettingsSplitLineW);

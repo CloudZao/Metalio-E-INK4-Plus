@@ -66,7 +66,7 @@ static std::string AbsPathForName(const std::string& name) {
     return path;
 }
 
-// 仅允许单段、无路径穿越的文件名。
+// 仅允许壁纸根目录内的单段文件名。
 static bool IsSafeWallpaperBasename(const char* name) {
     return SdIsValidFileName(name);
 }
@@ -75,8 +75,9 @@ static std::string BasenameOf(const char* path_or_name) {
     if (path_or_name == nullptr || path_or_name[0] == '\0') {
         return {};
     }
-    const char* slash = std::strrchr(path_or_name, '/');
-    const char* base = slash != nullptr ? slash + 1 : path_or_name;
+    const std::string prefix = std::string(SD_PATH_WALLPAPER) + "/";
+    const char* base = std::strncmp(path_or_name, prefix.c_str(), prefix.size()) == 0 ?
+        path_or_name + prefix.size() : path_or_name;
     if (!IsSafeWallpaperBasename(base)) {
         return {};
     }
@@ -153,18 +154,18 @@ static void LoadAllFromNvsIntoCache() {
         const std::string path = AbsPathForName(name);
         if (FileExistsRegular(path.c_str())) {
             SetSlotCache(slot, name.c_str());
-            ESP_LOGI(kLogTag, "hydrate %s=%s", SlotTag(slot), name.c_str());
+            ESP_LOGI(kLogTag, "hydrate wallpaper slot=%s selected=1", SlotTag(slot));
             continue;
         }
         if (SdCardManager::GetInstance().IsMounted() && !sd_access::IsQuiescing()) {
-            ESP_LOGW(kLogTag, "hydrate %s NVS=%s missing on SD → clear", SlotTag(slot), name.c_str());
+            ESP_LOGW(kLogTag, "hydrate wallpaper unavailable slot=%s action=clear", SlotTag(slot));
             PersistSlotToNvs(slot, nullptr);
             SetSlotCache(slot, "");
         } else {
             // 尚未挂载不等于没有选择；保留配置供待机入口判断，稍后再验证文件。
             SetSlotCache(slot, name.c_str());
             defer_ready = true;
-            ESP_LOGW(kLogTag, "hydrate SD unmounted, keep NVS %s=%s", SlotTag(slot), name.c_str());
+            ESP_LOGW(kLogTag, "hydrate SD unmounted slot=%s action=keep", SlotTag(slot));
         }
     }
     if (!defer_ready) {
@@ -257,7 +258,7 @@ static bool SetSlotFromFile(WallpaperActiveSlot slot, const char* path_or_name, 
     s_overlay[static_cast<size_t>(slot)].store(overlay);
     MarkCacheReady();
     PersistSlotToNvs(slot, name.c_str());
-    ESP_LOGI(kLogTag, "%s wallpaper -> %s (NVS only)", SlotTag(slot), name.c_str());
+    ESP_LOGI(kLogTag, "wallpaper selected slot=%s", SlotTag(slot));
     return true;
 }
 
@@ -293,7 +294,7 @@ static void ClearSlotIfMatches(WallpaperActiveSlot slot, const char* filename, b
 
     SetSlotCache(slot, "");
     PersistSlotToNvs(slot, nullptr);
-    ESP_LOGI(kLogTag, "cleared %s wallpaper (%s)", SlotTag(slot), filename);
+    ESP_LOGI(kLogTag, "cleared wallpaper slot=%s", SlotTag(slot));
     if (any_cleared != nullptr) {
         *any_cleared = true;
     }
@@ -317,7 +318,7 @@ static bool TryResolveSlotPath(WallpaperActiveSlot slot, char* out_path, size_t 
         return false;
     }
     if (!FileExistsRegular(path.c_str())) {
-        ESP_LOGW(kLogTag, "%s path missing: %s", SlotTag(slot), path.c_str());
+        ESP_LOGW(kLogTag, "wallpaper unavailable slot=%s", SlotTag(slot));
         return false;
     }
     std::snprintf(out_path, out_len, "%s", path.c_str());

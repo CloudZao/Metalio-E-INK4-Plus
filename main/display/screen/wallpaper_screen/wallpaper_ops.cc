@@ -57,8 +57,7 @@ void ApplyEnableAsync(void* p) {
         if (Wallpaper_State().preview.idx >= 0 && Wallpaper_State().preview.idx < static_cast<int>(Wallpaper_State().list.files.size())) {
             std::snprintf(preview_name, sizeof(preview_name), "%s", Wallpaper_State().list.files[Wallpaper_State().preview.idx].name);
         }
-        SortFilesActiveFirst();
-        if (preview_name[0] != '\0') {
+            if (preview_name[0] != '\0') {
             Wallpaper_State().preview.idx = -1;
             for (size_t i = 0; i < Wallpaper_State().list.files.size(); ++i) {
                 if (std::strcmp(Wallpaper_State().list.files[i].name, preview_name) == 0) {

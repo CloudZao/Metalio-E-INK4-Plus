@@ -10,6 +10,7 @@
 #include "book_screen/reader/book_reader_prefs.h"
 
 #include <lvgl.h>
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -17,9 +18,11 @@
 
 #include "haptic_feedback.h"
 #include "reader/reader.h"
+#include "reader/list_thumbnail_cache.h"
+#include "assets/lang_config.h"
 
 lv_obj_t* CreateCoverSlot(lv_obj_t* parent, const reader::BookInfo& info, lv_coord_t w, lv_coord_t h,
-                          reader::RasterImage* cover_out, bool* need_embed_fill) {
+                          reader::RasterImage* cover_out, bool* need_embed_fill, bool directory) {
     if (need_embed_fill != nullptr) {
         *need_embed_fill = false;
     }
@@ -39,12 +42,29 @@ lv_obj_t* CreateCoverSlot(lv_obj_t* parent, const reader::BookInfo& info, lv_coo
     lv_obj_add_flag(img, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_t* ph_lbl = lv_label_create(host);
-    lv_label_set_text(ph_lbl, reader::FormatLabel(info.format));
+    lv_label_set_text(ph_lbl, directory ? Lang::Strings::BOOK_FOLDER : reader::FormatLabel(info.format));
     lv_obj_set_style_text_font(ph_lbl, Book_ListFont(), 0);
     lv_obj_set_style_text_color(ph_lbl, lv_color_black(), 0);
+    if (directory) {
+        lv_obj_set_width(ph_lbl, std::max<int>(1, w - 2 * (kCoverSpineInset + kCoverFrameBorder + 8)));
+        lv_label_set_long_mode(ph_lbl, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_align(ph_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    }
     lv_obj_center(ph_lbl);
     lv_obj_clear_flag(ph_lbl, LV_OBJ_FLAG_CLICKABLE);
-    if (need_embed_fill != nullptr) *need_embed_fill=cover_out!=nullptr && !info.path.empty();
+    bool cached = false;
+    if (!directory && cover_out) {
+        cached = reader::GetListThumbnail(info.path.c_str(), CoverFrameInner(w), CoverFrameInner(h),
+            info.file_size, info.mtime, *cover_out);
+        if (cached) {
+            lv_image_set_src(img, &cover_out->dsc);
+            lv_obj_center(img);
+            lv_obj_remove_flag(img, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(ph_lbl, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (need_embed_fill) *need_embed_fill=!directory && !cached && cover_out && !info.path.empty() &&
+        !reader::ListThumbnailUnavailable(info.path.c_str(), info.file_size, info.mtime);
     return host;
 }
 
@@ -52,7 +72,7 @@ lv_obj_t* CreateCoverSlot(lv_obj_t* parent, const reader::BookInfo& info, lv_coo
 lv_obj_t* CreateBookCoverCell(lv_obj_t* parent, const reader::BookInfo& info, int index,
                               lv_coord_t cell_w, lv_coord_t cover_h,
                               std::vector<std::unique_ptr<reader::RasterImage>>& cover_store,
-                              bool long_press_delete, lv_coord_t title_gap, bool show_title) {
+                              bool long_press_delete, lv_coord_t title_gap, bool show_title, bool directory) {
     auto& st = Book_State();
     lv_obj_t* cell = lv_obj_create(parent);
     lv_obj_remove_style_all(cell);
@@ -65,7 +85,7 @@ lv_obj_t* CreateBookCoverCell(lv_obj_t* parent, const reader::BookInfo& info, in
     Book_DisableScroll(cell);
     lv_obj_set_user_data(cell, reinterpret_cast<void*>(static_cast<intptr_t>(index)));
     HapticAttachClick(cell);
-    lv_obj_add_event_cb(cell, OnBookRowClicked, LV_EVENT_CLICKED,
+    lv_obj_add_event_cb(cell, directory ? OnShelfFolderClicked : OnBookRowClicked, LV_EVENT_CLICKED,
                         reinterpret_cast<void*>(static_cast<intptr_t>(index)));
     if (long_press_delete) {
         lv_obj_add_event_cb(cell, OnBookRowLongPressed, LV_EVENT_LONG_PRESSED,
@@ -75,14 +95,15 @@ lv_obj_t* CreateBookCoverCell(lv_obj_t* parent, const reader::BookInfo& info, in
     auto cover = std::make_unique<reader::RasterImage>();
     bool need_embed_fill = false;
     lv_obj_t* host =
-        CreateCoverSlot(cell, info, cell_w, cover_h, cover.get(), &need_embed_fill);
+        CreateCoverSlot(cell, info, cell_w, cover_h, cover.get(), &need_embed_fill, directory);
     cover_store.push_back(std::move(cover));
-    if (need_embed_fill) {
+    if (!directory && (need_embed_fill || st.shelf.back_root == BookUiState::NavRoot::kShelf)) {
         EnqueueListCoverFill(info, CoverFrameInner(cell_w), CoverFrameInner(cover_h), host,
                              cover_store.back().get());
     }
 
-    const int pct_x10 = BookReaderPrefsShowShelfProgress() != 0
+    const int pct_x10 = !directory && st.shelf.back_root != BookUiState::NavRoot::kShelf &&
+                            BookReaderPrefsShowShelfProgress() != 0
                             ? Book_CachedProgressX10OrZero(info.path.c_str())
                             : -1;
     if (pct_x10 >= 0) {

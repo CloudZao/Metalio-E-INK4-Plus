@@ -1,3 +1,4 @@
+#include "assets/lang_app_store.h"
 #include "assets/lang_workbuddy.h"
 #include "assets/lang_reader.h"
 #include "assets/lang_config.h"
@@ -23,6 +24,81 @@
 
 // X(name, zh, en)
 #define LANG_STRING_LIST(X)                                                                                    \
+    X(STORE_PREVIOUS_PAGE, "上一页", "Previous") \
+    X(STORE_NEXT_PAGE, "下一页", "Next") \
+    X(STORE_PAGE_RESULTS, "本页未安装应用", "Not installed on this page") \
+    X(STORE_READING_INSTALLED, "正在读取已安装应用…", "Reading installed apps…") \
+    X(STORE_FETCHING, "正在获取商店应用…", "Fetching store apps…") \
+    X(STORE_FETCHING_DETAIL, "正在获取应用详情…", "Fetching app details…") \
+    X(STORE_REFRESHED, "应用列表已更新", "App list updated") \
+    X(STORE_OFFLINE_INSTALLED, "无法连接应用商店，已安装应用仍可使用", "Cannot connect to App Store. Installed apps are still available.") \
+    X(STORE_NO_INSTALLED, "暂无已安装应用", "No installed apps") \
+    X(STORE_EMPTY, "暂无可用应用", "No apps available") \
+    X(STORE_QUEUED, "等待安装", "Queued") \
+    X(STORE_CANCELLING, "正在取消", "Cancelling") \
+    X(STORE_CANCELLED, "已取消安装", "Installation cancelled") \
+    X(STORE_VERIFYING, "正在校验…", "Verifying…") \
+    X(STORE_INSTALLING, "正在安装…", "Installing…") \
+    X(STORE_REMOVING, "正在删除应用…", "Uninstalling app…") \
+    X(STORE_INSTALLED_DONE, "应用已安装", "App installed") \
+    X(STORE_UPDATED, "应用已更新", "App updated") \
+    X(STORE_REMOVED, "应用已删除", "App uninstalled") \
+    X(STORE_FILTER, "筛选", "Filter") \
+    X(STORE_ALL, "全部", "All") \
+    X(STORE_ALL_APPS, "全部应用", "All apps") \
+    X(STORE_DOWNLOADING, "下载中", "Downloading") \
+    X(STORE_UNINSTALLED, "未安装", "Not installed") \
+    X(STORE_INSTALL_STATE, "安装状态", "Installation") \
+    X(STORE_DETAILS, "应用详情", "App details") \
+    X(STORE_VERSION, "当前版本", "Version") \
+    X(STORE_SIZE, "应用大小", "App size") \
+    X(STORE_CATEGORY, "类别", "Category") \
+    X(STORE_LANGUAGE, "语言", "Languages") \
+    X(STORE_LANGUAGE_ZH, "简体中文", "Simplified Chinese") \
+    X(STORE_LANGUAGE_EN, "英语", "English") \
+    X(STORE_DESCRIPTION, "应用描述", "Description") \
+    X(STORE_RELEASE_NOTES, "更新说明", "Release notes") \
+    X(STORE_PROVIDER, "提供者", "Provider") \
+    X(STORE_LAST_UPDATED, "最近更新", "Last updated") \
+    X(STORE_NOT_PROVIDED, "未提供", "Not provided") \
+    X(STORE_LOCATION, "存储位置", "Storage") \
+    X(STORE_CHECKING, "正在检查", "Checking") \
+    X(STORE_CANCEL, "取消", "Cancel") \
+    X(STORE_NO_MATCH, "暂无符合条件的应用", "No matching apps") \
+    X(STORE_TITLE, "应用商店", "App Store") \
+    X(STORE_INSTALLED, "已安装", "Installed") \
+    X(STORE_INSTALL, "安装", "Install") \
+    X(STORE_UPDATE, "更新", "Update") \
+    X(STORE_CHECK_UPDATE, "检查更新", "Check for updates") \
+    X(STORE_UPDATE_CONFIRM_FMT, "发现新版本 %s\n是否更新？", "New version available: %s\nUpdate this app?") \
+    X(STORE_CONFIRM, "确认", "Confirm") \
+    X(STORE_RUN, "打开", "Open") \
+    X(STORE_REMOVE, "删除应用", "Uninstall") \
+    X(STORE_LOADING, "正在读取应用…", "Loading apps…") \
+    X(STORE_BUSY, "正在处理，请稍候…", "Working. Please wait…") \
+    X(STORE_DOWNLOAD_BUSY, "正在下载中，请稍后再试", "Download in progress. Please try again later.") \
+    X(STORE_CURRENT, "已是最新版本", "Already up to date") \
+    X(STORE_REMOVE_CONFIRM, "确认删除此应用？本机安装文件将被移除，可从商店重新安装。", "Uninstall this app? Local installation files will be removed. You can install it again from the Store.") \
+    X(STORE_SD_ERROR, "SD 卡不可用或写入失败，请检查 SD 卡及 USB 模式", "SD card unavailable or write failed. Check the card and USB mode.") \
+    X(STORE_FORBIDDEN, "设备未绑定或归属异常，请检查设备绑定", "Device binding unavailable. Check device binding.") \
+    X(STORE_UNAVAILABLE, "应用版本不可用，请刷新列表", "App version unavailable. Refresh the list.") \
+    X(STORE_CATALOG_EXPIRED, "应用列表已过期，请刷新", "App list expired. Refresh the list.") \
+    X(STORE_WITHDRAWN, "此版本已下架，请刷新列表", "This version was withdrawn. Refresh the list.") \
+    X(STORE_PACKAGE_CHANGED, "下载信息已变化，请重新安装", "Download information changed. Install again.") \
+    X(STORE_RANGE_ERROR, "下载进度无效，请重新安装", "Download progress invalid. Install again.") \
+    X(STORE_UNSUPPORTED, "设备或固件不兼容，请检查固件版本", "Device or firmware incompatible. Check firmware.") \
+    X(STORE_SERVICE_BUSY, "服务繁忙，请稍后重试", "Service busy. Try again later.") \
+    X(STORE_NETWORK_ERROR, "无法连接应用商店，请检查网络", "Cannot connect to App Store. Check the network.") \
+    X(STORE_VERIFY_ERROR, "应用文件校验失败，请重新下载", "App file verification failed. Download it again.") \
+    X(STORE_MEMORY_ERROR, "可用内存不足，请关闭其他功能后重试", "Not enough memory. Close other features and try again.") \
+    X(STORE_RUN_ERROR, "应用加载失败，请检查应用与固件的兼容性", "App could not load. Check app and firmware compatibility.") \
+    X(STORE_INVALID, "应用目录无效或接口版本不兼容", "Invalid app catalog or incompatible API version.") \
+    X(STORE_LIMIT, "最多支持 32 个应用，请先删除不需要的应用", "Up to 32 apps are supported. Uninstall unused apps first.") \
+    X(STORE_SERVER_ERROR, "应用商店地址无效，请检查服务配置", "Invalid store address. Check service settings.") \
+    X(YUNXIN_BINDING_OPEN_AI, "请前往网易AI扫码绑定设备", "Open NetEase AI and scan the code to link your device.") \
+    X(YUNXIN_BINDING_CHECKING, "正在检查设备绑定，请稍候…", "Checking device link. Please wait...") \
+    X(YUNXIN_BINDING_SCAN, "请使用小程序扫码绑定设备\n完成绑定后即可使用此功能", "Scan with the mini program to link your device.\nThis feature is available once linking is complete.") \
+    X(YUNXIN_BINDING_RETRY, "暂时无法确认设备绑定，正在重试\n请保持网络连接", "Unable to confirm the device link. Retrying...\nKeep your device connected to Wi-Fi.") \
     X(BOOK_FONT_DECREASE, "减小字号", "Smaller text") \
     X(BOOK_FONT_INCREASE, "增加字号", "Larger text") \
     X(BOOK_TURN_INTERVAL, "间隔", "Interval") \
@@ -480,6 +556,8 @@
     X(HOME_WDAY_FRI, "周五", "Fri")                                                                            \
     X(HOME_WDAY_SAT, "周六", "Sat")                                                                            \
     X(BATTERY_NEED_CHARGE, "电量不足，请充电", "Low battery, please charge")                                   \
+    X(BATTERY_SHUTTING_DOWN, "当前电量过低，即将关机", "Battery critically low. Shutting down.")              \
+    X(BATTERY_LOW_VOLTAGE_SHUTTING_DOWN, "当前电池电压过低，即将关机", "Battery voltage critically low. Shutting down.") \
     X(COMMON_UNKNOWN, "未知", "Unknown")                                                                       \
     X(POWERED_OFF, "已关机", "Powered off")                                                                    \
     X(SETTINGS_TAB_NETWORK, "网络", "Network")                                                                 \
@@ -492,18 +570,30 @@
     X(SETTINGS_CHARGING_FAILED, "设置失败，请重试", "Could not apply setting. Try again.") \
     X(SETTINGS_TAB_POWER, "功耗", "Power")                                                                     \
     X(SETTINGS_SCREEN_BLACK_DEPTH_TITLE, "黑色深度", "Black depth") \
-    X(SETTINGS_SCREEN_BLACK_DEPTH_DEFAULT, "默认", "Default") \
-    X(SETTINGS_SCREEN_BLACK_DEPTH_MEDIUM, "中", "Medium") \
-    X(SETTINGS_SCREEN_BLACK_DEPTH_STRONG, "强", "Strong") \
-    X(SETTINGS_SCREEN_BLACK_DEPTH_HINT, "提高黑色深度可能影响屏幕寿命，并增加底色变化风险，建议优先使用默认档。", "Increasing black depth may affect display lifespan and cause background discoloration. Default is recommended.") \
+    X(SETTINGS_VCOM_UNKNOWN, "未知", "Unknown") \
+    X(SETTINGS_VCOM_WRITE_OK, "VCOM 写入成功", "VCOM saved") \
+    X(SETTINGS_VCOM_READ_OK, "VCOM 读取成功", "VCOM read successfully") \
+    X(SETTINGS_VCOM_WRITE_FAILED, "VCOM 写入失败，请检查蓝牙芯片", "VCOM write failed; check the Bluetooth chip") \
+    X(SETTINGS_VCOM_READ_FAILED, "VCOM 读取失败，请检查蓝牙芯片", "VCOM read failed; check the Bluetooth chip") \
+    X(SETTINGS_VCOM_INVALID, "值异常：VCOM 绝对值须为 1.0～3.0V，步进 10mv", "Abnormal value: VCOM magnitude must be 1.0–3.0V, in 10mv steps") \
+    X(SETTINGS_TEST_MARGIN, "边距测试", "Margin test") \
+    X(SETTINGS_SCREEN_MARGIN_TITLE, "UI 偏移（-20~20px）：即时生效并保存。", "UI offset (-20~20px): Applied and saved immediately.") \
+    X(SETTINGS_SCREEN_MARGIN_SET_OK, "设置成功", "Settings saved") \
+    X(SETTINGS_SCREEN_MARGIN_RESET_OK, "恢复成功", "Defaults restored") \
+    X(SETTINGS_SCREEN_MARGIN_SAVE_FAILED, "保存失败，请重试", "Could not save. Try again.") \
+    X(SETTINGS_SCREEN_MARGIN_SET_DEFAULT, "设为默认", "Set as default") \
+    X(SETTINGS_SCREEN_MARGIN_RESET, "恢复默认", "Restore defaults") \
+    X(SETTINGS_SCREEN_MARGIN_VALUE_FMT, "当前值：%d", "Current value: %d") \
+    X(SETTINGS_SCREEN_MARGIN_TOP, "上移", "Up") \
+    X(SETTINGS_SCREEN_MARGIN_BOTTOM, "下移", "Down") \
+    X(SETTINGS_SCREEN_MARGIN_LEFT, "左移", "Left") \
+    X(SETTINGS_SCREEN_MARGIN_RIGHT, "右移", "Right") \
     X(SETTINGS_SCREEN_REFRESH_TITLE, "刷新模式", "Refresh mode") \
     X(SETTINGS_SCREEN_REFRESH_CLEAR, "清晰", "Clear") \
     X(SETTINGS_SCREEN_REFRESH_CLEAR_HINT, "细节更清晰，残影更少。", "Sharper detail, less ghosting.") \
     X(SETTINGS_SCREEN_REFRESH_BALANCED_HINT, "兼顾画质与速度，可能加重残影。", "Balanced quality and speed; may increase ghosting.") \
     X(SETTINGS_SCREEN_REFRESH_BALANCED, "均衡", "Balanced") \
     X(SETTINGS_SCREEN_REFRESH_FAST, "快速", "Fast") \
-    X(SETTINGS_SCREEN_REFRESH_EXTREME, "极速", "Ultra fast") \
-    X(SETTINGS_SCREEN_REFRESH_EXTREME_HINT, "翻页最快，可能加重残影。", "Fastest page turns; may increase ghosting.") \
     X(SETTINGS_SCREEN_REFRESH_FAST_HINT, "保留灰阶，响应更快；可能加重残影。", "Faster response with grayscale retained; may increase ghosting.") \
     X(SETTINGS_TAB_FRONTLIGHT, "屏幕", "Screen")                                                                \
     X(SETTINGS_TAB_CONVERSATION, "对话", "Talk")                                                               \
@@ -988,6 +1078,10 @@
     X(BOOK_LAYOUT_BUSY, "编排中", "Building") \
     X(BOOK_LAYOUT_DONE, "完成", "Done") \
     X(BOOK_LINE_GAP, "行距", "Line spacing") \
+    X(BOOK_MARGIN_TOP, "上", "Top") \
+    X(BOOK_MARGIN_BOTTOM, "下", "Bottom") \
+    X(BOOK_MARGIN_LEFT, "左", "Left") \
+    X(BOOK_MARGIN_RIGHT, "右", "Right") \
     X(BOOK_MARGIN, "边距", "Margin") \
     X(BOOK_MARGIN_NARROW, "窄", "Narrow") \
     X(BOOK_MARGIN_STANDARD, "标准", "Standard") \
@@ -1011,6 +1105,8 @@
     X(BOOK_OPEN_CANCELLED, "已取消打开", "Opening cancelled") \
     X(BOOK_OPEN_FAILED_TASK, "打开失败\n无法启动解析任务", "Open failed\nCannot start parse task") \
     X(BOOK_OPENING, "正在打开", "Opening") \
+    X(DIRECTORY_READ_FAILED, "目录读取失败，请重新打开", "Cannot read folder. Please reopen it.") \
+    X(BOOK_FOLDER, "文件夹", "Folder") \
     X(BOOK_LOADING, "加载中...", "Loading...") \
     X(BOOK_ORIENT, "屏幕方向", "Orientation") \
     X(BOOK_ORIENT_LAND_LEFT, "左横", "Left") \
@@ -1026,6 +1122,8 @@
     X(BOOK_RECENT, "最近阅读", "Recent") \
     X(BOOK_SAVE_FAIL, "保存失败", "Save failed") \
     X(BOOK_SELECTED_FMT, "已选 %d", "Selected %d") \
+    X(BOOK_DELETING, "正在移除，请等待操作结束...", "Removing. Please wait for the operation to finish...") \
+    X(BOOK_DELETE_STOPPING, "正在停止，请等待当前文件清理完成...", "Stopping. Please wait for the current file cleanup to finish...") \
     X(BOOK_SHELF_TITLE, "我的书架", "My bookshelf") \
     X(BOOK_SPACING_COMPACT, "紧凑", "Compact") \
     X(BOOK_SPACING_RELAXED, "宽松", "Relaxed") \

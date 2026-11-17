@@ -4862,6 +4862,26 @@ CONFIG_WL_SECTOR_SIZE=4096
 # end of Wear Levelling
 
 #
+# Espressif ELF Loader Configuration
+#
+CONFIG_ELF_LOADER=y
+# default:
+# CONFIG_ELF_DYNAMIC_LOAD_SHARED_OBJECT is not set
+CONFIG_ELF_LOADER_LOAD_PSRAM=y
+
+#
+# ELF Symbols Table
+#
+# CONFIG_ELF_LOADER_LIBC_SYMBOLS is not set
+# CONFIG_ELF_LOADER_ESPIDF_SYMBOLS is not set
+# default:
+# CONFIG_ELF_LOADER_CUSTOMER_SYMBOLS is not set
+# default:
+CONFIG_ELF_LOADER_NUMBER_SYMBOLS=32
+# end of ELF Symbols Table
+# end of Espressif ELF Loader Configuration
+
+#
 # IoT Button
 #
 # default:
@@ -5129,6 +5149,13 @@ CONFIG_KNOB_LOW_LIMIT=-1000
 # default:
 CONFIG_LIBPNG_PREFER_PSRAM=y
 # end of libpng
+
+#
+# zlib Configurations
+#
+# default:
+CONFIG_ZLIB_PREFER_PSRAM=y
+# end of zlib Configurations
 
 #
 # LVGL configuration

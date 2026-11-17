@@ -57,11 +57,11 @@ echo "==> 3/3 merge Latin Modern Math 18/28/36@2"
 rm -f "$BASE_PACK" "$EMOJI_PACK"
 cp -f "$FINAL" "${ROOT}/fonts_misans_25_30.fontpack"
 ln -sf "fonts_misans_25_30.fontpack" "${ROOT}/fonts.fontpack"
-# 固件合并 / idf.py flash 默认读 use_font/font.fontpack
-mkdir -p "${ROOT}/../../use_font"
-cp -f "$FINAL" "${ROOT}/../../use_font/font.fontpack"
+# 固件合并 / idf.py flash 默认读 main/assets/fonts/font.fontpack
+mkdir -p "${ROOT}/../../main/assets/fonts"
+cp -f "$FINAL" "${ROOT}/../../main/assets/fonts/font.fontpack"
 
 SZ=$(stat -c%s "$FINAL")
 echo "DONE ${FINAL} ($(numfmt --to=iec-i --suffix=B "$SZ" 2>/dev/null || echo "${SZ} bytes"))"
 echo "    -> fonts_misans_25_30.fontpack (flash default, +math)"
-echo "    -> ../../use_font/font.fontpack (idf / merge_firmware)"
+echo "    -> ../../main/assets/fonts/font.fontpack (idf / merge_firmware)"

@@ -16,7 +16,7 @@ constexpr size_t kRecentDisplayMax = 2;
 /**
  * 阅读首页快照（与书库列表缓存正交）：
  * - 最近阅读：NVS MRU（相对 books/ 的路径），仅在真正写进度时轮换；空则不展示
- * - 聚合统计：开机 library/sync Peek 时累加落盘，首页直接读，避免再全库扫 .pos
+ * - 聚合统计：保留已有摘要，单本进度成功保存后增量更新，首页不遍历全库 .pos
  *
  * Flash/NVS 禁忌：禁止在 LVGL（栈常在 PSRAM）路径直接 nvs_*。
  * 必须先由 DRAM 栈任务 HydrateFromNvs()；UI 只碰内存；落盘走异步 DRAM 任务。
@@ -61,7 +61,7 @@ void SubtractAggregateContribution(uint32_t reading_seconds, bool finished);
 
 /**
  * 读出最近阅读绝对路径（仅内存；未 Hydrate 则空）。
- * 过滤已删文件；若有剔除则异步写回 NVS。
+ * 不访问 SD，文件存在性在打开时由后台检查。
  */
 size_t LoadRecentAbsPaths(std::vector<std::string>& out);
 
@@ -71,14 +71,8 @@ std::string LoadLatestAbsPath();
 /** 仅读内存；未 Hydrate 则 valid=false。 */
 AggregateStats LoadAggregateStats();
 
-/** 开机同步 Peek 累加后写入内存并异步落盘（DRAM 栈任务写 Flash）。 */
-void StoreAggregateStats(uint32_t total_seconds, int finished_count);
-
-/**
- * MRU/删书变更代数：sync Peek 前后不一致则勿 StoreAggregate，
- * 避免「Peek 已计入 → 用户删除已扣减 → Store 又写回含已删书」覆盖。
- */
-uint32_t MutationEpoch();
+/** @brief 单本进度成功保存后增量更新现有统计，不遍历书库 */
+void UpdateAggregateProgress(uint32_t old_seconds, bool old_finished, uint32_t seconds, bool finished);
 
 }  // namespace book_home_snapshot
 }  // namespace reader

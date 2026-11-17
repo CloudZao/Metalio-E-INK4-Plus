@@ -152,6 +152,14 @@ int font_loader_init(const char* path);
  */
 bool get_glyph_from_sd(uint32_t codepoint, uint16_t size, uint16_t bpp, GlyphData* out_glyph);
 
+/**
+ * @brief 按需打开扩展字库读取单字，返回前关闭文件，不改变全局 Flash 或 SD 后端
+ * @note 调用方负责 SD 访问事务；文件不存在及缺字属于正常结果。
+ * @return FONT_LOADER_OK 或对应错误码
+ */
+int font_loader_read_sd(const char* path, uint32_t codepoint, uint16_t size, uint16_t bpp,
+                        GlyphData* out_glyph);
+
 #ifdef __cplusplus
 }
 #endif

@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include <cerrno>
 
 #include <esp_log.h>
 #ifndef EBOOK_EMULATOR
@@ -153,7 +154,7 @@ bool EbookDocument::ReattachSd() {
     }
     fp_ = std::fopen(path_.c_str(), "rb");
     if (fp_ == nullptr) {
-        ESP_LOGW(TAG, "reattach fail: %s", path_.c_str());
+        ESP_LOGW(TAG, "ebook reattach failed errno=%d", errno);
         return false;
     }
     return true;
@@ -189,7 +190,7 @@ bool EbookDocument::Open(const char* path) {
     fp_ = std::fopen(path, "rb");
     if (fp_ == nullptr) {
         error_ = BookReadError::kFileIo;
-        ESP_LOGE(TAG, "fopen fail: %s", path);
+        ESP_LOGE(TAG, "ebook open failed errno=%d", errno);
         return false;
     }
     path_ = path;
@@ -209,9 +210,7 @@ bool EbookDocument::Open(const char* path) {
         Close();
         return false;
     }
-    ESP_LOGI(TAG, "open %s chapters=%d chunk_max=%u title=%s book_id=%s", path,
-             ChapterCount(), static_cast<unsigned>(chunk_max_), title_.c_str(),
-             book_id_.empty() ? "-" : book_id_.c_str());
+    ESP_LOGD(TAG, "ebook opened chapters=%d chunk_max=%u", ChapterCount(), static_cast<unsigned>(chunk_max_));
     return true;
 }
 

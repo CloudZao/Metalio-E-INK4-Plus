@@ -1,4 +1,5 @@
 #include "metalio_audio.h"
+#include "panel_vcom.h"
 
 #include "audio_codec.h"
 #include "board.h"
@@ -44,6 +45,7 @@ bool s_mode_ack = false; // 已收到模式1成功应答
 bool s_command_error = false; // 本次配置收到失败应答
 
 void OnUartData(const std::vector<uint8_t>& data) {
+    PanelVcomOnUartData(data);
     std::lock_guard<std::mutex> lock(s_reply_mutex);
     for (uint8_t c : data) {
         if (c == '\r' || c == '\n') {
@@ -75,6 +77,7 @@ bool PowerUnchanged(unsigned epoch) {
 
 bool ApplyMode(unsigned epoch) {
     auto& uart = SimpleUart::getInstance();
+    std::lock_guard<std::recursive_timed_mutex> transaction(uart.commandMutex());
     struct ReplyScope {
         ~ReplyScope() {
             std::lock_guard<std::mutex> lock(s_reply_mutex);

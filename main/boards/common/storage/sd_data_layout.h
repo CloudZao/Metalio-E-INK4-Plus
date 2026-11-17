@@ -15,7 +15,9 @@ void Prepare();
  * @note 调用方须排除同前缀的活动文件。
  */
 bool CleanWorkFiles(const char* root, const char* prefix);
-/** @brief 删除书籍辅助数据，不删除书籍正文。 */
+/** @brief 按已知路径删除书籍辅助数据，不删除正文或遍历书籍目录。
+ * @note 带未知会话编号的旧工作文件不在单书删除时查找，删除所属目录时一并清理。
+ */
 bool DeleteBookData(const char* book);
 /** @brief 删除壁纸名称信息及其旧位置副本，不删除图片。 */
 bool DeleteWallpaperData(const char* wallpaper);

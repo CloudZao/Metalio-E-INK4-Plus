@@ -27,6 +27,13 @@ public:
     /** @brief 直接续读最近书籍，无有效记录时返回阅读首页 */
     static lv_obj_t* CreateLatest();
 
+    /** @brief 在内部 RAM 栈的启动线程读取并消费关机续读记录 */
+    static bool LoadBootResume();
+    /** @brief SD 就绪后恢复关机前的阅读页，无有效书籍时返回主页 */
+    static lv_obj_t* CreateBootResume();
+    /** @brief 持有 UI 锁时暂停阅读并保存关机状态，完成后返回 true */
+    static bool PreparePowerOff();
+
     /** @brief 正文沉浸阅读中（目录/设置浮层除外）；音量键作翻页 */
     static bool IsReadingActive();
 

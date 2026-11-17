@@ -343,12 +343,7 @@ bool DeleteBookData(const char* book) {
             }
         }
     }
-    const std::string prefix = std::string(book) + ".";
-    const auto parent = prefix.substr(0, prefix.find_last_of('/'));
-    Walk(parent.c_str(), [&](const std::string& path) {
-        if (path.compare(0, prefix.size(), prefix) == 0 && WorkName(path.substr(path.find_last_of('/') + 1)))
-            Remove(path, counts);
-    }, counts, false);
+    // 带未知会话编号的旧工作文件由所属目录删除处理，单书删除不遍历书籍目录。
     return counts.failed == 0;
 }
 

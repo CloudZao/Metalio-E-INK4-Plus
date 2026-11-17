@@ -90,7 +90,7 @@ void HideReadChrome() {
     st.settings.font_suppress_click_until_us = 0;
     st.settings.font_suppress_click_idx = -1;
     st.settings.font_suppress_next_click = false;
-    st.settings.font_selected.assign(st.settings.font_entries.size(), 0);
+    st.settings.font_selected.clear();
     SetReadStatusCenterTitle(nullptr);
     SetReadStatusVisible(false);
     SetReadSettingsSheetVisible(false);
@@ -201,7 +201,6 @@ void EnsureSettingsSheetAfterLayout() {
     SetReadStatusVisible(true);
     SetReadSettingsSheetVisible(true);
     if (!SettingsSheetWidgetsReady()) {
-        EnsureFontListPageShowsSelection();
         RebuildSettingsSheet();
     } else {
         RequestSettingsSheetPaint();

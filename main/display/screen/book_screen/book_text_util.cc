@@ -2,6 +2,7 @@
 #include "book_screen/book_screen_priv.h"
 #include "book_screen/book_font_runtime.h"
 #include "book_screen/shelf/book_home.h"
+#include "book_screen/shelf/book_shelf_ops.h"
 
 #include <lvgl.h>
 #include <cstdint>
@@ -53,28 +54,13 @@ void FormatBookReadPctLabel(char* out, size_t out_sz, int pct_x10) {
     std::snprintf(out, out_sz, fmt, pct_x10 / 10, pct_x10 % 10);
 }
 
-// 首页统计从单书内存缓存汇总；缓存未就绪时使用持久化快照。
+// 首页统计读取已有摘要，单本进度仅使用可见项缓存。
 HomeStats CollectHomeStats(const std::vector<reader::BookInfo>& books) {
     HomeStats out;
-    if (reader::book_progress_cache::IsReady()) {
-        for (const auto& book : books) {
-            reader::BookSession::ProgressPeek peek;
-            if (!reader::book_progress_cache::TryGet(book.path.c_str(), peek)) {
-                continue;
-            }
-            out.total_seconds = UINT32_MAX - out.total_seconds < peek.reading_seconds
-                                    ? UINT32_MAX
-                                    : out.total_seconds + peek.reading_seconds;
-            if (peek.progress_x10 >= 1000) {
-                ++out.finished_count;
-            }
-        }
-    } else {
-        const auto agg = reader::book_home_snapshot::LoadAggregateStats();
-        if (agg.valid) {
-            out.total_seconds = agg.total_seconds;
-            out.finished_count = agg.finished_count;
-        }
+    const auto agg = reader::book_home_snapshot::LoadAggregateStats();
+    if (agg.valid) {
+        out.total_seconds = agg.total_seconds;
+        out.finished_count = agg.finished_count;
     }
 
     if (books.empty()) {
@@ -126,15 +112,9 @@ HomeStats CollectHomeStats(const std::vector<reader::BookInfo>& books) {
     {
         reader::BookSession::ProgressPeek peek;
         const char* path = books[static_cast<size_t>(out.continue_index)].path.c_str();
-        if (!reader::book_progress_cache::TryGet(path, peek)) {
-            peek = reader::BookSession::PeekProgress(path);
-        }
+        reader::book_progress_cache::TryGet(path, peek);
         out.continue_seconds = peek.reading_seconds;
-        if (peek.progress_x10 >= 0) {
-            out.continue_progress_x10 = peek.progress_x10;
-        } else {
-            out.continue_progress_x10 = reader::BookSession::PeekReadingProgressX10(path);
-        }
+        out.continue_progress_x10 = peek.progress_x10;
     }
     return out;
 }
@@ -343,14 +323,7 @@ void Book_ShowMessage(lv_obj_t* parent, const char* msg, const lv_font_t* font) 
 }
 
 int Book_ListPageCount() {
-    auto& st = Book_State();
-    const size_t n = (st.shelf.shelf_view == kBookReaderShelfViewList) ? st.shelf.shelf_entries.size()
-                                                                  : st.shelf.books.size();
-    if (n == 0 || st.shelf.list_page_size <= 0) {
-        return 1;
-    }
-    return static_cast<int>((n + static_cast<size_t>(st.shelf.list_page_size) - 1) /
-                            static_cast<size_t>(st.shelf.list_page_size));
+    return ShelfDirectoryPages();
 }
 
 void Book_ClampListPage() {

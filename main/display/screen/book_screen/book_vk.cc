@@ -127,6 +127,40 @@ bool BookPageRepeatStep(int page_delta) {
     return page_delta < 0 ? st.reader.session->HasPrevPage() : st.reader.session->HasNextPage();
 }
 
+static bool CancelBookBatchForKey(const char* key) {
+    if (std::strcmp(key, "vk_prev") != 0 && std::strcmp(key, "vk_home") != 0) {
+        return false;
+    }
+    const char* screen = VkKey_ActiveScreen();
+    const auto& st = Book_State();
+    if (std::strcmp(screen, kScreenBookshelf) == 0 && (st.shelf.shelf_multi || ShelfDeleteBusy())) {
+        BookLvAsync([](void*) { OnShelfMultiCancel(nullptr); });
+        return true;
+    }
+    if (std::strcmp(screen, kScreenRead) == 0 && st.reader.read_chrome == BookUiState::ReadChrome::kSettings) {
+        if (st.ttf.ttf_multi) {
+            BookLvAsync([](void*) {
+                Book_State().ttf.ttf_selected.clear();
+                Book_State().ttf.ttf_multi = false;
+                RebuildSettingsSheet();
+            });
+            return true;
+        }
+        if (st.settings.font_multi) {
+            BookLvAsync([](void*) { ExitFontMultiMode(true); });
+            return true;
+        }
+        if (st.settings.bookmark_multi) {
+            BookLvAsync([](void*) {
+                ResetBookmarkSelection();
+                RequestSettingsSheetPaint();
+            });
+            return true;
+        }
+    }
+    return false;
+}
+
 bool BookScreen::OnBootClick() {
     // 仅正文阅读屏：BOOT 短按切换悬浮排版卡片（弹出/收起）；其余页面不消费。
     if (std::strcmp(VkKey_ActiveScreen(), kScreenRead) != 0) {
@@ -145,6 +179,7 @@ bool BookScreen::OnVkKeyLongPress(const char* key_name) {
     if (key_name == nullptr) {
         return false;
     }
+    if (CancelBookBatchForKey(key_name)) return true;
     // 与 397 一致：先退出阅读并恢复竖屏，再回系统首页。
     if (std::strcmp(key_name, "vk_home") == 0) {
         if (!ScreenLvAsyncUrgent(GoHomeFromBookAsync)) {
@@ -169,6 +204,7 @@ bool BookScreen::OnVkKey(const char* key_name) {
     }
     const char* screen = VkKey_ActiveScreen();
     auto& st = Book_State();
+    if (CancelBookBatchForKey(key_name)) return true;
     if (BookmarkMessageVisible()) {
         if (std::strcmp(key_name, "vk_prev") == 0 || std::strcmp(key_name, "vk_home") == 0)
             BookLvAsync([](void*) { CloseBookmarkMessage(); });
@@ -206,10 +242,7 @@ bool BookScreen::OnVkKey(const char* key_name) {
             if (std::strcmp(key_name, "vk_prev") == 0) {
                 if (st.ttf.ttf_mode != BookUiState::TtfMode::kNone) {
                     BookLvAsync([](void*) {
-                        if (!Book_State().ttf.ttf_selected.empty()) {
-                            Book_State().ttf.ttf_selected.clear();
-                            RebuildSettingsSheet();
-                        } else if (Book_State().ttf.ttf_mode == BookUiState::TtfMode::kList) SelectReadingSheetTab(1);
+                        if (Book_State().ttf.ttf_mode == BookUiState::TtfMode::kList) SelectReadingSheetTab(1);
                         else ReturnToTtfList();
                     });
                 } else if (st.tap.tap_zone_ui == BookUiState::TapZoneUi::kPick) {
@@ -218,8 +251,6 @@ bool BookScreen::OnVkKey(const char* key_name) {
                     BookLvAsync(AsyncTapZonesPanelClose);
                 } else if (st.settings.reader_tab == 3 && st.settings.reader_settings_page != 0) {
                     BookLvAsync([](void*) { SelectReadingSheetTab(3); });
-                } else if (st.settings.font_multi) {
-                    ExitFontMultiMode(true);
                 } else {
                     BookLvAsync(AsyncHideReadChrome);
                 }
@@ -313,15 +344,10 @@ bool BookScreen::OnVkKey(const char* key_name) {
                 return true;
             }
             // 列表模式：子目录先退回上层（扫盘禁止在 touch_feed 同步做）
-            if (st.shelf.shelf_view == kBookReaderShelfViewList && !ShelfDirIsRoot()) {
+            if (!ShelfDirIsRoot()) {
                 st.shelf.shelf_dir = ShelfParentDir(st.shelf.shelf_dir);
                 st.shelf.list_page = 0;
                 BookLvAsync(ShelfReloadAndRenderAsync);
-                return true;
-            }
-            // 第一页：多选中则取消批量，否则回阅读首页
-            if (st.shelf.shelf_multi) {
-                ExitShelfMultiMode(true);
                 return true;
             }
             BookLvAsync(BackToReadingHomeAsync);
@@ -374,7 +400,7 @@ void BookScreen::OnEnterStandby() {
 
 void BookScreen::PollStandbyWork() {
     auto& st = Book_State();
-    if (!st.reader.standby_paused || ReaderWorkersBusy() || ttf_convert::Busy()) return;
+    if (st.reader.powering_off || !st.reader.standby_paused || ReaderWorkersBusy() || ttf_convert::Busy()) return;
     if (st.reader.deferred_cleanup) FinishDeferredCleanup();
     if (StandbyScreen::IsActive()) {
         // 壁纸加载提示仍需绘制底层页面；内容就绪后才允许关闭其字体资源。

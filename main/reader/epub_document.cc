@@ -175,7 +175,7 @@ void EpubDocument::Close() {
     manifest_props_.clear();
 }
 
-bool EpubDocument::Open(const char* path) {
+bool EpubDocument::Open(const char* path, bool load_toc) {
     error_ = BookReadError::kInvalidData;
     Close();
     if (path == nullptr) return false;
@@ -184,7 +184,7 @@ bool EpubDocument::Open(const char* path) {
         return false;
     }
     path_ = path;
-    if (!ParseContainer()) {
+    if (!ParseContainer(load_toc)) {
         if (zip_.Error() != BookReadError::kNone) error_ = zip_.Error();
         Close();
         return false;
@@ -192,7 +192,7 @@ bool EpubDocument::Open(const char* path) {
     return true;
 }
 
-bool EpubDocument::ParseContainer() {
+bool EpubDocument::ParseContainer(bool load_toc) {
     std::vector<uint8_t> bytes;
     if (!zip_.ReadEntry("META-INF/container.xml", bytes, 64 * 1024)) {
         ESP_LOGE(TAG, "missing container.xml");
@@ -221,10 +221,10 @@ bool EpubDocument::ParseContainer() {
         ESP_LOGE(TAG, "rootfile not found");
         return false;
     }
-    return ParseOpf(NormalizeZipPath({}, opf));
+    return ParseOpf(NormalizeZipPath({}, opf), load_toc);
 }
 
-bool EpubDocument::ParseOpf(const std::string& opf_path) {
+bool EpubDocument::ParseOpf(const std::string& opf_path, bool load_toc) {
     std::vector<uint8_t> bytes;
     if (!zip_.ReadEntry(opf_path.c_str(), bytes, 512 * 1024)) {
         ESP_LOGE(TAG, "cannot read opf error=%d", static_cast<int>(zip_.Error()));
@@ -306,8 +306,10 @@ bool EpubDocument::ParseOpf(const std::string& opf_path) {
 
     const auto ncx = manifest_.find(toc_id);
     if (ncx != manifest_.end()) ncx_href = ncx->second;
-    if (nav_href.empty() || !ParseNavigation(nav_href, false)) {
-        if (!ncx_href.empty()) ParseNavigation(ncx_href, true);
+    if (load_toc) {
+        if (nav_href.empty() || !ParseNavigation(nav_href, false)) {
+            if (!ncx_href.empty()) ParseNavigation(ncx_href, true);
+        }
     }
     ESP_LOGI(TAG, "opf ok spine=%d toc=%u", SpineCount(), static_cast<unsigned>(toc_.size()));
     return !spine_.empty();

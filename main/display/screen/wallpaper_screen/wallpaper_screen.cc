@@ -88,7 +88,22 @@ bool WallpaperPageRepeatStep(int page_delta) {
     return page_delta < 0 ? Wallpaper_State().list.list_page > 0 : Wallpaper_State().list.list_page < last;
 }
 
+static bool CancelWallpaperBatchForKey(const char* key) {
+    if (!key || Wallpaper_State().mode != UiMode::kList ||
+        (!Wallpaper_State().list.multi && !Wallpaper_State().workers.delete_busy.load()) ||
+        (std::strcmp(key, "vk_prev") != 0 && std::strcmp(key, "vk_home") != 0)) {
+        return false;
+    }
+    if (!ScreenLvAsync([](void*) { OnWpMultiCancel(nullptr); })) {
+        ESP_LOGW(TAG, "batch cancel UI delivery unavailable");
+    }
+    return true;
+}
+
 bool Wallpaper_OnVkKeyLongPress(const char* key) {
+    if (CancelWallpaperBatchForKey(key)) {
+        return true;
+    }
     if (s_return_to_reading && key && std::strcmp(key, "vk_home") == 0) {
         Wallpaper_ReturnToReading(true);
         return true;
@@ -104,6 +119,7 @@ bool Wallpaper_OnVkKey(const char* key) {
     if (key == nullptr) {
         return false;
     }
+    if (CancelWallpaperBatchForKey(key)) return true;
     if (Wallpaper_State().mode == UiMode::kPreview) {
         // 弹窗优先关闭，保留当前预览
         if (Wallpaper_State().ui.dialog_mask != nullptr &&
@@ -138,11 +154,6 @@ bool Wallpaper_OnVkKey(const char* key) {
             RequestWallpaperListRebuild(true);
             return true;
         }
-        // 第一页：多选中则退出批量，否则交给默认返回上一屏
-        if (Wallpaper_State().list.multi) {
-            ExitWpMultiMode(true);
-            return true;
-        }
         if (Wallpaper_ReturnToReading(true)) return true;
         return false;
     }
@@ -167,6 +178,7 @@ void Wallpaper_OnScreenDeleted(lv_event_t* e) {
     if (lv_event_get_target(e) != Wallpaper_State().ui.screen) {
         return;
     }
+    CancelWallpaperDirectory();
     Wallpaper_State().screen_alive = false;
     ++Wallpaper_State().epoch;  // 作废在飞 preview/thumb/enable/delete/save 回调
     CancelThumbFill();
@@ -181,7 +193,7 @@ void Wallpaper_OnScreenDeleted(lv_event_t* e) {
     Wallpaper_State().list.selected.clear();
     Wallpaper_State().list.suppress_click_until_us = 0;
     Wallpaper_State().list.suppress_click_idx = -1;
-    Wallpaper_State().workers.delete_busy.store(false);
+    Wallpaper_State().workers.delete_cancel.store(true);
     ScreenPaintCoalesceReset(&Wallpaper_State().wp_check_paint);
     ScreenPaintCoalesceReset(&Wallpaper_State().wallpaper_paint);
     Wallpaper_State().ui = {};
@@ -191,6 +203,8 @@ lv_obj_t* WallpaperScreen::Create() {
     s_return_to_reading = false;
     s_return_requested = false;
     // 旧屏可能仍在 async delete：先拆引用，递增 epoch 丢弃在飞任务；缩略图按文件复用
+    Wallpaper_State().workers.delete_cancel.store(true);
+    CancelWallpaperDirectory();
     Wallpaper_State().screen_alive = false;
     ++Wallpaper_State().epoch;
     CancelThumbFill();
@@ -218,7 +232,7 @@ lv_obj_t* WallpaperScreen::Create() {
         Wallpaper_State().list.files.clear();
         Wallpaper_State().list.thumbs.clear();
     }
-    Wallpaper_State().list.selected.assign(Wallpaper_State().list.files.size(), 0);
+    Wallpaper_State().list.selected.clear();
 
     ScreenSetIsHome(false);
 

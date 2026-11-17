@@ -1,6 +1,6 @@
 /**
  * @file lv_adapter_epdiy.cc
- * @brief LVGL9 L8 灰度渲染 → EPDiy；开机加载 HomeScreen
+ * @brief LVGL9 L8 灰度渲染 → EPDiy；开机加载主页或恢复阅读
  */
 
 #include "lv_adapter_epdiy.h"
@@ -222,11 +222,14 @@ static void drawable_bounds_cb(lv_event_t* event) {
     const int height = lv_display_get_vertical_resolution(disp);
     lv_obj_t* screen = lv_event_get_code(event) == LV_EVENT_SCREEN_LOAD_START
         ? static_cast<lv_obj_t*>(lv_event_get_param(event)) : lv_display_get_screen_active(disp);
-    ConstrainDrawableRoot(screen, width, height);
-    ConstrainDrawableRoot(lv_display_get_layer_top(disp), width, height);
-    ConstrainDrawableRoot(lv_display_get_layer_sys(disp), width, height);
-    if (lv_event_get_code(event) == LV_EVENT_RESOLUTION_CHANGED) {
-        // 全屏背景退出后清除边缘，防止旧像素残留在普通 UI 的内缩区。
+    const auto code = lv_event_get_code(event);
+    if (code != LV_EVENT_REFRESH) {
+        ConstrainDrawableRoot(screen, width, height);
+        ConstrainDrawableRoot(lv_display_get_layer_top(disp), width, height);
+        ConstrainDrawableRoot(lv_display_get_layer_sys(disp), width, height);
+    }
+    if (code == LV_EVENT_RESOLUTION_CHANGED || code == LV_EVENT_REFRESH) {
+        // 分辨率或平移变化后清除旧位置，下一帧按新坐标重绘。
         if (uint8_t* fb = EpdRenderBuffer()) {
             memset(fb, 0xFF, static_cast<size_t>(epd_width() / 2) * epd_height());
         }
@@ -363,7 +366,7 @@ bool LvAdapterEpdiy::Init() {
     }
 
     if (!fontpack_lv_ensure_ready()) {
-        ESP_LOGE(TAG, "fontpack init failed (flash use_font/font.fontpack to font_data)");
+        ESP_LOGE(TAG, "fontpack init failed (flash main/assets/fonts/font.fontpack to font_data)");
         return false;
     }
 
@@ -380,8 +383,11 @@ bool LvAdapterEpdiy::Init() {
     s_disp = lv_display_create(width_, height_);
     lv_display_add_event_cb(s_disp, drawable_bounds_cb, LV_EVENT_SCREEN_LOAD_START, nullptr);
     lv_display_add_event_cb(s_disp, drawable_bounds_cb, LV_EVENT_RESOLUTION_CHANGED, nullptr);
+    lv_display_add_event_cb(s_disp, drawable_bounds_cb, LV_EVENT_REFRESH, nullptr);
     lv_display_set_color_format(s_disp, LV_COLOR_FORMAT_I1);
     DisplayUiBind(s_disp, epd_width(), epd_height());
+    width_ = DisplayUiContentW();
+    height_ = DisplayUiContentH();
 
     // A bounded stripe works in either orientation. LVGL renders larger dirty
     // areas in chunks; no full-screen shadow/coverage buffer is needed.
@@ -465,11 +471,16 @@ bool LvAdapterEpdiy::Init() {
     BookTapZonesEnsureLoaded();
     Wallpaper_HydrateFromNvsNow();
     reader::book_home_snapshot::HydrateFromNvs();
-    ESP_LOGI(TAG, "SetupUI: create HomeScreen %dx%d (inset L%d R%d T%d B%d)", width_, height_,
-             DISPLAY_CONTENT_LEFT_INSET, DISPLAY_CONTENT_RIGHT_INSET, DISPLAY_CONTENT_TOP_INSET,
-             DISPLAY_CONTENT_BOTTOM_INSET);
-    lv_screen_load(HomeScreen::Create());
-    if (!RefreshDisplayNow(s_disp, true)) return false;
+    ESP_LOGI(TAG, "SetupUI: initialize screen %dx%d offset=%d,%d", width_, height_,
+             DisplayUiOffsetX(), DisplayUiOffsetY());
+    boot_resume_pending_ = BookScreen::LoadBootResume();
+    if (boot_resume_pending_) {
+        FreezeFlush(true);
+        lv_screen_load(lv_obj_create(nullptr));
+    } else {
+        lv_screen_load(HomeScreen::Create());
+        if (!RefreshDisplayNow(s_disp, true)) return false;
+    }
 
     {
         esp_timer_create_args_t notification_timer_args = {
@@ -682,12 +693,27 @@ void LvAdapterEpdiy::Tick() {
     if (!lvgl_ready_) {
         return;
     }
+    // Board 构造期间仍可能申请 UI 锁；在锁外等待构造完成，避免正文电量查询递归取单例。
+    const bool finish_boot = system_ready_pending_.load(std::memory_order_acquire);
+    if (finish_boot) Board::GetInstance();
     if (Lock(50)) {
+        // 只消费本轮已在锁外等待过的通知；抢锁失败或稍后到达的通知留给下一轮。
+        if (finish_boot && system_ready_pending_.exchange(false, std::memory_order_acq_rel)) {
+            if (boot_resume_pending_) {
+                boot_resume_pending_ = false;
+                ScreenLoadReplace(BookScreen::CreateBootResume());
+                FreezeFlush(false);
+                RequestFullOnNextCommit();
+            }
+            SetStatus("");
+        }
         const int64_t round_start = esp_timer_get_time();
-        VkKey_DrainTouch();
-        PagerKey_Drain();
-        PollBootKey();
-        PollSideKeys();
+        if (!powering_off_) {
+            VkKey_DrainTouch();
+            PagerKey_Drain();
+            PollBootKey();
+            PollSideKeys();
+        }
         while (MetalioKeys_TakeEdge()) {}
         PollReaderPageWork();
         ScreenLvAsyncDrain();
@@ -719,7 +745,7 @@ void LvAdapterEpdiy::Tick() {
 }
 
 void LvAdapterEpdiy::SetSystemReady() {
-    SetStatus("");
+    system_ready_pending_.store(true, std::memory_order_release);
 }
 
 void LvAdapterEpdiy::RequestFullOnNextCommit() {
@@ -749,12 +775,11 @@ void LvAdapterEpdiy::FreezeFlush(bool on) {
     s_freeze_updates.store(on, std::memory_order_relaxed);
 }
 
-static void ShowWallpaperLoading() {
-    // 保存提示写入前的画面，解码失败时直接恢复，避免重绘已停放的底层页面。
-    if (!WallpaperFrame_Capture()) return;
+static bool ShowTopNotice(const char* text, uint32_t hold_ms = 0) {
     lv_obj_t* notice = lv_label_create(lv_layer_top());
+    lv_obj_clear_flag(notice, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_style_all(notice);
-    lv_label_set_text(notice, Lang::Strings::WALLPAPER_ENTER_LOADING);
+    lv_label_set_text(notice, text);
     lv_label_set_long_mode(notice, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_max_width(notice, LV_HOR_RES - 32, 0);
     lv_obj_set_style_text_font(notice, fontpack_lv_font_ui(), 0);
@@ -777,12 +802,27 @@ static void ShowWallpaperLoading() {
     s_freeze_updates.store(was_frozen);
     if (!rendered) {
         lv_obj_delete(notice);
-        return;
+        return false;
     }
-    if (!EpdWait(EpdSubmit(false))) {
+    const bool shown = EpdWait(EpdSubmit(false));
+    if (shown && hold_ms > 0) vTaskDelay(pdMS_TO_TICKS(hold_ms));
+    lv_obj_delete(notice);
+    return shown;
+}
+
+static void ShowWallpaperLoading() {
+    // 保存提示写入前的画面，解码失败时直接恢复，避免重绘已停放的底层页面。
+    if (!WallpaperFrame_Capture()) return;
+    if (!ShowTopNotice(Lang::Strings::WALLPAPER_ENTER_LOADING)) {
         ESP_LOGW(TAG, "wallpaper loading notice failed");
     }
-    lv_obj_delete(notice);
+}
+
+bool LvAdapterEpdiy::ShowLowBatteryShutdownNotice(bool low_voltage) {
+    DisplayLockGuard lock(this);
+    if (!lock || !lvgl_ready_) return false;
+    return ShowTopNotice(low_voltage ? Lang::Strings::BATTERY_LOW_VOLTAGE_SHUTTING_DOWN
+                                     : Lang::Strings::BATTERY_SHUTTING_DOWN, 3000);
 }
 
 void LvAdapterEpdiy::PrepareWallpaperOverlay() {
@@ -1046,6 +1086,12 @@ void DecodeShutdownWallpaperTask(void* arg) {
 bool LvAdapterEpdiy::ShowPoweredOffScreen() {
     DisplayLockGuard lock(this);
     if (!lock) return false;
+    powering_off_ = true;
+    for (lv_indev_t* indev = lv_indev_get_next(nullptr); indev != nullptr;
+         indev = lv_indev_get_next(indev)) {
+        lv_indev_enable(indev, false);
+    }
+    if (!BookScreen::PreparePowerOff()) return false;
     if (Wallpaper_IsOverlay(false)) PrepareWallpaperOverlay();
     // 加载期间保留原帧，提示局部叠加；解码完成后再生成完整关机画面。
     FreezeFlush(true);

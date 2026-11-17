@@ -12,7 +12,8 @@ extern "C" {
 // - font_size：直接加载 TTF/OTF 的像素字号；.ef 为 0
 // - spacing：行距档位，独立于段距
 // - para_gap：段距档位（小 32 / 标准 56 / 大 80 / 很大 104px，默认标准）
-// - margin：页边距档位（左右/上下成套）
+// - margin / margin_px：旧成套边距及统一像素值，供未单独设置的边继承
+// - margin_top / margin_bottom / margin_left / margin_right：四边独立像素值
 // - foot_msk：正文底栏展示位图（0=整条隐藏；兼容旧 hide_prog）
 // - aa：阅读真 4 灰抗锯齿（L8 sidecar + 灰 LUT）
 // - underline：正文下划线 0关 / 1实线 / 2虚线
@@ -181,7 +182,20 @@ void BookReaderPrefsSetAutoTurnSeconds(int seconds);
 
 inline constexpr char kBookReaderDefaultFontFile[] = "misans_40_2.ef"; // 默认阅读位图字体
 
-enum class BookTextOption { ParaGap, LetterGap, LineGap, Margin, Indent, UnderlineOffset, AaStrength, Count };
+enum class BookTextOption {
+    ParaGap, // 段距
+    LetterGap, // 字距
+    LineGap, // 行距
+    Margin, // 旧统一边距，保留配置兼容
+    Indent, // 首行缩进字数
+    UnderlineOffset, // 下划线偏移
+    AaStrength, // 抗锯齿强度
+    MarginTop, // 上边距
+    MarginBottom, // 下边距
+    MarginLeft, // 左边距
+    MarginRight, // 右边距
+    Count, // 参数数量
+};
 
 /** @brief 读取连续排版参数；段距、行距和边距的负值表示沿用旧档位。 */
 int BookReaderPrefsTextValue(BookTextOption option);

@@ -80,7 +80,7 @@ bool BookSession::PrepareNavigation(NavigationKind kind, int value, const std::a
             BookPageStore preview;
             std::lock_guard<std::mutex> lock(navigation_source_->chapter_io_mu_);
             if (!preview.Open(info_.path) ||
-                !navigation_source_->PaginateChapter(chapter_index_, preview, &chapter_preview_anchor_, cancelled) ||
+                !navigation_source_->PaginateChapter(chapter_index_, preview, navigation_source_->chapter_pages_gen_.load(), &chapter_preview_anchor_, cancelled) ||
                 !preview.Finish()) return false;
             live_preview_page_ = preview[0];
             if (!preview.Good()) { error_ = preview.Error(); return false; }

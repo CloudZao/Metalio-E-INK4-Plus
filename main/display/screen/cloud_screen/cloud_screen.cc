@@ -342,6 +342,7 @@ void Cloud_OnScreenDeleted(lv_event_t* e) {
     st.chrome.status_lbl = nullptr;
     st.chrome.header_row = nullptr;
     st.chrome.list_frame = nullptr;
+    st.chrome.binding_panel = nullptr;
     st.chrome.wifi_panel = nullptr;
     st.chrome.ap_panel = nullptr;
     st.chrome.ap_ssid_lbl = nullptr;
@@ -413,6 +414,7 @@ lv_obj_t* CloudScreen::Create() {
     st.chrome.status_lbl = nullptr;
     st.chrome.header_row = nullptr;
     st.chrome.list_frame = nullptr;
+    st.chrome.binding_panel = nullptr;
     st.chrome.wifi_panel = nullptr;
     st.chrome.ap_panel = nullptr;
     st.chrome.ap_ssid_lbl = nullptr;

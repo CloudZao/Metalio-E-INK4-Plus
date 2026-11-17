@@ -5,6 +5,8 @@
 #include "font_loader.h"
 
 #include <errno.h>
+#include <limits.h>
+#include <sys/stat.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -44,15 +46,17 @@ static font_loader_ctx_t s_ctx;
 static bool header_ok(const fontpack_header_t* hdr, size_t blob_size) {
     if (hdr->magic[0] != FONTPACK_MAGIC_0 || hdr->magic[1] != FONTPACK_MAGIC_1 ||
         hdr->magic[2] != FONTPACK_MAGIC_2 || hdr->magic[3] != FONTPACK_MAGIC_3) {
-        ESP_LOGE(TAG, "bad magic: %.4s", hdr->magic);
+        ESP_LOGE(TAG, "invalid fontpack magic");
         return false;
     }
     if (hdr->version != FONTPACK_VERSION) {
         ESP_LOGE(TAG, "unsupported version %u", (unsigned)hdr->version);
         return false;
     }
-    if (hdr->index_offset > 0xFFFFFFFFu || hdr->data_offset > 0xFFFFFFFFu) {
-        ESP_LOGE(TAG, "offsets exceed 4GiB");
+    if (hdr->flags != 0 || hdr->index_offset < sizeof(*hdr) ||
+        hdr->total_items > INT32_MAX || hdr->index_offset > UINT32_MAX ||
+        hdr->data_offset > UINT32_MAX || hdr->index_offset > LONG_MAX || hdr->data_offset > LONG_MAX) {
+        ESP_LOGE(TAG, "unsupported flags or invalid index bounds");
         return false;
     }
     const uint64_t index_end =
@@ -282,81 +286,92 @@ bool get_glyph(uint32_t codepoint, uint16_t size, uint16_t bpp, GlyphInfo* out_g
 
 /* ======================== SD / FatFS ======================== */
 
-int font_loader_init(const char* path) {
+static int open_sd(font_loader_ctx_t* ctx, const char* path) {
     if (path == NULL || path[0] == '\0') {
-        s_ctx.last_err = FONT_LOADER_ERR_FILE;
+        ctx->last_err = FONT_LOADER_ERR_FILE;
         return FONT_LOADER_ERR_FILE;
     }
-    if (s_ctx.backend != FONT_BACKEND_NONE) {
-        s_ctx.last_err = FONT_LOADER_ERR_STATE;
+    if (ctx->backend != FONT_BACKEND_NONE) {
+        ctx->last_err = FONT_LOADER_ERR_STATE;
         ESP_LOGW(TAG, "already initialized; call font_loader_deinit() first");
         return FONT_LOADER_ERR_STATE;
     }
 
-    memset(&s_ctx, 0, sizeof(s_ctx));
+    memset(ctx, 0, sizeof(*ctx));
 
     FILE* fp = fopen(path, "rb");
     if (fp == NULL) {
-        ESP_LOGE(TAG, "open failed: %s errno=%d (%s)", path, errno, strerror(errno));
-        s_ctx.last_err = FONT_LOADER_ERR_FILE;
+        if (errno != ENOENT) ESP_LOGE(TAG, "SD font open failed errno=%d", errno);
+        ctx->last_err = FONT_LOADER_ERR_FILE;
         return FONT_LOADER_ERR_FILE;
     }
 
+    struct stat st;
+    if (fstat(fileno(fp), &st) != 0) {
+        ESP_LOGE(TAG, "SD font stat failed errno=%d", errno);
+        fclose(fp);
+        ctx->last_err = FONT_LOADER_ERR_IO;
+        return ctx->last_err;
+    }
+    if (st.st_size < (long)sizeof(fontpack_header_t) || (uint64_t)st.st_size > LONG_MAX) {
+        ESP_LOGE(TAG, "SD font file bounds invalid");
+        fclose(fp);
+        ctx->last_err = FONT_LOADER_ERR_FORMAT;
+        return ctx->last_err;
+    }
     fontpack_header_t hdr;
     if (!read_exact(fp, &hdr, sizeof(hdr))) {
         fclose(fp);
-        s_ctx.last_err = FONT_LOADER_ERR_IO;
+        ctx->last_err = FONT_LOADER_ERR_IO;
         return FONT_LOADER_ERR_IO;
     }
-    if (!header_ok(&hdr, 0)) {
+    if (!header_ok(&hdr, st.st_size)) {
         fclose(fp);
-        s_ctx.last_err = FONT_LOADER_ERR_FORMAT;
+        ctx->last_err = FONT_LOADER_ERR_FORMAT;
         return FONT_LOADER_ERR_FORMAT;
     }
 
-    s_ctx.backend = FONT_BACKEND_SD;
-    s_ctx.fp = fp;
-    s_ctx.total_items = hdr.total_items;
-    s_ctx.index_offset = (uint32_t)hdr.index_offset;
-    s_ctx.data_offset = (uint32_t)hdr.data_offset;
-    s_ctx.last_err = FONT_LOADER_OK;
+    ctx->backend = FONT_BACKEND_SD;
+    ctx->fp = fp;
+    ctx->mmap_size = st.st_size;
+    ctx->total_items = hdr.total_items;
+    ctx->index_offset = (uint32_t)hdr.index_offset;
+    ctx->data_offset = (uint32_t)hdr.data_offset;
+    ctx->last_err = FONT_LOADER_OK;
 
-    ESP_LOGI(TAG, "opened %s items=%lu index@%lu data@%lu", path,
-             (unsigned long)s_ctx.total_items, (unsigned long)s_ctx.index_offset,
-             (unsigned long)s_ctx.data_offset);
     return FONT_LOADER_OK;
 }
 
-bool get_glyph_from_sd(uint32_t codepoint, uint16_t size, uint16_t bpp, GlyphData* out_glyph) {
+static bool read_sd(font_loader_ctx_t* ctx, uint32_t codepoint, uint16_t size, uint16_t bpp, GlyphData* out_glyph) {
     if (out_glyph == NULL) {
-        s_ctx.last_err = FONT_LOADER_ERR_STATE;
+        ctx->last_err = FONT_LOADER_ERR_STATE;
         return false;
     }
     memset(out_glyph, 0, sizeof(*out_glyph));
 
-    if (s_ctx.backend != FONT_BACKEND_SD || s_ctx.fp == NULL) {
-        s_ctx.last_err = FONT_LOADER_ERR_STATE;
+    if (ctx->backend != FONT_BACKEND_SD || ctx->fp == NULL) {
+        ctx->last_err = FONT_LOADER_ERR_STATE;
         ESP_LOGE(TAG, "get_glyph_from_sd requires font_loader_init()");
         return false;
     }
-    if (s_ctx.total_items == 0) {
-        s_ctx.last_err = FONT_LOADER_ERR_NOT_FOUND;
+    if (ctx->total_items == 0) {
+        ctx->last_err = FONT_LOADER_ERR_NOT_FOUND;
         return false;
     }
 
     const uint64_t target = fontpack_make_key(codepoint, size, bpp);
     int32_t lo = 0;
-    int32_t hi = (int32_t)s_ctx.total_items - 1;
+    int32_t hi = (int32_t)ctx->total_items - 1;
     fontpack_index_entry_t entry;
     bool found = false;
 
     while (lo <= hi) {
         const int32_t mid = lo + ((hi - lo) >> 1);
         const uint32_t off =
-            s_ctx.index_offset + (uint32_t)mid * (uint32_t)sizeof(fontpack_index_entry_t);
+            ctx->index_offset + (uint32_t)mid * (uint32_t)sizeof(fontpack_index_entry_t);
 
-        if (!seek_read(s_ctx.fp, off, &entry, sizeof(entry))) {
-            s_ctx.last_err = FONT_LOADER_ERR_IO;
+        if (!seek_read(ctx->fp, off, &entry, sizeof(entry))) {
+            ctx->last_err = FONT_LOADER_ERR_IO;
             return false;
         }
 
@@ -371,34 +386,43 @@ bool get_glyph_from_sd(uint32_t codepoint, uint16_t size, uint16_t bpp, GlyphDat
     }
 
     if (!found) {
-        s_ctx.last_err = FONT_LOADER_ERR_NOT_FOUND;
+        ctx->last_err = FONT_LOADER_ERR_NOT_FOUND;
         return false;
     }
 
-    if (entry.data_size < sizeof(fontpack_glyph_meta_t)) {
+    if (entry.data_size < sizeof(fontpack_glyph_meta_t) ||
+        entry.data_offset < ctx->data_offset ||
+        (uint64_t)entry.data_offset + entry.data_size > ctx->mmap_size) {
         ESP_LOGE(TAG, "corrupt data_size=%u", (unsigned)entry.data_size);
-        s_ctx.last_err = FONT_LOADER_ERR_FORMAT;
+        ctx->last_err = FONT_LOADER_ERR_FORMAT;
         return false;
     }
 
     const uint16_t bmp_len = (uint16_t)(entry.data_size - sizeof(fontpack_glyph_meta_t));
     if (bmp_len > FONT_GLYPH_BMP_MAX) {
-        ESP_LOGE(TAG, "glyph bmp %u > FONT_GLYPH_BMP_MAX %u (U+%04lX size=%u bpp=%u)",
-                 (unsigned)bmp_len, (unsigned)FONT_GLYPH_BMP_MAX, (unsigned long)codepoint,
+        ESP_LOGE(TAG, "glyph bmp %u > FONT_GLYPH_BMP_MAX %u (size=%u bpp=%u)",
+                 (unsigned)bmp_len, (unsigned)FONT_GLYPH_BMP_MAX,
                  (unsigned)size, (unsigned)bpp);
-        s_ctx.last_err = FONT_LOADER_ERR_TOO_LARGE;
+        ctx->last_err = FONT_LOADER_ERR_TOO_LARGE;
         return false;
     }
 
     fontpack_glyph_meta_t meta;
-    if (!seek_read(s_ctx.fp, entry.data_offset, &meta, sizeof(meta))) {
-        s_ctx.last_err = FONT_LOADER_ERR_IO;
+    if (!seek_read(ctx->fp, entry.data_offset, &meta, sizeof(meta))) {
+        ctx->last_err = FONT_LOADER_ERR_IO;
+        return false;
+    }
+
+    const uint64_t expected = ((uint64_t)meta.width * meta.height * bpp + 7) / 8;
+    if ((bpp != 1 && bpp != 2 && bpp != 4) || expected != bmp_len) {
+        ESP_LOGE(TAG, "SD glyph bitmap length invalid size=%u bpp=%u", size, bpp);
+        ctx->last_err = FONT_LOADER_ERR_FORMAT;
         return false;
     }
 
     if (bmp_len > 0) {
-        if (!read_exact(s_ctx.fp, out_glyph->bitmap, bmp_len)) {
-            s_ctx.last_err = FONT_LOADER_ERR_IO;
+        if (!read_exact(ctx->fp, out_glyph->bitmap, bmp_len)) {
+            ctx->last_err = FONT_LOADER_ERR_IO;
             return false;
         }
     }
@@ -410,6 +434,28 @@ bool get_glyph_from_sd(uint32_t codepoint, uint16_t size, uint16_t bpp, GlyphDat
     out_glyph->advance = meta.advance;
     out_glyph->bmp_len = bmp_len;
 
-    s_ctx.last_err = FONT_LOADER_OK;
+    ctx->last_err = FONT_LOADER_OK;
     return true;
+}
+
+int font_loader_init(const char* path) {
+    return open_sd(&s_ctx, path);
+}
+
+bool get_glyph_from_sd(uint32_t codepoint, uint16_t size, uint16_t bpp, GlyphData* out_glyph) {
+    return read_sd(&s_ctx, codepoint, size, bpp, out_glyph);
+}
+
+int font_loader_read_sd(const char* path, uint32_t codepoint, uint16_t size, uint16_t bpp,
+                        GlyphData* out_glyph) {
+    font_loader_ctx_t ctx = {0};
+    int err = open_sd(&ctx, path);
+    if (err != FONT_LOADER_OK) return err;
+    read_sd(&ctx, codepoint, size, bpp, out_glyph);
+    err = ctx.last_err;
+    if (fclose(ctx.fp) != 0) {
+        ESP_LOGE(TAG, "SD font close failed errno=%d", errno);
+        err = FONT_LOADER_ERR_IO;
+    }
+    return err;
 }

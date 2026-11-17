@@ -1,6 +1,10 @@
 #pragma once
 
 namespace Lang { namespace Strings {
+extern const char* YUNXIN_BINDING_OPEN_AI;
+extern const char* YUNXIN_BINDING_CHECKING;
+extern const char* YUNXIN_BINDING_SCAN;
+extern const char* YUNXIN_BINDING_RETRY;
 extern const char* ASSISTANT_PHOTO_FAILED;
 extern const char* ASSISTANT_PHOTO_BUSY;
 extern const char* ASSISTANT_PHOTO_CLOSE;
@@ -17,16 +21,29 @@ extern const char* WALLPAPER_ENTER_LOADING;
 extern const char* CLOUD_FETCH_FAIL;
 extern const char* OTA_CHECK_FAILED;
 extern const char* OTA_ALREADY_LATEST;
-extern const char* SETTINGS_SCREEN_REFRESH_EXTREME;
-extern const char* SETTINGS_SCREEN_REFRESH_EXTREME_HINT;
+extern const char* SETTINGS_TEST_MARGIN;
+extern const char* SETTINGS_SCREEN_MARGIN_TITLE;
+extern const char* SETTINGS_SCREEN_MARGIN_SET_OK;
+extern const char* SETTINGS_SCREEN_MARGIN_RESET_OK;
+extern const char* SETTINGS_SCREEN_MARGIN_SAVE_FAILED;
+extern const char* SETTINGS_SCREEN_MARGIN_SET_DEFAULT;
+extern const char* SETTINGS_SCREEN_MARGIN_RESET;
+extern const char* SETTINGS_SCREEN_MARGIN_VALUE_FMT;
+extern const char* SETTINGS_SCREEN_MARGIN_TOP;
+extern const char* SETTINGS_SCREEN_MARGIN_BOTTOM;
+extern const char* SETTINGS_SCREEN_MARGIN_LEFT;
+extern const char* SETTINGS_SCREEN_MARGIN_RIGHT;
 extern const char* SETTINGS_SCREEN_REFRESH_CLEAR;
 extern const char* SETTINGS_SCREEN_REFRESH_CLEAR_HINT;
 extern const char* SETTINGS_SCREEN_REFRESH_BALANCED_HINT;
 extern const char* SETTINGS_SCREEN_BLACK_DEPTH_TITLE;
-extern const char* SETTINGS_SCREEN_BLACK_DEPTH_DEFAULT;
-extern const char* SETTINGS_SCREEN_BLACK_DEPTH_MEDIUM;
-extern const char* SETTINGS_SCREEN_BLACK_DEPTH_STRONG;
-extern const char* SETTINGS_SCREEN_BLACK_DEPTH_HINT;
+extern const char* SETTINGS_VCOM_UNKNOWN;
+extern const char* SETTINGS_VCOM_INVALID;
+extern const char* SETTINGS_VCOM_WRITE_OK;
+extern const char* SETTINGS_VCOM_READ_OK;
+extern const char* SETTINGS_VCOM_WRITE_FAILED;
+extern const char* SETTINGS_VCOM_READ_FAILED;
+
 extern const char* CLOUD_AP_FAIL;
 extern const char* CLOUD_AP_FAIL_HTTP;
 extern const char* CLOUD_AP_FAIL_INIT;

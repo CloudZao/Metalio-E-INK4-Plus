@@ -18,6 +18,7 @@
 #include "power_policy.h"
 #include "reader/reader.h"
 #include "screen_common.h"
+#include "yunxin_binding/yunxin_binding.h"
 
 void AsyncFetchDone(void* p) {
     auto* msg = static_cast<CloudFetchDoneMsg*>(p);
@@ -126,6 +127,7 @@ void CloudFetchWorker(void* arg) {
 }
 
 void ScheduleCloudFetch() {
+    if (YunxinBinding::NeedsBinding()) return;
     auto& st = Cloud_State();
     if (st.data.loading || st.xfer.download_busy || st.data.waiting_net) {
         return;
@@ -246,6 +248,7 @@ void NetPrepTask(void* /*arg*/) {
 }
 
 void ScheduleNetPrepAndFetch() {
+    if (YunxinBinding::NeedsBinding()) return;
     auto& st = Cloud_State();
     if (st.data.fetch_done || st.xfer.download_busy || SyncBusy()) {
         ESP_LOGI(TAG, "ScheduleNetPrep skip fetch_done=%d download=%d sync_busy=%d",

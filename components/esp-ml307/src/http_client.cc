@@ -4,7 +4,7 @@
 #include <esp_timer.h>
 #include <cstring>
 #include <cstdlib>
-#include <sstream>
+#include <cstdio>
 #include <chrono>
 #include <algorithm>
 #include <cctype>
@@ -129,21 +129,21 @@ bool HttpClient::ParseUrl(const std::string& url) {
 }
 
 std::string HttpClient::BuildHttpRequest() {
-    std::ostringstream request;
+    std::string request;
 
     // 请求行
-    request << method_ << " " << path_ << " HTTP/1.1\r\n";
+    request += method_ + " " + path_ + " HTTP/1.1\r\n";
 
     // Host 头
-    request << "Host: " << host_;
+    request += "Host: " + host_;
     if ((protocol_ == "http" && port_ != 80) || (protocol_ == "https" && port_ != 443)) {
-        request << ":" << port_;
+        request += ":" + std::to_string(port_);
     }
-    request << "\r\n";
+    request += "\r\n";
 
     // 用户自定义头部（使用原始key输出）
     for (const auto& [lower_key, header_entry] : headers_) {
-        request << header_entry.original_key << ": " << header_entry.value << "\r\n";
+        request += header_entry.original_key + ": " + header_entry.value + "\r\n";
     }
 
     // 内容相关头部（仅在用户未设置时添加）
@@ -151,33 +151,33 @@ std::string HttpClient::BuildHttpRequest() {
     bool user_set_transfer_encoding = headers_.find("transfer-encoding") != headers_.end();
     bool has_content = content_.has_value() && !content_->empty();
     if (has_content && !user_set_content_length) {
-        request << "Content-Length: " << content_->size() << "\r\n";
+        request += "Content-Length: " + std::to_string(content_->size()) + "\r\n";
     } else if ((method_ == "POST" || method_ == "PUT") && !user_set_content_length && !user_set_transfer_encoding) {
         if (request_chunked_) {
-            request << "Transfer-Encoding: chunked\r\n";
+            request += "Transfer-Encoding: chunked\r\n";
         } else {
-            request << "Content-Length: 0\r\n";
+            request += "Content-Length: 0\r\n";
         }
     }
 
     // 连接控制（仅在用户未设置时添加）
     if (headers_.find("connection") == headers_.end()) {
         if (keep_alive_) {
-            request << "Connection: keep-alive\r\n";
+            request += "Connection: keep-alive\r\n";
         } else {
-            request << "Connection: close\r\n";
+            request += "Connection: close\r\n";
         }
     }
 
     // 结束头部
-    request << "\r\n";
+    request += "\r\n";
 
     // 请求体
     if (has_content) {
-        request << *content_;
+        request += *content_;
     }
 
-    return request.str();
+    return request;
 }
 
 bool HttpClient::Open(const std::string& method, const std::string& url) {
@@ -316,7 +316,7 @@ void HttpClient::OnTcpDisconnected() {
     server_keep_alive_ = false;  // 连接断开，重置 Keep-Alive 标志
 
     // 检查数据是否完整接收
-    if (headers_received_ && !IsDataComplete()) {
+    if (!cancelled_.load() && headers_received_ && !IsDataComplete()) {
         // 如果已接收头部但数据不完整，标记为连接错误
         connection_error_ = true;
         ESP_LOGE(TAG, "Connection closed prematurely, expected %u bytes but only received %u bytes",
@@ -474,14 +474,15 @@ void HttpClient::ProcessReceivedData() {
 
 bool HttpClient::ParseStatusLine(const std::string& line) {
     // HTTP/1.1 200 OK
-    std::istringstream iss(line);
-    std::string version, status_str, reason;
-
-    if (!(iss >> version >> status_str)) {
-        return false;
-    }
-
-    std::getline(iss, reason);  // 获取剩余部分作为原因短语
+    const char* whitespace = " \t\r\n\f\v";
+    const size_t version = line.find_first_not_of(whitespace);
+    if (version == std::string::npos) return false;
+    const size_t end_version = line.find_first_of(whitespace, version);
+    if (end_version == std::string::npos) return false;
+    const size_t begin_status = line.find_first_not_of(whitespace, end_version);
+    if (begin_status == std::string::npos) return false;
+    const size_t end_status = line.find_first_of(whitespace, begin_status);
+    const std::string status_str = line.substr(begin_status, end_status - begin_status);
 
     // 安全地解析状态码
     char* endptr;
@@ -680,12 +681,11 @@ int HttpClient::Write(const char* buffer, size_t buffer_size) {
         }
 
         // 发送 chunk
-        std::ostringstream chunk;
-        chunk << std::hex << buffer_size << "\r\n";
-        chunk.write(buffer, buffer_size);
-        chunk << "\r\n";
-
-        std::string chunk_data = chunk.str();
+        char header[sizeof(size_t) * 2 + 3];
+        snprintf(header, sizeof(header), "%zx\r\n", buffer_size);
+        std::string chunk_data(header);
+        chunk_data.append(buffer, buffer_size);
+        chunk_data += "\r\n";
         // 返回有效载荷长度，避免调用方把 chunk 帧头长度计入已写数据。
         return tcp_->Send(chunk_data) == int(chunk_data.size()) ? int(buffer_size) : -1;
     } else {

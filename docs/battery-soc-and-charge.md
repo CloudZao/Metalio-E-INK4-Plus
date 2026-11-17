@@ -147,7 +147,9 @@ The system monitor samples approximately once per second and publishes an atomic
 - `Vbat ≥ VREG`：开 EN_TERM，允许正常终止。
 - 已终止（`CHG_STAT=NOT`）且电流≈0 且电压仍低于 VREG：`kick_recharge`（关 EN_TERM → toggle EN_CHG）强制再开一轮。
 - 低于截止时约 **2 s** 巡检；否则约 **10 s**。
-- **欠压保护**：无 VBUS 且 VBAT≤3100mV → `REG0x18=0x01` BATFET Shutdown。
+- **低电关机**：无 VBUS 时，VBAT≤3100mV 显示“当前电池电压过低，即将关机”；电量计有效显示电量为 0% 时显示“当前电量过低，即将关机”。两者同时满足时优先显示低电压提示。两种提示均在物理刷新成功后保留 3 秒，再写入 `REG0x18=0x01` 关闭 BATFET、切断电池供电。英文界面分别显示“Battery voltage critically low. Shutting down.”和“Battery critically low. Shutting down.”。提示不可用或刷新失败时仍执行保护断电；电量未就绪时不按 0% 处理。
+
+低电提示绘制在按需创建的独立任务中执行，使用与显示任务相同的 16KiB 绘制栈，退出后释放。
 
 ### 4.3 充电状态含义（`CHG_STAT`）
 

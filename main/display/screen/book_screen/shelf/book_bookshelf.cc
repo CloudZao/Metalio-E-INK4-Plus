@@ -1,5 +1,6 @@
 #include "assets/lang_reader.h"
 #include "epd_content_policy.h"
+#include "epd_refresh.h"
 #include "book_screen/shelf/book_bookshelf.h"
 #include "book_screen/book_screen_priv.h"
 #include "book_screen/cover/book_cover_cell.h"
@@ -20,6 +21,7 @@
 #include "book_screen/settings/book_font_multi.h"
 
 #include <lvgl.h>
+#include <esp_timer.h>
 #include "src/misc/cache/instance/lv_image_cache.h"
 #include <algorithm>
 #include <cstdio>
@@ -39,9 +41,6 @@ constexpr lv_coord_t kShelfBaseDepth=UiSx(12);
 constexpr lv_coord_t kShelfBaseTop=UiSy(18);
 static lv_coord_t ShelfSideInset() { return std::max<lv_coord_t>(kShelfBaseDepth,kShelfCoverCheckSize/2); }
 static lv_coord_t ShelfColumnGap() { return std::max<lv_coord_t>(kShelfColGap,kShelfCoverCheckSize/2+UiSx(4)); }
-static lv_coord_t ShelfBookWidth() {
-    return (Book_ContentWidth()-2*ShelfSideInset()-ShelfColumnGap()*(kShelfCols-1))/kShelfCols;
-}
 static lv_coord_t ShelfBaseFrontHeight() {
     return Book_ItemFont()->line_height+UiSy(14);
 }
@@ -76,6 +75,10 @@ static void CreateShelfBase(lv_obj_t* row,int cover_h) {
 
 } // namespace
 
+lv_coord_t ShelfBookWidth() {
+    return (Book_ContentWidth()-2*ShelfSideInset()-ShelfColumnGap()*(kShelfCols-1))/kShelfCols;
+}
+
 void RenderBookshelfPage() {
     auto& st = Book_State();
     if (st.shelf.list_body == nullptr) {
@@ -83,6 +86,14 @@ void RenderBookshelfPage() {
     }
     CancelListCoverFill();
 
+    if (!EnsureShelfDirectoryPage() || st.shelf.directory_failed) {
+        if (st.shelf.directory_loading && !st.shelf.shelf_entries.empty() &&
+            esp_timer_get_time() - st.shelf.directory_requested_us < 180000) return;
+        lv_obj_clean(st.shelf.list_body);
+        st.shelf.shelf_covers.clear();
+        Book_ShowMessage(st.shelf.list_body, st.shelf.directory_failed ? Lang::Strings::DIRECTORY_READ_FAILED : Lang::Strings::BOOK_LOADING, Book_ListFont());
+        return;
+    }
     if (st.shelf.shelf_view == kBookReaderShelfViewList) {
         RenderBookshelfListPage();
         return;
@@ -118,7 +129,7 @@ void RenderBookshelfPage() {
     const lv_coord_t cover_h =
         st.shelf.shelf_cover_h > 0 ? st.shelf.shelf_cover_h : (cell_w * 4 / 3);
 
-    const int start = st.shelf.list_page * st.shelf.list_page_size;
+    const int start = 0;
     const int end = std::min(start + st.shelf.list_page_size, static_cast<int>(st.shelf.books.size()));
     const lv_coord_t front_h=ShelfBaseFrontHeight();
     PrepareShelfBase(content_w);
@@ -130,7 +141,8 @@ void RenderBookshelfPage() {
         for(int col=0;col<kShelfCols && row_start+col<end;++col) {
             const int i=row_start+col;
             auto* cell=CreateBookCoverCell(row,st.shelf.books[static_cast<size_t>(i)],i,cell_w,cover_h,
-                                          st.shelf.shelf_covers,true,0,true);
+                                          st.shelf.shelf_covers,true,0,true,
+                                          st.shelf.shelf_entries[i].kind == reader::BookDirEntry::Kind::kFolder);
             lv_obj_set_style_layout(cell,LV_LAYOUT_NONE,0);
             // The whole circle must lie inside the cell's native clip/hit bounds.
             const lv_coord_t circle_inset=kShelfCoverCheckSize/2;
@@ -149,11 +161,12 @@ void RenderBookshelfPage() {
         lv_label_set_text(st.shelf.list_footer, foot);
     }
     RefreshShelfFooterMode();
-    ScheduleListCoverFill();
+    EpdAfterNextSubmit(ScheduleListCoverFill);
 }
 
 lv_obj_t* CreateBookshelfScreen() {
     auto& st = Book_State();
+    CancelShelfDirectory();
     ReleaseReaderSessionForLeave();
     st.shelf.shelf_multi = false;
     st.shelf.shelf_selected.clear();
@@ -180,6 +193,7 @@ lv_obj_t* CreateBookshelfScreen() {
             auto& s = Book_State();
             const auto* tgt = static_cast<lv_obj_t*>(lv_event_get_target(e));
             if (s.shelf.list_scr == tgt) {
+                CancelShelfDirectory();
                 CancelListCoverFill();
                 s.shelf.list_scr = nullptr;
                 s.shelf.list_body = nullptr;
@@ -429,8 +443,8 @@ lv_obj_t* CreateBookshelfScreen() {
         return scr;
     }
 
-    // 与首页一致走 Load：缓存命中只拷贝；USB/云端 Invalidate 后在此重扫
-    reader::LoadBookLibrary(reader::kDefaultBooksDir, st.shelf.books);
+    // 当前目录按页加载，不依赖递归书库快照。
+    ReloadShelfDirListing();
     RenderBookshelfPage();
 
     VkKey_AttachScreen(scr, kScreenBookshelf, BookAiLongPressDesc(CreateBookshelfScreen));

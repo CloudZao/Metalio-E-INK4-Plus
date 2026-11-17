@@ -23,6 +23,8 @@
 #include "display/font/ttf_convert.h"
 #include "haptic_feedback.h"
 #include "sd_paths.h"
+#include "sd_directory_page.h"
+#include "sd_access.h"
 
 namespace {
 lv_obj_t* MakeTtfFileInfo(lv_obj_t* parent) {
@@ -123,39 +125,78 @@ bool IsTtfFileName(const char* name) {
     return strcasecmp(name + n - 4, ".ttf") == 0 || strcasecmp(name + n - 4, ".otf") == 0;
 }
 
-int TtfPageCount() {
-    const int n = static_cast<int>(Book_State().ttf.ttf_files.size());
-    if (n <= 0) {
-        return 1;
+static SdDirectoryPage s_ttf_directory;
+static lv_timer_t* s_ttf_directory_timer = nullptr;
+
+int TtfPageCount() { return s_ttf_directory.Pages(); }
+
+static bool TtfDirectoryFilter(const char* name, bool directory) {
+    const char* relative = name + std::strlen(SD_PATH_FONT_SRC) + 1;
+    return !directory && SdIsValidFileName(relative) && IsTtfFileName(relative);
+}
+
+static void TtfDirectoryTick(lv_timer_t*) {
+    auto& st = Book_State();
+    if (st.ttf.ttf_mode == BookUiState::TtfMode::kNone || !st.ttf.ttf_sheet || sd_access::IsQuiescing()) {
+        s_ttf_directory.Cancel();
+        lv_timer_del(s_ttf_directory_timer);
+        s_ttf_directory_timer = nullptr;
+        return;
     }
-    return (n + kFontListPageSize - 1) / kFontListPageSize;
+    if (st.ttf.ttf_mode != BookUiState::TtfMode::kList) return;
+    if (st.ttf.ttf_page_label && lv_obj_is_valid(st.ttf.ttf_page_label)) {
+        if (s_ttf_directory.Counted() && !st.ttf.ttf_loading) {
+            lv_label_set_text_fmt(st.ttf.ttf_page_label, "%d/%d", st.ttf.ttf_page + 1, TtfPageCount());
+            lv_timer_del(s_ttf_directory_timer); s_ttf_directory_timer = nullptr;
+            return;
+        } else {
+            char text[32]; std::snprintf(text, sizeof(text), "%d/…", st.ttf.ttf_page + 1);
+            if (std::strcmp(lv_label_get_text(st.ttf.ttf_page_label), text)) lv_label_set_text(st.ttf.ttf_page_label, text);
+        }
+    }
+    SdDirectoryPage::Result result;
+    if (s_ttf_directory.Poll(result)) {
+        if (result.ok && result.entries.empty() && result.page > 0) {
+            --st.ttf.ttf_page; TtfScanFiles(); return;
+        }
+        st.ttf.ttf_files.clear();
+        for (const auto& item : result.entries) {
+            const std::string relative = item.path.substr(std::strlen(SD_PATH_FONT_SRC) + 1);
+            if (!SdIsValidFileName(relative.c_str())) continue;
+            st.ttf.ttf_files.push_back(relative);
+        }
+        st.ttf.ttf_loading = false;
+        st.ttf.ttf_failed = !result.ok;
+        TtfRebuildContent();
+        if (!result.ok) { lv_timer_del(s_ttf_directory_timer); s_ttf_directory_timer = nullptr; }
+    }
 }
 
 void TtfScanFiles() {
     auto& st = Book_State();
     st.ttf.ttf_files.clear();
-    st.ttf.ttf_selected.clear();
-    DIR* dir = opendir(SD_PATH_FONT_SRC);
-    if (dir == nullptr) {
-        return;
+    st.ttf.ttf_loading = true;
+    st.ttf.ttf_failed = false;
+    s_ttf_directory.Request({SD_PATH_FONT_SRC}, TtfDirectoryFilter, st.ttf.ttf_page, kFontListPageSize);
+    if (!s_ttf_directory_timer) s_ttf_directory_timer = lv_timer_create(TtfDirectoryTick, 100, nullptr);
+    if (!s_ttf_directory_timer) {
+        st.ttf.ttf_loading = false;
+        st.ttf.ttf_failed = true;
+        ESP_LOGE(TAG, "font import page timer creation failed");
     }
-    while (dirent* ent = readdir(dir)) {
-        if (ent->d_name[0] == '.' || !IsTtfFileName(ent->d_name)) {
-            continue;
-        }
-        st.ttf.ttf_files.push_back(ent->d_name);
-    }
-    closedir(dir);
-    std::sort(st.ttf.ttf_files.begin(), st.ttf.ttf_files.end());
 }
 
 void TtfPanelClose() {
+    s_ttf_directory.Cancel();
+    if (s_ttf_directory_timer) lv_timer_del(s_ttf_directory_timer);
+    s_ttf_directory_timer = nullptr;
     StopTtfPollTimer();
     auto& st = Book_State();
     if (st.ttf.ttf_sheet != nullptr && lv_obj_is_valid(st.ttf.ttf_sheet)) {
         lv_obj_del(st.ttf.ttf_sheet);
     }
     st.ttf.ttf_sheet = nullptr;
+    st.ttf.ttf_page_label = nullptr;
     st.ttf.ttf_bar = nullptr;
     st.ttf.ttf_pct_lbl = nullptr;
     st.ttf.ttf_msg_lbl = nullptr;
@@ -172,6 +213,7 @@ void StopTtfPollTimer() {
     ttf_convert::Cancel();
     auto& st = Book_State();
     st.ttf.ttf_selected.clear();
+    st.ttf.ttf_multi = false;
     if (st.ttf.ttf_poll_timer != nullptr) {
         lv_timer_del(st.ttf.ttf_poll_timer);
         st.ttf.ttf_poll_timer = nullptr;
@@ -217,6 +259,7 @@ void TtfRebuildContent() {
     if (st.ttf.ttf_sheet == nullptr || !lv_obj_is_valid(st.ttf.ttf_sheet)) {
         return;
     }
+    st.ttf.ttf_page_label = nullptr;
     lv_obj_clean(st.ttf.ttf_sheet);
 
     for (int i = 0; i < kFontListPageSize; ++i) {
@@ -284,7 +327,7 @@ void TtfRebuildContent() {
         lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
     }
     lv_obj_t* title_lbl = lv_label_create(head);
-    if (!st.ttf.ttf_selected.empty()) {
+    if (st.ttf.ttf_multi) {
         char selected[48];
         std::snprintf(selected, sizeof(selected), Lang::Strings::BOOK_SELECTED_FMT, TtfSelectedCount());
         lv_label_set_text(title_lbl, selected);
@@ -336,6 +379,7 @@ void TtfRebuildContent() {
         char page_text[32];
         std::snprintf(page_text, sizeof(page_text), "%d / %d", st.ttf.ttf_page + 1, TtfPageCount());
         lv_label_set_text(meta, page_text);
+        st.ttf.ttf_page_label = meta;
         auto* next = make_button(pager, ">>", OnTtfPageNext, UiSx(88));
         lv_obj_set_style_border_width(next, 0, 0);
         SetSheetBtnEnabled(previous, st.ttf.ttf_page > 0);
@@ -353,13 +397,17 @@ void TtfRebuildContent() {
 
     switch (st.ttf.ttf_mode) {
         case BookUiState::TtfMode::kList: {
+            if (st.ttf.ttf_loading || st.ttf.ttf_failed) {
+                Book_ShowMessage(content, st.ttf.ttf_loading ? Lang::Strings::BOOK_FONT_LOADING : Lang::Strings::DIRECTORY_READ_FAILED, Book_ItemFont());
+                break;
+            }
             if (st.ttf.ttf_files.empty()) {
                 Book_ShowMessage(content, Lang::Strings::TTF_EMPTY, Book_ItemFont());
                 break;
             }
             auto* list = content;
             lv_obj_set_style_pad_row(list, 0, 0);
-            const int start = st.ttf.ttf_page * kFontListPageSize;
+            const int start = 0;
             lv_obj_update_layout(list);
             const int page_height = lv_obj_get_height(list);
             for (int i = 0; i < kFontListPageSize; ++i) {
@@ -400,21 +448,22 @@ void TtfRebuildContent() {
                     nullptr);
                 lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
                 lv_obj_set_user_data(row, reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
-                if (!st.ttf.ttf_selected.empty()) {
+                if (st.ttf.ttf_multi) {
                     auto* check = lv_obj_create(row);
                     lv_obj_remove_style_all(check);
                     lv_obj_set_size(check, UiSx(24), UiSx(24));
                     lv_obj_set_style_border_width(check, 2, 0);
                     lv_obj_set_style_border_color(check, lv_color_black(), 0);
                     lv_obj_set_style_radius(check, UiSx(4), 0);
-                    lv_obj_set_style_bg_color(check, st.ttf.ttf_selected[idx] ?
+                    lv_obj_set_style_bg_color(check, TtfItemSelected(idx) ?
                         lv_color_black() : lv_color_white(), 0);
                     lv_obj_set_style_bg_opa(check, LV_OPA_COVER, 0);
                     Book_DisableScroll(check);
                     lv_obj_clear_flag(check, LV_OBJ_FLAG_CLICKABLE);
                     lv_obj_set_style_pad_column(row, UiSx(10), 0);
                 }
-                Book_SetFilenameMiddle(name, st.ttf.ttf_files[static_cast<size_t>(idx)].c_str());
+                const std::string basename = st.ttf.ttf_files[idx].substr(st.ttf.ttf_files[idx].find_last_of('/') + 1);
+                Book_SetFilenameMiddle(name, basename.c_str());
             }
             break;
         }

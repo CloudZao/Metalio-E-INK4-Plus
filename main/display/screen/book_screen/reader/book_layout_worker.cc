@@ -180,11 +180,10 @@ void StartChapterPageWorker() {
 }
 
 void StartLayoutWorker() {
-    if (ReaderPageWorkPending()) return;
     auto& st = Book_State();
-    if (st.reader.standby_paused || StandbyScreen::IsActive()) return;
-    if (st.reader.opening.load() || st.reader.chapter_pages_busy.load() || st.reader.page_image_busy.load()) return;
-    if (st.reader.prefs_reopen_pending || st.reader.layout_busy.load() || !st.reader.session) {
+    if (ReaderPageWorkPending() && (!st.reader.session || !st.reader.session->HasCurrentPagePreview())) return;
+    if (ReaderWorkersBusy() || st.reader.standby_paused || StandbyScreen::IsActive()) return;
+    if (st.reader.prefs_reopen_pending || !st.reader.session) {
         return;
     }
     const uint32_t token = st.reader.layout_token.fetch_add(1) + 1;

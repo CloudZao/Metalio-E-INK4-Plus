@@ -51,30 +51,33 @@ bool SyncReaderSurface() {
 }
 
 lv_coord_t ReaderLayoutWidth() {
-    return DisplayUiIsLandscape() ? DISPLAY_CONTENT_H : DISPLAY_CONTENT_W;
+    return DisplayUiIsLandscape() ? DisplayUiContentH() : DisplayUiContentW();
 }
 
 lv_coord_t ReaderLayoutHeight() {
-    return DisplayUiIsLandscape() ? DISPLAY_CONTENT_W : DISPLAY_CONTENT_H;
+    return DisplayUiIsLandscape() ? DisplayUiContentW() : DisplayUiContentH();
 }
 
 lv_coord_t ResizeReaderContainers(bool show_footer) {
     auto& reader = Book_State().reader;
     const lv_coord_t footer_h = show_footer ? ReaderFooterHeight() : 0;
     // 全屏背景独立覆盖外圈；正文和底栏保持普通 UI 视口及对应的面板位置。
-    const lv_coord_t body_h = (LV_VER_RES + ReaderLayoutHeight()) / 2 - footer_h;
+    const bool full = BookReaderPrefsBackground() == 3 && !ReaderPageImagesHint();
+    const int left = full ? (DisplayUiIsLandscape() ? DISPLAY_CONTENT_TOP_INSET : DISPLAY_CONTENT_LEFT_INSET) + DisplayUiOffsetX() : 0;
+    const int top = full ? (DisplayUiIsLandscape() ? DISPLAY_CONTENT_LEFT_INSET : DISPLAY_CONTENT_TOP_INSET) + DisplayUiOffsetY() : 0;
+    const lv_coord_t body_h = top + ReaderLayoutHeight() - footer_h;
     if (reader.content && lv_obj_is_valid(reader.content)) {
         lv_obj_set_size(reader.content, LV_HOR_RES, body_h);
         lv_obj_align(reader.content, LV_ALIGN_TOP_LEFT, 0, 0);
         lv_obj_remove_flag(reader.content, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
     }
     if (reader.footer_host && lv_obj_is_valid(reader.footer_host)) {
-        lv_obj_set_size(reader.footer_host, LV_HOR_RES, footer_h);
-        lv_obj_align(reader.footer_host, LV_ALIGN_TOP_LEFT, 0, body_h);
+        lv_obj_set_size(reader.footer_host, ReaderLayoutWidth(), footer_h);
+        lv_obj_align(reader.footer_host, LV_ALIGN_TOP_LEFT, left, body_h);
         lv_obj_set_flag(reader.footer_host, LV_OBJ_FLAG_HIDDEN, !show_footer);
     }
     if (reader.page_label && lv_obj_is_valid(reader.page_label)) {
-        lv_obj_set_width(reader.page_label, LV_HOR_RES - UiSx(16));
+        lv_obj_set_width(reader.page_label, ReaderLayoutWidth() - UiSx(16));
         lv_obj_set_flag(reader.page_label, LV_OBJ_FLAG_HIDDEN, !show_footer);
         lv_obj_center(reader.page_label);
     }
@@ -104,8 +107,8 @@ void BindSessionLayoutPrefs(reader::BookSession& session) {
 
 lv_area_t ReadBackgroundArea() {
     const bool full = BookReaderPrefsBackground() == 3 && !ReaderPageImagesHint();
-    const int width = full ? DISPLAY_WIDTH : DISPLAY_CONTENT_W;
-    const int height = full ? DISPLAY_HEIGHT : DISPLAY_CONTENT_H;
+    const int width = full ? DISPLAY_WIDTH : DisplayUiContentW();
+    const int height = full ? DISPLAY_HEIGHT : DisplayUiContentH();
     return DisplayUiIsLandscape() ? lv_area_t{0, 0, height - 1, width - 1} : lv_area_t{0, 0, width - 1, height - 1};
 }
 
@@ -114,10 +117,10 @@ lv_area_t ReadContentArea() {
     const bool page_images = ReaderPageImagesHint();
     const bool vertical = !page_images && BookReaderPrefsWritingMode() == kBookReaderWritingVertical;
     const int extra_side = vertical ? kReaderVerticalSideInset : 0;
-    const auto background = ReadBackgroundArea();
-    const int left = (lv_area_get_width(&background) - ReaderLayoutWidth()) / 2 + BookReaderPrefsMarginLeft() + (vertical &&
+    const bool full = BookReaderPrefsBackground() == 3 && !page_images;
+    const int left = (full ? (DisplayUiIsLandscape() ? DISPLAY_CONTENT_TOP_INSET : DISPLAY_CONTENT_LEFT_INSET) + DisplayUiOffsetX() : 0) + BookReaderPrefsMarginLeft() + (vertical &&
         BookReaderPrefsTextDirection() != kBookReaderTextRightToLeft ? extra_side : 0);
-    const int top = (lv_area_get_height(&background) - ReaderLayoutHeight()) / 2 + BookReaderPrefsMarginTop();
+    const int top = (full ? (DisplayUiIsLandscape() ? DISPLAY_CONTENT_LEFT_INSET : DISPLAY_CONTENT_TOP_INSET) + DisplayUiOffsetY() : 0) + BookReaderPrefsMarginTop();
     const int width = std::max<int>(40, ReaderLayoutWidth() - BookReaderPrefsMarginLeft() -
         BookReaderPrefsMarginRight() - extra_side);
     const int height = std::max<int>(40, ReaderLayoutHeight() -

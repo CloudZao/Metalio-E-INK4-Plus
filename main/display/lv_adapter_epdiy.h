@@ -6,6 +6,7 @@
 #include "display.h"
 
 #include <chrono>
+#include <atomic>
 #include <esp_timer.h>
 
 struct EpdStatusBar;
@@ -59,6 +60,12 @@ public:
 
     void SetStatus(const char* status) override;
     void ShowNotification(const char* notification, int duration_ms = 3000) override;
+
+    /**
+     * @brief 显示低电关机顶部提示，等待物理刷新并保留三秒；失败返回 false
+     * @param low_voltage true 显示低电压提示，false 显示电量耗尽提示
+     */
+    bool ShowLowBatteryShutdownNotice(bool low_voltage);
     void SetChatMessage(const char* role, const char* content) override;
     void SetEmotion(const char* emotion) override;
     void UpdateStatusBar(bool update_all = false) override;
@@ -132,6 +139,10 @@ protected:
     void Unlock() override;
 
 private:
+    std::atomic<bool> system_ready_pending_{false}; // 板级就绪通知，由 Tick 完成启动收尾
+    bool powering_off_ = false; // UI 锁保护：关机保存期间停止接受新输入
+    bool boot_resume_pending_ = false; // SD 就绪后替换启动占位屏
+
     /** @brief 写 status 文案（含前缀）并缓存，供通知结束后恢复 */
     void ApplyStatusTextLocked(const char* status);
     /** @brief 换页重绑后立刻灌缓存（电量%/图标/静音/时钟），避免先空再刷 */

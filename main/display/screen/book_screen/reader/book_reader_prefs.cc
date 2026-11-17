@@ -41,10 +41,10 @@ static constexpr int kDefaultShelfView = kBookReaderShelfViewCover;
 static constexpr int kDefaultShelfPct = 0;  // 进度角标默认关
 
 struct BookMarginPreset {
-    int left;
-    int right;
-    int top;
-    int bottom;
+    int left; // 左边距，单位像素
+    int right; // 右边距，单位像素
+    int top; // 上边距，单位像素
+    int bottom; // 下边距，单位像素
 };
 
 static constexpr int kSpacingTable[kBookReaderSpacingPresetCount] = {0, 10, 25, 40}; // 行间留白占字体行框的百分比
@@ -76,11 +76,12 @@ static int s_shelf_pct = kDefaultShelfPct;
 static int s_orient = kBookReaderOrientPortrait;
 static bool s_ready = false;
 static constexpr int kTextOptionCount = static_cast<int>(BookTextOption::Count);
-static constexpr const char* kTextKeys[] = {"para_px", "letter_px", "line_px", "margin_px", "indent_ch", "ul_offset", "aa_strength"};
-static constexpr int kTextDefaults[] = {-1, 0, -1, -1, 2, 0, 1};
-static constexpr int kTextMin[] = {0, -2, 0, 0, 0, -12, 0};
-static constexpr int kTextMax[] = {104, 12, 48, 64, 3, 12, 2};
-static int s_text_values[kTextOptionCount] = {-1, 0, -1, -1, 2, 0, 1};
+static constexpr const char* kTextKeys[] = {"para_px", "letter_px", "line_px", "margin_px", "indent_ch", "ul_offset", "aa_strength",
+                                             "margin_top", "margin_bottom", "margin_left", "margin_right"};
+static constexpr int kTextDefaults[] = {-1, 0, -1, -1, 2, 0, 1, -1, -1, -1, -1};
+static constexpr int kTextMin[] = {0, -2, 0, 0, 0, -12, 0, 0, 0, 0, 0};
+static constexpr int kTextMax[] = {104, 12, 48, 64, 3, 12, 2, 64, 64, 64, 64};
+static int s_text_values[kTextOptionCount] = {-1, 0, -1, -1, 2, 0, 1, -1, -1, -1, -1};
 
 
 static bool IsSafeBasename(const char* name) {
@@ -464,21 +465,19 @@ const char* BookReaderPrefsMarginLabel(int preset) {
     }
 }
 
+static int MarginValue(BookTextOption option, int preset_value) {
+    const int value = BookReaderPrefsTextValue(option);
+    if (value >= 0) return value;
+    const int legacy = BookReaderPrefsTextValue(BookTextOption::Margin);
+    return legacy >= 0 ? legacy : preset_value;
+}
+
 void BookReaderPrefsMarginBox(int preset, int* left, int* right, int* top, int* bottom) {
-    const int custom = BookReaderPrefsTextValue(BookTextOption::Margin);
-    const BookMarginPreset m = custom >= 0 ? BookMarginPreset{custom, custom, custom, custom} : kMarginTable[ClampMargin(preset)];
-    if (left != nullptr) {
-        *left = m.left;
-    }
-    if (right != nullptr) {
-        *right = m.right;
-    }
-    if (top != nullptr) {
-        *top = m.top;
-    }
-    if (bottom != nullptr) {
-        *bottom = m.bottom;
-    }
+    const auto& margins = kMarginTable[ClampMargin(preset)];
+    if (left != nullptr) *left = MarginValue(BookTextOption::MarginLeft, margins.left);
+    if (right != nullptr) *right = MarginValue(BookTextOption::MarginRight, margins.right);
+    if (top != nullptr) *top = MarginValue(BookTextOption::MarginTop, margins.top);
+    if (bottom != nullptr) *bottom = MarginValue(BookTextOption::MarginBottom, margins.bottom);
 }
 
 int BookReaderPrefsMarginLeft(void) {

@@ -145,6 +145,7 @@ void RenameTask(void* param) {
     auto* args = static_cast<RenameArgs*>(param);
     PowerPolicy::GetInstance().Acquire(PowerNeed::StandbyInhibit);
     auto& uart = SimpleUart::getInstance();
+    std::lock_guard<std::recursive_timed_mutex> transaction(uart.commandMutex());
     if (uart.sendString(std::string("AT+SLBN=") + args->name + "\r\n")) {
         Bluetooth_post_status(Lang::Strings::BT_NAME_RESTARTING);
         vTaskDelay(pdMS_TO_TICKS(700));
@@ -202,6 +203,9 @@ void Bluetooth_handle_response_line(const std::string& raw_line) {
         return;
     }
 
+    // 校准记录不进入页面日志或状态提示。
+    if (line.rfind("AT+WDATA=", 0) == 0 || line.rfind("AT+RDATA=", 0) == 0 ||
+        line.rfind("AT+FLUSHDATA=", 0) == 0) return;
     ESP_LOGI(TAG, "RX: %s", line.c_str());
 
     if (line == "AT+SHORTCUT=OK") {
@@ -363,6 +367,7 @@ void Bluetooth_on_uart_data(const std::vector<uint8_t>& data) {
 }
 
 void Bluetooth_apply_mode_commands(BtMode mode) {
+    std::lock_guard<std::recursive_timed_mutex> transaction(SimpleUart::getInstance().commandMutex());
     SimpleUart& uart = SimpleUart::getInstance();
 
     Bluetooth_set_mode_audio_power(mode);

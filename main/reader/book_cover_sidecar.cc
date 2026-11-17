@@ -81,7 +81,7 @@ bool EncodeCoverBytesToSidecar(const char* book_path, const uint8_t* data, size_
             return false;
         }
         if (!ShouldUpgradeSidecar(sidecar, new_w, new_h)) {
-            ESP_LOGI(TAG, "sidecar keep (a2i1 not larger): %s", sidecar);
+            ESP_LOGD(TAG, "sidecar retained format=a2i1 width=%d height=%d", new_w, new_h);
             return true;
         }
         file_bytes.assign(data, data + len);
@@ -89,27 +89,27 @@ bool EncodeCoverBytesToSidecar(const char* book_path, const uint8_t* data, size_
         RasterImage l8;
         if (!DecodeImageToL8(data, len, kCoverSidecarTargetW, kCoverSidecarTargetH, l8) ||
             l8.empty()) {
-            ESP_LOGW(TAG, "sidecar decode fail: %s", book_path);
+            ESP_LOGW(TAG, "sidecar decode failed bytes=%u", static_cast<unsigned>(len));
             return false;
         }
         new_w = l8.width;
         new_h = l8.height;
         if (!ShouldUpgradeSidecar(sidecar, new_w, new_h)) {
-            ESP_LOGI(TAG, "sidecar keep (decode not larger): %s", sidecar);
+            ESP_LOGD(TAG, "sidecar retained width=%d height=%d", new_w, new_h);
             return true;
         }
         if (!EncodeL8ToA2l8(l8, file_bytes) ||
             !ValidateA2l8Bytes(file_bytes.data(), file_bytes.size())) {
-            ESP_LOGW(TAG, "sidecar encode fail: %s", book_path);
+            ESP_LOGW(TAG, "sidecar encode failed width=%d height=%d", new_w, new_h);
             return false;
         }
     }
 
     if (!WriteSidecarBytes(sidecar, file_bytes)) {
-        ESP_LOGW(TAG, "sidecar write fail: %s", sidecar);
+        ESP_LOGW(TAG, "sidecar write failed bytes=%u", static_cast<unsigned>(file_bytes.size()));
         return false;
     }
-    ESP_LOGI(TAG, "sidecar saved %s (%u bytes %dx%d)", sidecar,
+    ESP_LOGD(TAG, "sidecar saved bytes=%u width=%d height=%d",
              static_cast<unsigned>(file_bytes.size()), new_w, new_h);
     return true;
 }
@@ -158,19 +158,19 @@ bool SaveBookCoverSidecarFromL8(const char* book_path, const RasterImage& l8) {
         return false;
     }
     if (!ShouldUpgradeSidecar(sidecar, l8.width, l8.height)) {
-        ESP_LOGI(TAG, "sidecar keep from L8 (not larger) %s", sidecar);
+        ESP_LOGD(TAG, "sidecar retained width=%u height=%u", l8.width, l8.height);
         return true;
     }
     std::vector<uint8_t> file_bytes;
     if (!EncodeL8ToA2l8(l8, file_bytes) || !ValidateA2l8Bytes(file_bytes.data(), file_bytes.size())) {
-        ESP_LOGW(TAG, "sidecar encode from L8 fail: %s", book_path);
+        ESP_LOGW(TAG, "sidecar encode failed width=%u height=%u", l8.width, l8.height);
         return false;
     }
     if (!WriteSidecarBytes(sidecar, file_bytes)) {
-        ESP_LOGW(TAG, "sidecar write fail: %s", sidecar);
+        ESP_LOGW(TAG, "sidecar write failed bytes=%u", static_cast<unsigned>(file_bytes.size()));
         return false;
     }
-    ESP_LOGI(TAG, "sidecar ok from L8 %s (%u bytes %ux%u)", sidecar,
+    ESP_LOGD(TAG, "sidecar saved bytes=%u width=%u height=%u",
              static_cast<unsigned>(file_bytes.size()), l8.width, l8.height);
     return true;
 }
@@ -180,7 +180,7 @@ bool SaveBookCoverSidecar(const char* book_path) {
         return false;
     }
     if (!IsUnderBooksDir(book_path)) {
-        ESP_LOGW(TAG, "sidecar skip: path outside books dir %s", book_path);
+        ESP_LOGD(TAG, "sidecar skipped reason=outside_books_root");
         return false;
     }
 
@@ -191,13 +191,13 @@ bool SaveBookCoverSidecar(const char* book_path) {
 
     struct stat st {};
     if (stat(book_path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) {
-        ESP_LOGW(TAG, "sidecar skip: missing book %s", book_path);
+        ESP_LOGW(TAG, "sidecar skipped reason=unavailable_book");
         return false;
     }
 
     // 已有权威档足够则跳过 Open，加快二次进入
     if (BookCoverSidecarAdequate(book_path, kCoverSidecarTargetW, kCoverSidecarTargetH)) {
-        ESP_LOGI(TAG, "sidecar already adequate: %s", book_path);
+        ESP_LOGD(TAG, "sidecar retained reason=adequate");
         return true;
     }
 
@@ -207,13 +207,13 @@ bool SaveBookCoverSidecar(const char* book_path) {
     if (fmt == BookFormat::kEbook) {
         if (!EbookDocument::PeekCoverImageBytes(book_path, cover_bytes)) {
             DeleteBookCoverSidecar(book_path);
-            ESP_LOGW(TAG, "no cover in ebook: %s", book_path);
+            ESP_LOGW(TAG, "sidecar cover extraction failed format=ebook");
             return false;
         }
     } else {
         EpubDocument doc;
         if (!doc.Open(book_path)) {
-            ESP_LOGW(TAG, "sidecar skip: epub open fail %s", book_path);
+            ESP_LOGW(TAG, "sidecar skipped reason=epub_open_failed");
             return false;
         }
         RasterImage l8;
@@ -221,7 +221,7 @@ bool SaveBookCoverSidecar(const char* book_path) {
         doc.Close();
         if (!ok || l8.empty()) {
             DeleteBookCoverSidecar(book_path);
-            ESP_LOGW(TAG, "no cover in epub: %s", book_path);
+            ESP_LOGW(TAG, "sidecar cover extraction failed format=epub");
             return false;
         }
         return SaveBookCoverSidecarFromL8(book_path, l8);

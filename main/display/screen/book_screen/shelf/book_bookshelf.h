@@ -36,6 +36,8 @@ constexpr lv_coord_t kShelfViewBtnH = UiSy(32);    // 单侧按钮高（原 28�
 lv_obj_t* CreateBookshelfScreen();
 /** @brief 渲染书架当前页 */
 void RenderBookshelfPage();
+/** @brief 返回书架封面列宽，供显示与预取共用 */
+lv_coord_t ShelfBookWidth();
 /** @brief 异步打开书架 */
 void OpenBookshelfAsync(void* user_data);
 

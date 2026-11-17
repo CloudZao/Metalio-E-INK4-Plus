@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VCOM · Metalio</title>
+<style>
+:root{color-scheme:dark;font:16px/1.6 system-ui,sans-serif;color:#e4eeea;background:#101c1b}*{box-sizing:border-box}body{margin:0}main{max-width:1600px;margin:48px auto;padding:0 24px}header{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:30px}.eyebrow{font-size:12px;letter-spacing:3px;color:#9ebbb1}h1{font-size:34px;line-height:1.2;margin:8px 0}h2{font-size:18px;margin:0 0 16px}.card{background:#192c29;border:1px solid #355049;border-radius:16px;padding:26px;margin:18px 0}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.grow{flex:1}label{display:block;margin:16px 0 6px;font-size:14px}input,select,button{font:inherit;border-radius:8px;border:1px solid #526e64;padding:11px 14px}input{width:100%;background:#11221f;color:inherit}select{background:#243e36;color:inherit}input:focus,button:focus-visible{outline:3px solid #6bbda5;outline-offset:2px}button{cursor:pointer;background:#243e36;color:inherit}button.primary{background:#23755e;border-color:#499e81;color:white}button:disabled{opacity:.45;cursor:not-allowed}.hint{font-size:14px;color:#adc4ba;margin:12px 0 0}.badge{display:inline-block;padding:4px 12px;border-radius:30px;background:#2a453c;font-size:13px}.workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:stretch}.workspace>div{min-width:0}.workspace .card{margin:0 0 20px}.diagnostics{display:flex;flex-direction:column;min-height:0;contain:size}.diagnostics>.card:last-child{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}.diagnostics>.card:last-child>.row{flex-shrink:0}#status{font-size:18px;font-weight:600}#identity{overflow-wrap:anywhere}#log{font:13px/1.8 ui-monospace,monospace;white-space:pre-wrap;max-height:170px;overflow:auto;color:#b9cec4}#serialLog{height:0;min-height:0;flex:1;overflow:auto;font:13px/1.6 ui-monospace,monospace;overflow-wrap:anywhere}#serialLog pre{white-space:pre-wrap;margin:0 0 12px}#serialLog .direction{color:#9ebbb1;font-size:12px}.result-card{background:#163332;color:#fff;border-color:#163332}.result-card .hint{color:#c4d8cf}.result-card .badge{background:#294b43;color:#fff}.result-card #status[data-tone="error"]{color:#ff8a80}.result{font-size:34px;font-weight:650;font-variant-numeric:tabular-nums;margin:8px 0}.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:1000;max-width:490px;width:calc(100% - 40px);border:1px solid #526e64;border-left:5px solid #166353;border-radius:12px;padding:22px;background:#163332;box-shadow:0 10px 35px #153c3659;color:#fff;max-height:calc(100vh - 40px);overflow:auto}.toast{text-align:center}.toast[data-tone="error"]{color:#ff8a80}#status[data-tone="error"]{color:#ff8a80}.toast h2{margin-left:40px;margin-right:40px}.toast .dismiss{position:absolute;top:10px;right:10px;border:0;padding:5px 10px;background:transparent}#dialogMessage{white-space:pre-wrap}.warning{color:#e9ba7d}@media(max-width:1000px){.workspace{grid-template-columns:1fr}.diagnostics{display:block;contain:none}#serialLog{height:360px;min-height:0;flex:none}}@media(max-width:650px){main{margin:24px auto;padding:0 16px}.row .grow{flex-basis:100%}.card{padding:20px}h1{font-size:28px}}
+</style>
+<main>
+<header><div><div class="eyebrow">METALIO / FACTORY</div><h1 data-i="title"></h1></div><select id="language" aria-label="Language"><option value="zh">中文</option><option value="en">English</option></select></header>
+<div class="workspace"><div class="operations">
+<section class="card"><div class="row"><h2 class="grow" data-i="device"></h2><span class="badge" id="connection"></span><button id="connect" data-i="connect"></button><button id="disconnect" data-i="disconnect" disabled></button></div><div class="hint" id="identity" data-i="usbHint"></div></section>
+<section class="card"><h2 data-i="cloudConfig"></h2><label for="serverUrl" data-i="serverUrl"></label><div class="row"><input class="grow" id="serverUrl" type="url" autocomplete="off" spellcheck="false" style="width:auto;min-width:0"><button id="query" data-i="query" disabled></button></div><label class="row"><input id="rememberUrl" type="checkbox" checked style="width:auto"><span data-i="rememberUrl"></span></label><p id="cloudResult" role="status" aria-live="polite"></p></section>
+<section class="card"><h2 data-i="scanTitle"></h2><label for="scan" data-i="scanLabel"></label><input id="scan" readonly inputmode="none" autocomplete="off" spellcheck="false" placeholder="E0470A14-AFZ0XXEFC302UCA0903832 -1.38"><p class="hint" data-i="scanHint"></p><label class="row"><input id="autoWrite" type="checkbox" checked style="width:auto"><span data-i="autoWrite"></span></label><label for="panel" data-i="panel"></label><input id="panel" maxlength="79" autocomplete="off" spellcheck="false"><label for="mv" data-i="voltage"></label><input id="mv" type="number" min="-3000" max="-1000" step="10" placeholder="-1380"><p class="hint warning" data-i="calibrationHint"></p><div class="row" style="margin-top:24px"><button class="primary" id="write" data-i="write" disabled></button><button id="read" data-i="read" disabled></button><button id="sync" data-i="sync" disabled></button></div></section>
+</div><div class="diagnostics">
+<section class="card result-card"><h2 data-i="resultTitle"></h2><div id="status" role="status" aria-live="polite"></div><div class="result" id="saved">—</div><p class="hint" id="applied"></p><p class="badge" id="cloudStatus"></p></section>
+<section class="card"><h2 data-i="activity"></h2><div id="log" aria-live="polite"></div></section>
+<section class="card"><div class="row"><h2 class="grow" data-i="serialTitle"></h2><label class="row" style="margin:0"><input id="serialEnabled" type="checkbox" checked style="width:auto"><span data-i="serialEnabled"></span></label><button id="clearSerial" data-i="clearSerial"></button><button id="restart" data-i="restart" disabled></button></div><p class="hint" data-i="serialHint"></p><div id="serialLog"></div></section>
+</div></div>
+</main>
+<aside id="resultDialog" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden><h2 id="dialogTitle"></h2><p id="dialogMessage"></p><button id="closeDialog" class="dismiss" aria-label="关闭提醒">×</button></aside>
+<script>
+'use strict';
+const words = {
+zh:{rememberUrl:'记住地址',storageFailed:'无法保存地址，请检查浏览器存储权限',retrying:'写入失败，1 秒后重试',cloudConfig:'云接口',serverUrl:'服务器 URL',query:'查询云端',querying:'正在查询云端',queryOk:'云端查询成功',queryFailed:'云端查询失败',cloudValue:'云端 VCOM',CLOUD_URL_INVALID:'请填写 HTTPS 服务器地址（仅域名和可选端口）',title:'VCOM 写入工具',device:'01 / 连接设备',connect:'连接设备',disconnect:'断开',restart:'重启设备',restarting:'正在重启设备',restartAccepted:'已发送复位信号，请查看启动日志；若端口断开，请重新连接。',restartFailed:'设备重启失败',connected:'已连接',disconnected:'未连接',usbHint:'选择 USB Serial/JTAG 端口',scanTitle:'02 / 扫码与写入',scanLabel:'扫码内容',scanHint:'请使用鼠标选中此对话框，扫描枪扫描后将自动填充内容',autoWrite:'自动写入并校验',panel:'屏幕标识',voltage:'VCOM（负毫伏）',calibrationHint:'按屏幕标签填写：-3000～-1000mv，步进 10mv',write:'写入并校验',read:'读取设备',resultTitle:'03 / 处理结果',idle:'等待操作',cloud:'云同步：未同步',sync:'重试同步',syncing:'正在同步',writeSynced:'VCOM 写入和同步成功',syncOk:'VCOM 同步成功',syncFailed:'VCOM 已写入，同步失败',cloudSynced:'云同步：成功',cloudFailed:'云同步：失败',cloudSyncing:'云同步：进行中',NO_CALIBRATION:'请先读取设备确认 VCOM',CLOUD_CONNECTION_FAILED:'云端连接失败，请检查电脑网络和接口跨域配置',CLOUD_HTTP_FAILED:'云端 HTTP 请求失败',CLOUD_RESPONSE_FAILED:'云端应答读取失败',CLOUD_RESPONSE_INVALID:'云端应答格式异常',CLOUD_TIMEOUT:'云同步超时',CLOUD_REJECTED:'云端拒绝保存',CLOUD_VERIFY_MISMATCH:'云端返回数据与上传内容不一致',activity:'操作记录',serialTitle:'端口日志',serialEnabled:'显示日志',clearSerial:'清空',serialHint:'TX 发送 · RX 接收',close:'确定',unsupported:'当前环境不支持串口，请使用桌面 Chrome / Edge，通过 localhost 或 HTTPS 打开。',connecting:'正在连接',reading:'正在读取',writing:'正在写入并同步',readOk:'读取成功',writeOk:'VCOM 写入成功',invalid:'扫码数据无效。格式示例：屏幕标识 -1.38；电压为负数，最多两位小数。',invalidMv:'值异常：VCOM 绝对值须为 1.0～3.0V（-3000～-1000mv），步进为 10mv。',invalidPanel:'屏幕标识仅允许字母、数字、横线和下划线，最多 79 字符。',comm:'设备通信失败',timeout:'设备应答超时，写入结果尚未确认。可重新扫码写入，或读取设备核对。',uncertain:'结果尚未确认',failed:'VCOM 操作失败',readFailed:'VCOM 读取失败',writeFailed:'VCOM 写入失败',pending:'上一笔操作尚未结束，请完成后再扫描。',portBusy:'无法打开串口，请检查连接及端口占用。',applied:'驱动采用值',notApplied:'驱动尚未切换到保存值',BH_NOT_READY:'蓝牙芯片尚未就绪',BH_BUSY:'蓝牙芯片正在处理其他操作',BH_TX_FAILED:'蓝牙串口发送失败',BH_TIMEOUT:'蓝牙芯片应答超时',BH_WRITE_REJECTED:'蓝牙芯片拒绝写入',BH_FLUSH_REJECTED:'蓝牙芯片 Flash 保存失败',BH_READ_INVALID:'蓝牙芯片读取应答无效',BH_RECORD_INVALID:'蓝牙芯片没有有效的校准记录',BH_VERIFY_MISMATCH:'蓝牙芯片回读与写入内容不一致',DISPLAY_UNAVAILABLE:'显示线程不可用',INVALID_VCOM:'值异常：VCOM 绝对值须为 1.0～3.0V，步进为 10mv',INVALID_VALUE:'设备拒绝了无效参数',INVALID_REQUEST:'设备收到无效请求',BUSY:'设备正在处理其他操作',LINE_TOO_LONG:'请求超过长度限制'},
+en:{rememberUrl:'Remember address',storageFailed:'Cannot save the address. Check browser storage permissions.',retrying:'Write failed; retrying in 1 second',cloudConfig:'Cloud endpoints',serverUrl:'Server URL',query:'Query cloud',querying:'Querying cloud',queryOk:'Cloud query successful',queryFailed:'Cloud query failed',cloudValue:'Cloud VCOM',CLOUD_URL_INVALID:'Enter an HTTPS server origin (hostname and optional port only)',title:'VCOM programming',device:'01 / Connect device',connect:'Connect device',disconnect:'Disconnect',restart:'Restart device',restarting:'Restarting device',restartAccepted:'Reset signals sent. Check the startup log; reconnect if the port disconnects.',restartFailed:'Device restart failed',connected:'Connected',disconnected:'Disconnected',usbHint:'Select the USB Serial/JTAG port',scanTitle:'02 / Scan and program',scanLabel:'Scanner input',scanHint:'Click this input box. Scanning a barcode will fill in the content automatically.',autoWrite:'Auto write and verify',panel:'Panel identifier',voltage:'VCOM (negative millivolts)',calibrationHint:'Use the panel label value: -3000 to -1000mv, step 10mv',write:'Write and verify',read:'Read device',resultTitle:'03 / Result',idle:'Ready',cloud:'Cloud sync: not synced',sync:'Retry sync',syncing:'Syncing',writeSynced:'VCOM saved and synced',syncOk:'VCOM synced',syncFailed:'VCOM saved; cloud sync failed',cloudSynced:'Cloud sync: successful',cloudFailed:'Cloud sync: failed',cloudSyncing:'Cloud sync: in progress',NO_CALIBRATION:'Read the device to confirm VCOM first',CLOUD_CONNECTION_FAILED:'Cloud connection failed. Check the computer network and server CORS settings.',CLOUD_HTTP_FAILED:'Cloud HTTP request failed',CLOUD_RESPONSE_FAILED:'Cloud response read failed',CLOUD_RESPONSE_INVALID:'Invalid cloud response',CLOUD_TIMEOUT:'Cloud sync timed out',CLOUD_REJECTED:'Cloud rejected the save',CLOUD_VERIFY_MISMATCH:'Cloud response does not match uploaded data',activity:'Activity',serialTitle:'Serial log',serialEnabled:'Show log',clearSerial:'Clear',serialHint:'TX sent · RX received',close:'OK',unsupported:'Serial is unavailable. Use desktop Chrome / Edge on localhost or HTTPS.',connecting:'Connecting',reading:'Reading device',writing:'Writing and syncing',readOk:'Read successful',writeOk:'VCOM written successfully',invalid:'Invalid scan. Expected: panel-id -1.38. Use a negative voltage with up to two decimal places.',invalidMv:'Abnormal value: VCOM magnitude must be 1.0–3.0V (-3000 to -1000mv), in 10mv steps.',invalidPanel:'Panel ID allows letters, digits, hyphens and underscores, up to 79 characters.',comm:'Device communication failed',timeout:'Device response timed out. The write result is unknown. Scan again to retry, or read the device to check.',uncertain:'Result not confirmed',failed:'VCOM operation failed',readFailed:'VCOM read failed',writeFailed:'VCOM write failed',pending:'An operation is in progress. Wait before scanning again.',portBusy:'Cannot open port. Check the connection and other serial applications.',applied:'Driver value',notApplied:'Driver has not adopted the saved value yet',BH_NOT_READY:'Bluetooth chip is not ready',BH_BUSY:'Bluetooth chip is busy',BH_TX_FAILED:'Bluetooth UART send failed',BH_TIMEOUT:'Bluetooth chip response timed out',BH_WRITE_REJECTED:'Bluetooth chip rejected the write',BH_FLUSH_REJECTED:'Bluetooth Flash save failed',BH_READ_INVALID:'Invalid Bluetooth read response',BH_RECORD_INVALID:'No valid calibration record on Bluetooth chip',BH_VERIFY_MISMATCH:'Bluetooth readback does not match the write',DISPLAY_UNAVAILABLE:'Display worker unavailable',INVALID_VCOM:'Abnormal value: VCOM magnitude must be 1.0–3.0V, in 10mv steps',INVALID_VALUE:'Device rejected invalid parameters',INVALID_REQUEST:'Invalid device request',BUSY:'Device busy',LINE_TOO_LONG:'Request exceeds the size limit'}
+};
+const $ = id => document.getElementById(id);
+let lang='zh', port=null, reader=null, writer=null, readTask=null, pending=null;
+let scanComplete=true, resetting=false, cloudBusy=false;
+let device=null, lastStatus='idle', sequence=crypto.getRandomValues(new Uint32Array(1))[0]%1000000000;
+const t=key=>words[lang][key] || key;
+const serverStorageKey='metalio.vcom.serverOrigin';
+function rememberServer(){
+ try{
+  if($('rememberUrl').checked){
+   if(!$('serverUrl').value.trim()){localStorage.removeItem(serverStorageKey);return;}
+   localStorage.setItem(serverStorageKey,cloudEndpoint().origin);
+  }else localStorage.removeItem(serverStorageKey);
+ }catch(error){popup('failed',t(error.message==='CLOUD_URL_INVALID'?'CLOUD_URL_INVALID':'storageFailed'));}
+}
+function restoreServer(){
+ try{
+  const saved=localStorage.getItem(serverStorageKey);
+  if(saved){$('serverUrl').value=saved;cloudEndpoint();$('rememberUrl').checked=true;}
+ }catch{$('serverUrl').value='';$('rememberUrl').checked=false;}
+}
+
+function activity(key,detail=''){const line=document.createElement('div');line.textContent=new Date().toLocaleTimeString()+'  '+t(key)+(detail?' · '+detail:'');$('log').prepend(line);while($('log').children.length>30)$('log').lastChild.remove();}
+let serialDirection='', serialBody=null, serialSize=0;
+function clearSerial(){ $('serialLog').replaceChildren();serialDirection='';serialBody=null;serialSize=0; }
+function serialPrint(direction,text){
+ if(!$('serialEnabled').checked||!text)return;
+ const root=$('serialLog'),follow=root.scrollHeight-root.scrollTop-root.clientHeight<40;
+ if(direction!==serialDirection||!serialBody){
+  const entry=document.createElement('div'),heading=document.createElement('div');
+  heading.className='direction';heading.textContent=new Date().toLocaleTimeString('en-GB',{hour12:false,timeZone:'Asia/Shanghai'})+'.'+String(new Date().getMilliseconds()).padStart(3,'0')+' '+direction;
+  serialBody=document.createElement('pre');entry.append(heading,serialBody);root.append(entry);serialDirection=direction;
+ }
+ serialBody.append(document.createTextNode(text));serialSize+=text.length;
+ while(root.children.length>1&&(serialSize>131072||root.children.length>200)){
+  serialSize-=root.firstChild.lastChild.textContent.length;root.firstChild.remove();
+ }
+ if(serialSize>131072){serialBody.textContent=serialBody.textContent.slice(-131072);serialSize=serialBody.textContent.length;}
+ if(follow)root.scrollTop=root.scrollHeight;
+}
+let noticeTimer=null;
+function dismissNotice(){clearTimeout(noticeTimer);noticeTimer=null;$('resultDialog').hidden=true;}
+function resultTone(key){
+ if(['readOk','writeOk','writeSynced','syncOk','queryOk'].includes(key))return 'success';
+ if(['failed','readFailed','writeFailed','restartFailed','comm','uncertain','syncFailed','queryFailed'].includes(key))return 'error';
+ return 'info';
+}
+function popup(title,message){
+ clearTimeout(noticeTimer);const heading=t(title);
+ $('resultDialog').dataset.tone=resultTone(title);
+ $('dialogTitle').textContent=heading;
+ $('dialogMessage').textContent=message.startsWith(heading+'\n')?message.slice(heading.length+1):message;
+ $('resultDialog').hidden=false;
+ noticeTimer=setTimeout(dismissNotice,5000);
+}
+function status(key){lastStatus=key;$('status').textContent=t(key);$('status').dataset.tone=resultTone(key);}
+function controls(){const active=!!writer&&!!reader&&!pending&&!resetting&&!cloudBusy;$('connect').disabled=!!port;$('disconnect').disabled=!port||resetting||cloudBusy;$('write').disabled=!active;$('read').disabled=!active;$('sync').disabled=!active||!device||device.local_saved!==true||device.cloud==='synced';$('query').disabled=!active||!device;$('restart').disabled=!active;for(const id of ['panel','mv','serverUrl','rememberUrl'])$(id).disabled=!!pending||cloudBusy;$('connection').textContent=t(port?'connected':'disconnected');}
+function render(){$('closeDialog').setAttribute('aria-label',lang==='zh'?'关闭提醒':'Dismiss notification');document.documentElement.lang=lang==='zh'?'zh-CN':'en';document.querySelectorAll('[data-i]').forEach(el=>el.textContent=t(el.dataset.i));status(lastStatus);controls();$('cloudStatus').textContent=cloudText(device?.cloud);if(device){$('identity').textContent=device.board_model+' · '+device.device_mac;$('saved').textContent=device.vcom_mv?device.vcom_mv+'mv':'—';$('applied').textContent=t('applied')+'：'+device.applied_mv+'mv';}}
+function parseScan(raw){const match=raw.trim().match(/^([A-Za-z0-9_-]{1,79}?)\s*(-\d+(?:\.\d{1,2})?)$/);if(!match)throw Error('invalid');const mv=Math.round(Number(match[2])*1000);if(!validMv(mv))throw Error('invalidMv');return {panel_id:match[1],vcom_mv:mv};}
+function validMv(mv){return Number.isInteger(mv)&&mv<=-1000&&mv>=-3000&&mv%10===0;}
+function cloudText(value){return t(value==='synced'?'cloudSynced':value==='failed'?'cloudFailed':value==='syncing'?'cloudSyncing':'cloud');}
+function validReply(message){return message&&Number.isInteger(message.id)&&typeof message.ok==='boolean'&&typeof message.code==='string'&&typeof message.board_model==='string'&&typeof message.device_mac==='string'&&Number.isInteger(message.vcom_mv)&&Number.isInteger(message.applied_mv);}
+function cloudEndpoint(){
+ let url;try{url=new URL($('serverUrl').value.trim());}catch{throw Error('CLOUD_URL_INVALID');}
+ if(url.protocol!=='https:'||url.username||url.password||url.hash||url.search||url.pathname!=='/')throw Error('CLOUD_URL_INVALID');
+ return new URL('/xiaozhi/api/metalio/vcom',url.origin);
+}
+async function cloudRequest(payload,query=false){
+ const controller=new AbortController();let timer;
+ try{
+  const url=cloudEndpoint();if(query)url.searchParams.set('device_mac',payload.device_mac);
+  timer=setTimeout(()=>controller.abort(),15000);
+  const options={method:query?'GET':'POST',headers:{Accept:'application/json'},signal:controller.signal,credentials:'omit',redirect:'error'};
+  if(!query){options.headers['Content-Type']='application/json';options.body=JSON.stringify(payload);}
+  const response=await fetch(url.href,options);
+  if(response.status!==200)throw Error('CLOUD_HTTP_FAILED');
+  let result;try{result=await response.json();}catch(error){if(controller.signal.aborted)throw error;throw Error('CLOUD_RESPONSE_INVALID');}
+  if(typeof result?.code!=='number')throw Error('CLOUD_RESPONSE_INVALID');
+  if(result.code!==0)throw Error(query?'CLOUD_RESPONSE_FAILED':'CLOUD_REJECTED');
+  const data=result.data;
+  if(data?.board_model!==payload.board_model||typeof data?.device_mac!=='string'||data.device_mac.toLowerCase()!==payload.device_mac.toLowerCase()||!validMv(data.vcom_mv)||(!query&&data.vcom_mv!==payload.vcom_mv))throw Error('CLOUD_VERIFY_MISMATCH');
+  return data;
+ }catch(error){throw Error(controller.signal.aborted?'CLOUD_TIMEOUT':Object.hasOwn(words.en,error.message)?error.message:'CLOUD_CONNECTION_FAILED');}
+ finally{clearTimeout(timer);}
+}
+async function queryCloud(){
+ if(cloudBusy||pending||resetting||!device||!writer||!reader)return;
+ const target=device;cloudBusy=true;status('querying');controls();activity('querying');$('cloudResult').textContent='';
+ try{
+  const data=await cloudRequest(target,true);
+  $('cloudResult').textContent=t('cloudValue')+'：'+data.vcom_mv+'mv';status('queryOk');activity('queryOk');popup('queryOk',data.vcom_mv+'mv');
+ }catch(error){status('queryFailed');activity('queryFailed',error.message);popup('queryFailed',t(error.message));}
+ finally{cloudBusy=false;render();}
+}
+async function syncCloud(written=false){
+ if(cloudBusy||pending||resetting)return;
+ if(!device||device.local_saved!==true||!validMv(device.vcom_mv)){popup('syncFailed',t('NO_CALIBRATION'));return;}
+ const target=device, payload={board_model:target.board_model,device_mac:target.device_mac,vcom_mv:target.vcom_mv};
+ cloudBusy=true;target.cloud='syncing';status('syncing');render();activity('syncing');
+ try{
+  await cloudRequest(payload);
+  target.cloud='synced';const key=written?'writeSynced':'syncOk';status(key);activity(key);popup(key,payload.vcom_mv+'mv');
+ }catch(error){
+  target.cloud='failed';const code=error.message;
+  status('syncFailed');activity('syncFailed',code);popup('syncFailed',t(code));
+ }finally{cloudBusy=false;render();}
+}
+function retryWrite(operation){
+ if(operation.cmd!=='panel.set'||operation.retries>=3||!writer||!reader)return false;
+ operation.waitingRetry=true;pending=operation;status('retrying');activity('retrying',(operation.retries+1)+'/3');controls();
+ operation.timer=setTimeout(()=>{
+  if(pending!==operation)return;
+  pending=null;
+  send('panel.set',{mv:operation.mv,panel:operation.panel,retries:operation.retries+1});
+ },1000);
+ return true;
+}
+function accept(message){
+ if(!validReply(message)||!pending||pending.waitingRetry||message.id!==pending.id)return;
+ const operation=pending;clearTimeout(operation.timer);pending=null;
+ if(!device||device.device_mac!==message.device_mac)device={...message,local_saved:false,cloud:'not_requested'};
+ const valueMatches=validMv(message.vcom_mv)&&(operation.cmd!=='panel.set'||(message.vcom_mv===operation.mv&&message.panel_id===operation.panel));
+ if(message.ok&&(!valueMatches||message.code!=='OK'||message.local_saved!==true)){
+  if(retryWrite(operation))return;
+  status('uncertain');popup('comm',t('uncertain'));controls();return;
+ }
+ if(message.ok){
+  device={...message,cloud:'not_requested'};$('mv').value=message.vcom_mv;
+  if(typeof message.panel_id==='string')$('panel').value=message.panel_id;
+  const result=operation.cmd==='panel.set'?'writeOk':'readOk';
+  status(result);render();activity(result);
+  if(operation.cmd==='panel.set')syncCloud(true);
+  else popup(result,message.vcom_mv+'mv');
+ }else{
+  if(device)device.local_saved=false;
+  activity(operation.cmd==='panel.set'?'writeFailed':'readFailed',/^[A-Z_]+$/.test(message.code)?message.code:'UNKNOWN');
+  if(retryWrite(operation))return;
+  const result=operation.cmd==='panel.set'?'writeFailed':'readFailed';
+  status(result);popup(result,t(message.code)+(message.stage?' ('+message.stage+')':''));
+ }
+ controls();
+}
+async function readLoop(){
+ const decoder=new TextDecoder();let buffer='';
+ try{while(reader){const {value,done}=await reader.read();if(done)break;const text=decoder.decode(value,{stream:true});serialPrint('RX',text);buffer+=text;let nl;while((nl=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,nl);buffer=buffer.slice(nl+1);const start=line.indexOf('@VCOM ');if(start>=0){try{accept(JSON.parse(line.slice(start+6).trim()));}catch{/* Ignore logs or interrupted frames. */}}}if(buffer.length>8192)buffer='';}}
+ catch{if(port&&!resetting){activity('comm');}}
+ finally{if(reader){reader.releaseLock();reader=null;}if(port&&!resetting){if(pending){clearTimeout(pending.timer);pending=null;}status('comm');controls();}}
+}
+async function connect(){
+ if(!navigator.serial||!window.isSecureContext){popup('comm',t('unsupported'));return;}
+ try{const selected=await navigator.serial.requestPort();await selected.open({baudRate:115200,flowControl:'none'});port=selected;await selected.setSignals({dataTerminalReady:false,requestToSend:false});writer=port.writable.getWriter();reader=port.readable.getReader();readTask=readLoop();device=null;$('cloudResult').textContent='';$('saved').textContent='—';$('applied').textContent='';status('idle');controls();activity('connected');await send('panel.get');}
+ catch(error){if(error.name!=='NotFoundError'){popup('comm',t('portBusy'));await disconnect();}}
+}
+async function disconnect(){
+ const old=port;port=null;if(pending){clearTimeout(pending.timer);pending=null;}
+ try{if(reader)await reader.cancel();if(readTask)await readTask;if(writer){await writer.close();writer.releaseLock();}}catch{}finally{writer=null;reader=null;readTask=null;if(old)try{await old.close();}catch{}device=null;$('cloudResult').textContent='';$('identity').textContent=t('usbHint');status('disconnected');controls();}
+}
+async function send(cmd,retry=null){
+ if(!writer||!reader){popup('comm',t('disconnected'));return;}if(pending||resetting||cloudBusy){popup('failed',t('pending'));return;}
+ const request={cmd,id:++sequence};
+ if(cmd==='panel.set'){const mv=retry?retry.mv:Number($('mv').value),panel=retry?retry.panel:$('panel').value.trim();if(!validMv(mv)){popup('failed',t('invalidMv'));return;}if(!/^[A-Za-z0-9_-]{1,79}$/.test(panel)){popup('failed',t('invalidPanel'));return;}request.vcom_mv=mv;request.panel_id=panel;if(device){device.local_saved=false;device.cloud='not_requested';}}
+ const operation={id:request.id,cmd,mv:request.vcom_mv,panel:request.panel_id,retries:retry?retry.retries:0};pending=operation;
+ operation.timer=setTimeout(()=>{if(pending!==operation)return;pending=null;activity('comm','DEVICE_TIMEOUT');if(retryWrite(operation))return;status('uncertain');controls();popup('comm',t('timeout'));},60000);
+ status(cmd==='panel.set'?'writing':'reading');controls();activity(lastStatus);
+ try{const text='@VCOM '+JSON.stringify(request)+'\r\n';serialPrint('TX',text);await writer.write(new TextEncoder().encode(text));}
+ catch{if(pending===operation){clearTimeout(operation.timer);pending=null;activity('comm','SERIAL_TX_FAILED');if(retryWrite(operation))return;status('comm');controls();popup('comm',t('uncertain'));}}
+}
+async function restartDevice(){
+ if(!port||!writer){popup('comm',t('disconnected'));return;}
+ if(pending||resetting||cloudBusy){popup('failed',t('pending'));return;}
+ const target=port;resetting=true;controls();status('restarting');activity('restarting');
+ try{
+  // 与 esptool 的硬复位一致：DTR 释放，RTS 拉低 EN 后再释放。
+  serialPrint('CTRL','DTR=0 RTS=1\r\n');
+  await target.setSignals({dataTerminalReady:false,requestToSend:true});
+  await new Promise(resolve=>setTimeout(resolve,200));
+  serialPrint('CTRL','DTR=0 RTS=0\r\n');
+  await target.setSignals({dataTerminalReady:false,requestToSend:false});
+  await new Promise(resolve=>setTimeout(resolve,200));
+  popup('restarting',t('restartAccepted'));
+ }catch{
+  activity('restartFailed');popup('restartFailed',t('comm'));
+ }finally{
+  resetting=false;controls();status(writer&&reader?'idle':'disconnected');
+ }
+}
+function scanKey(event){
+ const code=event.code||'';
+ if(/^Key[A-Z]$/.test(code)){const upper=!!event.shiftKey!==!!event.getModifierState?.('CapsLock');return upper?code.slice(3):code.slice(3).toLowerCase();}
+ if(/^Digit[0-9]$/.test(code))return event.shiftKey?'':code.slice(5);
+ if(/^Numpad[0-9]$/.test(code))return code.slice(6);
+ if(code==='Minus'||code==='NumpadSubtract')return event.shiftKey&&code==='Minus'?'_':'-';
+ if(code==='Period'||code==='NumpadDecimal')return event.shiftKey?'':'.';
+ if(code==='Space')return ' ';
+ return /^[A-Za-z0-9_. -]$/.test(event.key)?event.key:'';
+}
+function editScan(text,backspace=false,forward=false){
+ const field=$('scan');let start=field.selectionStart??field.value.length,end=field.selectionEnd??start;
+ if(start===end){if(backspace)start=Math.max(0,start-1);if(forward)end=Math.min(field.value.length,end+1);}
+ field.setRangeText(text,start,end,'end');
+}
+function beginScan(){
+ if(!scanComplete)return;
+ $('scan').value='';$('panel').value='';$('mv').value='';scanComplete=false;
+}
+function submitScan(){
+ if(pending||resetting||cloudBusy){popup('failed',t('pending'));return;}
+ $('panel').value='';$('mv').value='';scanComplete=true;
+ try{
+  const result=parseScan($('scan').value);$('panel').value=result.panel_id;$('mv').value=result.vcom_mv;
+  if($('autoWrite').checked)send('panel.set');
+ }catch(error){popup('failed',t(error.message));}
+ $('scan').select();
+}
+$('scan').addEventListener('paste',event=>{
+ event.preventDefault();if(pending||resetting||cloudBusy){popup('failed',t('pending'));return;}
+ scanComplete=true;beginScan();const text=event.clipboardData.getData('text').trim();
+ if(!/^[A-Za-z0-9_. \-]+$/.test(text)){popup('failed',t('invalid'));return;}
+ editScan(text);
+});
+$('scan').addEventListener('keydown',event=>{
+ if(event.ctrlKey||event.altKey||event.metaKey)return;
+ const enter=event.code==='Enter'||event.code==='NumpadEnter'||event.key==='Enter';
+ if(!enter){
+  if(event.key==='Backspace'||event.key==='Delete'){event.preventDefault();editScan('',event.key==='Backspace',event.key==='Delete');return;}
+  const text=scanKey(event);if(text){event.preventDefault();if(pending||resetting||cloudBusy)return;beginScan();editScan(text);}return;
+ }
+ event.preventDefault();submitScan();
+});
+$('rememberUrl').onchange=rememberServer;$('serverUrl').onchange=rememberServer;
+$('clearSerial').onclick=clearSerial;$('serialEnabled').onchange=()=>{serialDirection='';serialBody=null;};
+$('restart').onclick=restartDevice;
+$('connect').onclick=connect;$('disconnect').onclick=disconnect;$('write').onclick=()=>send('panel.set');$('read').onclick=()=>send('panel.get');$('sync').onclick=()=>syncCloud();$('query').onclick=queryCloud;$('language').onchange=()=>{lang=$('language').value;render();};$('closeDialog').onclick=()=>{dismissNotice();$('scan').focus();};
+if(navigator.serial)navigator.serial.addEventListener('disconnect',event=>{if(event.target===port)disconnect();});
+restoreServer();
+render();
+</script>
+</html>

@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <new>
+#include <utility>
 #include <esp_log.h>
 #include <esp_timer.h>
 
@@ -24,42 +26,40 @@ void RequestShelfCheckMarksPaint() {
     ScreenPaintCoalesceRequestDebounced(&s_shelf_check_paint, kShelfCheckPaintDebounceUs);
 }
 
-void SyncShelfSelectedSize() {
-    auto& st = Book_State();
-    const size_t n = (st.shelf.shelf_view == kBookReaderShelfViewList) ? st.shelf.shelf_entries.size()
-                                                                 : st.shelf.books.size();
-    if (st.shelf.shelf_selected.size() != n) {
-        st.shelf.shelf_selected.assign(n, 0);
-    }
-}
-
 int ShelfSelectedCount() {
-    SyncShelfSelectedSize();
-    auto& st = Book_State();
-    int n = 0;
-    for (uint8_t v : st.shelf.shelf_selected) {
-        if (v != 0) {
-            ++n;
-        }
-    }
-    return n;
+    return static_cast<int>(Book_State().shelf.shelf_selected.size());
 }
 
 bool ShelfItemSelected(int idx) {
-    SyncShelfSelectedSize();
-    auto& st = Book_State();
-    return idx >= 0 && idx < static_cast<int>(st.shelf.shelf_selected.size()) &&
-           st.shelf.shelf_selected[static_cast<size_t>(idx)] != 0;
+    const auto& shelf = Book_State().shelf;
+    if (idx < 0 || idx >= static_cast<int>(shelf.books.size())) {
+        return false;
+    }
+    const auto& path = shelf.books[idx].path;
+    return std::any_of(shelf.shelf_selected.begin(), shelf.shelf_selected.end(),
+                       [&](const reader::BookDirEntry& entry) { return entry.path == path; });
 }
 
-void ToggleShelfItemSelected(int idx) {
-    SyncShelfSelectedSize();
-    auto& st = Book_State();
-    if (idx < 0 || idx >= static_cast<int>(st.shelf.shelf_selected.size())) {
+void ToggleShelfItemSelected(int idx) try {
+    auto& shelf = Book_State().shelf;
+    if (ShelfDeleteBusy() || shelf.directory_loading || idx < 0 || idx >= static_cast<int>(shelf.books.size())) {
         return;
     }
-    st.shelf.shelf_selected[static_cast<size_t>(idx)] =
-        st.shelf.shelf_selected[static_cast<size_t>(idx)] ? 0 : 1;
+    const auto& book = shelf.books[idx];
+    const auto found = std::find_if(shelf.shelf_selected.begin(), shelf.shelf_selected.end(),
+                                    [&](const reader::BookDirEntry& entry) { return entry.path == book.path; });
+    if (found != shelf.shelf_selected.end()) {
+        shelf.shelf_selected.erase(found);
+    } else if (idx < static_cast<int>(shelf.shelf_entries.size())) {
+        shelf.shelf_selected.push_back(shelf.shelf_entries[idx]);
+    } else {
+        reader::BookDirEntry entry;
+        entry.path = book.path;
+        entry.book = book;
+        shelf.shelf_selected.push_back(std::move(entry));
+    }
+} catch (const std::bad_alloc&) {
+    ESP_LOGW(TAG, "book selection allocation failed; selection unchanged");
 }
 
 void RefreshShelfFooterMode() {
@@ -104,13 +104,12 @@ void RefreshShelfFooterMode() {
 }
 
 void ExitShelfMultiMode(bool rebuild) {
+    CancelShelfDelete();
     auto& st = Book_State();
     st.shelf.shelf_multi = false;
     st.shelf.shelf_suppress_click_until_us = 0;
     st.shelf.shelf_suppress_click_idx = -1;
-    const size_t n = (st.shelf.shelf_view == kBookReaderShelfViewList) ? st.shelf.shelf_entries.size()
-                                                                 : st.shelf.books.size();
-    st.shelf.shelf_selected.assign(n, 0);
+    st.shelf.shelf_selected.clear();
     RefreshShelfFooterMode();
     if (rebuild) {
         RequestRenderBookshelfPage();
@@ -120,12 +119,8 @@ void ExitShelfMultiMode(bool rebuild) {
 void EnterShelfMultiModeSelect(int idx) {
     auto& st = Book_State();
     st.shelf.shelf_multi = true;
-    const size_t n = (st.shelf.shelf_view == kBookReaderShelfViewList) ? st.shelf.shelf_entries.size()
-                                                                 : st.shelf.books.size();
-    st.shelf.shelf_selected.assign(n, 0);
-    if (idx >= 0 && idx < static_cast<int>(n)) {
-        st.shelf.shelf_selected[static_cast<size_t>(idx)] = 1;
-    }
+    st.shelf.shelf_selected.clear();
+    ToggleShelfItemSelected(idx);
     RefreshShelfFooterMode();
     RequestRenderBookshelfPage();
 }
@@ -136,16 +131,20 @@ lv_obj_t* FindShelfCell(int index) {
         return nullptr;
     }
     const uint32_t n = lv_obj_get_child_count(st.shelf.list_body);
-    for(uint32_t i=0;i<n;++i) {
-        auto* item=lv_obj_get_child(st.shelf.list_body,i);
-        if(st.shelf.shelf_view==kBookReaderShelfViewList) {
-            if(static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(item)))==index)return item;
+    for (uint32_t i = 0; i < n; ++i) {
+        auto* item = lv_obj_get_child(st.shelf.list_body, i);
+        if (st.shelf.shelf_view == kBookReaderShelfViewList) {
+            if (static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(item))) == index) {
+                return item;
+            }
         } else {
             // Grid cells are now inside shelf rows; ignore the decorative base.
-            for(uint32_t j=0;j<lv_obj_get_child_count(item);++j) {
-                auto* cell=lv_obj_get_child(item,j);
-                if(lv_obj_has_flag(cell,LV_OBJ_FLAG_CLICKABLE) &&
-                   static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(cell)))==index)return cell;
+            for (uint32_t j = 0; j < lv_obj_get_child_count(item); ++j) {
+                auto* cell = lv_obj_get_child(item, j);
+                if (lv_obj_has_flag(cell, LV_OBJ_FLAG_CLICKABLE) &&
+                    static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(cell))) == index) {
+                    return cell;
+                }
             }
         }
     }
@@ -214,20 +213,26 @@ void PatchShelfRowCheckMark(int index) {
 }
 
 void PatchShelfVisibleCheckMarks() {
+    if (ShelfDeleteBusy()) {
+        RefreshShelfFooterMode();
+        return;
+    }
     auto& st = Book_State();
     if (!st.shelf.shelf_multi || st.shelf.list_body == nullptr || !lv_obj_is_valid(st.shelf.list_body)) {
         return;
     }
-    if(st.shelf.shelf_view==kBookReaderShelfViewList) {
-        const uint32_t n=lv_obj_get_child_count(st.shelf.list_body);
-        for(uint32_t i=0;i<n;++i) {
-            auto* cell=lv_obj_get_child(st.shelf.list_body,i);
+    if (st.shelf.shelf_view == kBookReaderShelfViewList) {
+        const uint32_t n = lv_obj_get_child_count(st.shelf.list_body);
+        for (uint32_t i = 0; i < n; ++i) {
+            auto* cell = lv_obj_get_child(st.shelf.list_body, i);
             PatchShelfRowCheckMark(static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(cell))));
         }
     } else {
-        const int start=st.shelf.list_page*st.shelf.list_page_size;
-        const int end=std::min(start+st.shelf.list_page_size,static_cast<int>(st.shelf.books.size()));
-        for(int i=start;i<end;++i)PatchShelfRowCheckMark(i);
+        const int start = 0;
+        const int end = std::min(start + st.shelf.list_page_size, static_cast<int>(st.shelf.books.size()));
+        for (int i = start; i < end; ++i) {
+            PatchShelfRowCheckMark(i);
+        }
     }
     if (st.reader.status_label != nullptr && lv_obj_is_valid(st.reader.status_label)) {
         char buf[32];
@@ -237,22 +242,34 @@ void PatchShelfVisibleCheckMarks() {
 }
 
 void OnShelfMultiCancel(lv_event_t* /*e*/) {
+    if (ShelfDeleteBusy()) {
+        CancelShelfDelete();
+        Book_State().shelf.delete_stopping = true;
+        RefreshShelfFooterMode();
+        return;
+    }
     ExitShelfMultiMode(true);
 }
 
 void OnShelfMultiSelectAll(lv_event_t* /*e*/) {
     auto& st = Book_State();
-    if (!st.shelf.shelf_multi) {
+    if (!st.shelf.shelf_multi || ShelfDeleteBusy()) {
         return;
     }
-    SyncShelfSelectedSize();
-    const int n = static_cast<int>(st.shelf.shelf_selected.size());
-    if (n <= 0) {
+
+    if (st.shelf.directory_loading) {
         return;
     }
-    int selected_n = ShelfSelectedCount();
-    const bool clear = (selected_n >= n);
-    st.shelf.shelf_selected.assign(static_cast<size_t>(n), clear ? 0 : 1);
+    const int n = static_cast<int>(st.shelf.books.size());
+    const bool clear =
+        n > 0 && std::all_of(st.shelf.books.begin(), st.shelf.books.end(), [&](const reader::BookInfo& book) {
+            return ShelfItemSelected(static_cast<int>(&book - st.shelf.books.data()));
+        });
+    for (int i = 0; i < n; ++i) {
+        if (ShelfItemSelected(i) == clear) {
+            ToggleShelfItemSelected(i);
+        }
+    }
     RequestShelfCheckMarksPaint();
 }
 
@@ -261,81 +278,14 @@ void OnShelfMultiRemove(lv_event_t* /*e*/) {
     if (!st.shelf.shelf_multi || st.reader.opening.load()) {
         return;
     }
-    SyncShelfSelectedSize();
-    if (ShelfSelectedCount() <= 0) {
-        return;
-    }
 
-    if (st.shelf.shelf_view == kBookReaderShelfViewList) {
-        // 列表多选：按下标删当前目录项（文件夹整树 / 单书）
-        for (int i = static_cast<int>(st.shelf.shelf_entries.size()) - 1; i >= 0; --i) {
-            if (i >= static_cast<int>(st.shelf.shelf_selected.size()) ||
-                st.shelf.shelf_selected[static_cast<size_t>(i)] == 0) {
-                continue;
-            }
-            const auto& ent = st.shelf.shelf_entries[static_cast<size_t>(i)];
-            std::string err;
-            if (ent.kind == reader::BookDirEntry::Kind::kFolder) {
-                if (!DeleteLibraryFolder(ent.path, err)) {
-                    ESP_LOGW(TAG, "batch delete folder fail: %s (%s)", ent.path.c_str(),
-                             err.c_str());
-                }
-            } else {
-                if (!DeleteLibraryBookFile(ent.book, err)) {
-                    ESP_LOGW(TAG, "batch delete book fail: %s (%s)", ent.path.c_str(), err.c_str());
-                    continue;
-                }
-                const int bi = FindBookIndexByPath(ent.path);
-                if (bi >= 0) {
-                    st.shelf.books.erase(st.shelf.books.begin() + bi);
-                    if (st.shelf.selected == bi) {
-                        st.shelf.selected = -1;
-                    } else if (st.shelf.selected > bi) {
-                        --st.shelf.selected;
-                    }
-                }
-            }
-        }
-        reader::ReplaceBookLibraryCache(st.shelf.books);
-        st.shelf.shelf_multi = false;
-        st.shelf.shelf_suppress_click_until_us = 0;
-        st.shelf.shelf_suppress_click_idx = -1;
-        ReloadShelfDirListing();
-        st.shelf.shelf_selected.assign(st.shelf.shelf_entries.size(), 0);
-        Book_ClampListPage();
-        RefreshShelfFooterMode();
-        RequestRenderBookshelfPage();
-        return;
-    }
-
-    // 封面多选：按书库扁平列表删
-    for (int i = static_cast<int>(st.shelf.books.size()) - 1; i >= 0; --i) {
-        if (i >= static_cast<int>(st.shelf.shelf_selected.size()) || st.shelf.shelf_selected[static_cast<size_t>(i)] == 0) {
-            continue;
-        }
-        std::string err;
-        if (!DeleteLibraryBookFile(st.shelf.books[static_cast<size_t>(i)], err)) {
-            ESP_LOGW(TAG, "batch delete fail idx=%d: %s", i, err.c_str());
-            continue;
-        }
-        st.shelf.books.erase(st.shelf.books.begin() + i);
-        if (st.shelf.selected == i) {
-            st.shelf.selected = -1;
-        } else if (st.shelf.selected > i) {
-            --st.shelf.selected;
-        }
-    }
-    reader::ReplaceBookLibraryCache(st.shelf.books);
-    st.shelf.shelf_multi = false;
-    st.shelf.shelf_suppress_click_until_us = 0;
-    st.shelf.shelf_suppress_click_idx = -1;
-    st.shelf.shelf_selected.assign(st.shelf.books.size(), 0);
-    Book_ClampListPage();
-    RefreshShelfFooterMode();
-    RequestRenderBookshelfPage();
+    StartShelfDelete();
 }
 
 void OnBookRowLongPressed(lv_event_t* e) {
+    if (ShelfDeleteBusy() || Book_State().shelf.directory_loading) {
+        return;
+    }
     auto& st = Book_State();
     if (st.reader.opening.load()) {
         return;
@@ -355,10 +305,12 @@ void OnBookRowLongPressed(lv_event_t* e) {
 }
 
 void OnBookRowClicked(lv_event_t* e) {
+    if (Book_State().shelf.directory_loading) {
+        return;
+    }
     auto& st = Book_State();
     const int index = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
-    if (index == st.shelf.shelf_suppress_click_idx &&
-        esp_timer_get_time() < st.shelf.shelf_suppress_click_until_us) {
+    if (index == st.shelf.shelf_suppress_click_idx && esp_timer_get_time() < st.shelf.shelf_suppress_click_until_us) {
         return;
     }
     if (st.shelf.shelf_multi) {
@@ -368,4 +320,3 @@ void OnBookRowClicked(lv_event_t* e) {
     }
     lv_async_call(OpenDetailAsync, reinterpret_cast<void*>(static_cast<intptr_t>(index)));
 }
-

@@ -22,7 +22,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
 #include "hal/usb_serial_jtag_ll.h"
 #endif
 #if CONFIG_IDF_TARGET_ESP32P4
@@ -247,7 +247,15 @@ void RoutePhyToOtg() {
 
 void RoutePhyToUsj() {
 #if CONFIG_IDF_TARGET_ESP32S31
-    ESP_LOGI(TAG, "PHY: S31 USJ untouched (separate from UTMI)");
+    // 先让主机看到 USJ 断开，再切回线路并重新连接，避免沿用切盘前的枚举状态。
+    usb_serial_jtag_ll_enable_bus_clock(true);
+    usb_serial_jtag_ll_phy_enable_pad(false);
+    epd_board_metalio_eink4_plus_ana_sw_set(true);
+    vTaskDelay(pdMS_TO_TICKS(kUsbDisconnectMs));
+    usb_serial_jtag_ll_phy_set_defaults();
+    usb_serial_jtag_ll_phy_enable_pad(true);
+    vTaskDelay(pdMS_TO_TICKS(kUsbRouteSettleMs));
+    ESP_LOGI(TAG, "PHY: S31 USB Serial/JTAG restored");
 #elif CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
 #if CONFIG_IDF_TARGET_ESP32S3
     usb_serial_jtag_ll_phy_enable_external(false);
@@ -540,13 +548,12 @@ esp_err_t UsbGadgetTeardownUnlocked() {
 #endif
     // 先断连再切回 USJ，给主机时间卸掉 MSC，再重新枚举调试口。
     vTaskDelay(pdMS_TO_TICKS(150));
+#if !CONFIG_IDF_TARGET_ESP32S31
     RoutePhyToUsj();
+#endif
     vTaskDelay(pdMS_TO_TICKS(100));
     s_gadget_active.store(false, std::memory_order_relaxed);
     s_sd_to_usb.store(false, std::memory_order_relaxed);
-#if CONFIG_IDF_TARGET_ESP32S31
-    epd_board_metalio_eink4_plus_ana_sw_set(true); // 关闭虚拟 U 盘：ANA_SW(GPIO36) 置高
-#endif
     return first_err;
 }
 
@@ -628,8 +635,8 @@ esp_err_t UsbGadgetStart() {
     err = tinyusb_driver_install(&tusb_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "tinyusb_driver_install failed: %s", esp_err_to_name(err));
-        RoutePhyToUsj();
         ReclaimSdAfterUsbDown();
+        RoutePhyToUsj();
         s_usb_switching.store(false, std::memory_order_relaxed);
         return err;
     }
@@ -642,8 +649,8 @@ esp_err_t UsbGadgetStart() {
     err = usb_new_phy(&phy_conf, &s_phy_hdl);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "usb_new_phy failed: %s", esp_err_to_name(err));
-        RoutePhyToUsj();
         ReclaimSdAfterUsbDown();
+        RoutePhyToUsj();
         s_usb_switching.store(false, std::memory_order_relaxed);
         return err;
     }
@@ -665,8 +672,8 @@ esp_err_t UsbGadgetStart() {
         ESP_LOGE(TAG, "tinyusb_driver_install failed: %s", esp_err_to_name(err));
         usb_del_phy(s_phy_hdl);
         s_phy_hdl = nullptr;
-        RoutePhyToUsj();
         ReclaimSdAfterUsbDown();
+        RoutePhyToUsj();
         s_usb_switching.store(false, std::memory_order_relaxed);
         return err;
     }
@@ -691,6 +698,9 @@ esp_err_t UsbGadgetStart() {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "mount USB after start failed, rollback");
         if (UsbGadgetTeardownUnlocked() == ESP_OK) ReclaimSdAfterUsbDown();
+#if CONFIG_IDF_TARGET_ESP32S31
+        if (!s_gadget_active.load()) RoutePhyToUsj();
+#endif
         SetStandbyBlock(s_gadget_active.load());
         s_usb_switching.store(false, std::memory_order_relaxed);
         SyncUiFromState();
@@ -712,8 +722,8 @@ esp_err_t UsbGadgetStart() {
 // 停用时先排空 USB 任务并拆栈，再收回 SD，避免删除仍持有 SDMMC 锁的任务。
 esp_err_t UsbGadgetStop(bool /*force*/) {
     if (!s_gadget_active.load(std::memory_order_relaxed)) {
-        RoutePhyToUsj();
         const esp_err_t err = ReclaimSdAfterUsbDown();
+        RoutePhyToUsj();
         SetStandbyBlock(false);
         SyncUiFromState();
         return err;
@@ -727,6 +737,10 @@ esp_err_t UsbGadgetStop(bool /*force*/) {
         return err;
     }
     const esp_err_t reclaim_err = ReclaimSdAfterUsbDown();
+#if CONFIG_IDF_TARGET_ESP32S31
+    // SD 重新初始化完成后再恢复 USJ，与待机退出保持相同顺序。
+    RoutePhyToUsj();
+#endif
     if (reclaim_err != ESP_OK) {
         ESP_LOGW(TAG, "USB down but SD reclaim incomplete");
         if (err == ESP_OK) err = reclaim_err;
@@ -863,7 +877,9 @@ UsbVirtualDisk& UsbVirtualDisk::GetInstance() {
 void UsbVirtualDisk::Init() {
     std::lock_guard<std::mutex> lock(s_usb_work_mu);
     if (s_inited.load()) return;
+#if !CONFIG_IDF_TARGET_ESP32S31
     RoutePhyToUsj();
+#endif
     s_usb_req_queue = xQueueCreateStatic(1, sizeof(UsbReq), s_usb_queue_bytes, &s_usb_queue_storage);
     s_inited.store(true);
 }

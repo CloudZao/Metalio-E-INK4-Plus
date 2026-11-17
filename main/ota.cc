@@ -34,7 +34,6 @@
 #include <esp_heap_caps.h>
 #include <cstring>
 #include <vector>
-#include <sstream>
 #include <algorithm>
 #include <sys/stat.h>
 
@@ -690,10 +689,11 @@ bool Ota::UpgradeFromFile(const std::string& path) {
 
 std::vector<int> Ota::ParseVersion(const std::string& version) {
     std::vector<int> versionNumbers;
-    std::stringstream ss(version);
-    std::string segment;
-    
-    while (std::getline(ss, segment, '.')) {
+    size_t begin = 0;
+    while (begin < version.size()) {
+        const size_t end = version.find('.', begin);
+        const std::string segment = version.substr(begin, end - begin);
+        begin = end == std::string::npos ? version.size() : end + 1;
         versionNumbers.push_back(std::stoi(segment));
     }
     

@@ -2,8 +2,6 @@
 
 #include <lvgl.h>
 
-/** @brief 同步壁纸多选集合容量 */
-void SyncWpSelectedSize();
 /** @brief 壁纸已选数量 */
 int WpSelectedCount();
 /** @brief 壁纸项是否已选 */

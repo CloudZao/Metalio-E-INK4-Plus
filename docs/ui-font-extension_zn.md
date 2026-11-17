@@ -1,0 +1,42 @@
+# UI 与阅读扩展字库
+
+[English](ui-font-extension.md)
+
+## 使用方式
+
+UI 优先使用 Flash `font_data` 分区的主字库，只有缺少所需字形时才查询 SD 扩展字库。将扩展文件复制到 SD 卡：
+
+```text
+metalio/e-ink/fonts/extended-fonts.fontpack
+```
+
+可以通过设备「传输」页面直接上传 `extended-fonts.fontpack`；开启自动分类后，`.fontpack` 与 `.ef` 一样保存到 `fonts/`。保持文件名不变；如已有同名文件，选择覆盖。上传完整保存后重新打开书籍。关闭自动分类时，需先进入 `fonts/` 再上传。
+
+文件名固定，设备端完整路径由 `sd_paths.h` 的 `SD_PATH_FONT_EXT` 定义。文件使用 EFNT v1 格式；不需要写入 Flash，也不替换内置字形。直接放入 TTF、OTF 或阅读用 `.ef` 文件不能作为 UI 扩展字库。
+
+UI 扩展作用于通过 `fontpack_lv_font_get()` 创建的 LVGL 字体，包括默认 UI 字体；UI 仍要求 Flash 主字库及所请求的规格可用。
+
+阅读字体 `misans_20_2.ef`、`misans_25_2.ef`、`misans_30_2.ef`、`misans_35_2.ef`、`misans_40_2.ef`、`misans_45_2.ef`、`misans_50_2.ef` 也支持同字号、2bpp 的 SD 缺字回退，覆盖章节标题与正文。原 `.ef` 的字形、行高和基线优先保留；阅读回退不要求 Flash 包包含相同字号。该接入按这些文件名识别，不自动应用到其他名称的 `.ef`、直接加载的 TTF/OTF、独立图标字体、像素字体或直接调用 Flash 取字接口的启动绘制。
+
+简繁体拓展字库作为独立 SD 资源维护，不嵌入固件。字库文件、安装说明、校验信息和原始授权见[拓展字库说明](../tools/fontpack/fonts/Extended-Fonts/README_zn.md)。
+
+## 制作扩展文件
+
+在仓库根目录运行以下命令。Python 环境需要安装 `freetype-py`，源字体必须包含要补充的字符，`extra-chars.txt` 是 UTF-8 字符清单。
+
+```sh
+python tools/fontpack/build_fontpack.py --ttf YourFont.ttf --variants 20:2,25:2,30:2,35:2,40:2,45:2,50:2,30:4 --chars-file extra-chars.txt -o extended-fonts.fontpack --verify
+```
+
+`30:2` 表示 30 像素、2 bpp；`30:4` 表示 30 像素、4 bpp。按实际界面使用的规格生成：查询键包含 Unicode、字号和 bpp，不能用一种规格自动替代另一种，也不在设备端缩放。扩展字体应与主字库保持相近的字面、基线和高度，避免现有控件裁切或排版不一致。
+
+单字打包位图上限为 1024 字节，由 `FONT_GLYPH_BMP_MAX` 定义。需要更大的字形时，应先评估缓存和任务栈预算，再调整此限制。只打包实际需要的字符，可减少文件大小和 SD 查找开销。
+
+## 运行行为与限制
+
+- Flash 字形保持 mmap 零拷贝。SD 字库按需打开、二分查找并读取单字，读取结束立即关闭文件，不长期阻塞卸卡或 USB 存储切换。
+- SD 字形与缺字结果共享 16 项缓存，首次访问有效扩展文件后在 PSRAM 中分配约 17 KB，不整包加载。缓存有效期为 5 秒，挂载代次变化时作废。
+- SD 缓存不向 LVGL 暴露持久位图指针；绘制时复制字形并展开到 LVGL 提供的缓冲区。
+- 无卡、待机暂停 SD 访问、文件不存在、规格不匹配或文件损坏时，扩展字体不可用，按原有缺字行为处理；内置字形不受影响。文件读取异常与损坏会记录错误，失败后至少间隔 5 秒再尝试。
+- 更换扩展文件时先退出设备文件系统访问或安全卸卡，完整复制后重新挂载。无重新挂载时，旧缓存最多保留 5 秒；文件变化不会主动触发界面重绘。
+- 扩展首次读取需要 SD I/O，大量连续缺字会增加布局和绘制耗时，不应把高频基础 UI 字形全部移到 SD。

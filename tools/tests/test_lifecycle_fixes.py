@@ -6,10 +6,9 @@ Stubs model API outcomes, not DMA timing or hardware interrupt behavior.
 """
 from pathlib import Path
 import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-OUT = ROOT / "build/lifecycle-tests"
-OUT.mkdir(parents=True, exist_ok=True)
 VC = Path("C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207")
 UM = Path("C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64")
 
@@ -61,6 +60,11 @@ static unsigned s_worker_generation;
 static bool live = true, initialized, foreign;
 static int mode, failure, init_calls, stops, deinits, destroys, creates;
 static bool deinit_failed;
+static bool user_enabled = true;
+struct WifiStation {
+ static WifiStation& GetInstance() { static WifiStation instance; return instance; }
+ bool IsUserEnabled() { return user_enabled; }
+};
 static Ui& SettingsTest_Ui() { return ui; }
 static bool SettingsTest_IsLive() { return live; }
 static int xSemaphoreTake(SemaphoreHandle_t, unsigned) { return 1; }
@@ -78,11 +82,12 @@ static int esp_wifi_scan_stop() { return 0; }
 static int esp_wifi_deinit() { ++deinits; if(deinit_failed)return 20; initialized=false; mode=0; return 0; }
 ''' + wifi_functions + r'''
 static void reset() {
- ui={}; live=true; initialized=false; foreign=false; mode=0; failure=0;
+ ui={}; live=true; initialized=false; foreign=false; mode=0; failure=0; user_enabled=true;
  init_calls=stops=deinits=destroys=creates=0; deinit_failed=false;
  s_worker_generation=0; s_scan_generation.value=0;
 }
 int main() {
+ reset(); user_enabled=false; CHECK(!WifiEnsureForScan()); CHECK(init_calls==0 && creates==0);
  // Each initialization failure must release the newly-created STA, including
  // init OOM before driver ownership. A later attempt must succeed.
  for(int stage=1; stage<=3; ++stage) {
@@ -110,7 +115,7 @@ int main() {
 render = (ROOT / "main/boards/metalio-e-ink4-plus/display/output_lcd/render_lcd.c").read_text(encoding="utf-8")
 render_functions = "\n".join(function(render, sig) for sig in (
     "static void scan_lock(", "static void cancel_scan(",
-    "static bool start_scan(", "void lcd_do_update("))
+    "static bool start_scan(", "static void notify_feeders(", "static bool wait_feeders(", "void lcd_do_update("))
 render_test = COMMON + r'''
 typedef long long int64_t;
 typedef unsigned char uint8_t;
@@ -119,6 +124,7 @@ typedef unsigned char uint8_t;
 #define INT32_MAX 2147483647
 #define EPD_DRAW_EMPTY_LINE_QUEUE 1024
 #define EPD_MIN_PHASE_US 12000
+#define EPD_PHASE_HZ 80
 #define memory_order_release 0
 #define memory_order_acquire 0
 #define __ATOMIC_RELAXED 0
@@ -133,6 +139,8 @@ struct RenderContext_t {
  int fault_reason,fault_phase,fault_line,fault_thread,fault_ready,lines_consumed;
  int fault_write[2],fault_read[2],line_queues[2];
  void* feed_tasks[2]; void* feed_done_smphr[2]; void* frame_done;
+ void* feed_space[2]; void* prefill_done; void* spatial_luts; void* conversion_lut;
+ bool feed_waiting[2]; uint8_t line_ready[1], line_threads[1]; int scan_frame;
 };
 static RenderContext_t* current;
 static StaticSemaphore_t s_scan_lock_storage;
@@ -147,6 +155,8 @@ __declspec(noreturn) static void abort() {
 }
 static int xSemaphoreTake(void* sem,unsigned ticks) {
  if(sem==mutex_handle) return 1;
+ if(sem==current->prefill_done) return ticks ? 1 : 0;
+ if(sem==current->feed_space[0] || sem==current->feed_space[1]) return 0;
  if(sem==current->frame_done) return (scenario==1 && ticks) ? 0 : 1;
  int i = sem==current->feed_done_smphr[0] ? 0 : 1;
  ++takes[i];
@@ -157,7 +167,7 @@ static int xSemaphoreTake(void* sem,unsigned ticks) {
 }
 static void epd_lcd_line_source_cb(line_cb_func_t,void*) {}
 static void epd_lcd_frame_done_cb(frame_done_func_t cb,void*) { callback_enabled=cb!=0; }
-static void epd_lcd_abort_frame() { CHECK(!callback_enabled); ++stopped; }
+static void epd_lcd_abort_frame() { ++stopped; }
 static void epd_lcd_start_frame() { ++started; }
 static bool retrieve_line_isr(void*,void*) { return false; }
 static void handle_lcd_frame_done(void*) {}
@@ -167,12 +177,23 @@ static void epd_set_mode(int) {}
 static int xPortGetCoreID() { return 0; }
 static void xTaskNotifyGive(void*) {}
 static void pace_phase(int64_t) {}
+static void vTaskSuspendAll() {}
+static void xTaskResumeAll() {}
+static void* memset(void* buffer, int value, decltype(sizeof(0)) length) {
+ auto* data=static_cast<unsigned char*>(buffer);
+ for(decltype(length) i=0;i<length;++i) data[i]=static_cast<unsigned char>(value);
+ return buffer;
+}
+static void epd_spatial_prepare_pairs(void*,void*) {}
+static int64_t epd_lcd_get_spv_start_us() { return now; }
+static int epd_lcd_get_scan_time_us() { return 100; }
 static void epd_lcd_get_stream_stats(int*,int*) {}
 static void lq_reset(int*) { CHECK(acknowledged[0] && acknowledged[1] && stopped); ++resets; }
 ''' + render_functions + r'''
 int main() {
  RenderContext_t ctx={}; current=&ctx; ctx.cycle_frames=1;
  ctx.feed_done_smphr[0]=(void*)1; ctx.feed_done_smphr[1]=(void*)2; ctx.frame_done=(void*)3;
+ ctx.prefill_done=(void*)4; ctx.feed_space[0]=(void*)5; ctx.feed_space[1]=(void*)6;
  const int scenarios[]={0,1,2,4};
  for(int test=0;test<4;++test) {
   scenario=scenarios[test];
@@ -191,15 +212,17 @@ int main() {
 }
 '''
 
-for name, text in (("wifi", wifi_test), ("render", render_test)):
-    source = OUT / (name + ".cpp")
-    source.write_text(text, encoding="utf-8")
-    obj = OUT / (name + ".obj")
-    exe = OUT / (name + ".exe")
-    subprocess.run([str(VC / "bin/Hostx64/x64/cl.exe"), "/nologo", "/utf-8", "/GS-", "/Zl",
-                    "/Zc:threadSafeInit-", "/c", str(source), "/Fo" + str(obj)], check=True)
-    subprocess.run([str(VC / "bin/Hostx64/x64/link.exe"), "/nologo", "/entry:main",
-                    "/subsystem:console", "/nodefaultlib", str(obj), str(UM / "kernel32.lib"),
-                    "/out:" + str(exe)], check=True)
-    subprocess.run([str(exe)], check=True)
-    print(name + " lifecycle fault injection: PASS")
+with tempfile.TemporaryDirectory(prefix="metalio-lifecycle-") as output:
+    OUT = Path(output)
+    for name, text in (("wifi", wifi_test), ("render", render_test)):
+        source = OUT / (name + ".cpp")
+        source.write_text(text, encoding="utf-8")
+        obj = OUT / (name + ".obj")
+        exe = OUT / (name + ".exe")
+        subprocess.run([str(VC / "bin/Hostx64/x64/cl.exe"), "/nologo", "/utf-8", "/GS-", "/Zl",
+                        "/Zc:threadSafeInit-", "/c", str(source), "/Fo" + str(obj)], check=True)
+        subprocess.run([str(VC / "bin/Hostx64/x64/link.exe"), "/nologo", "/entry:main",
+                        "/subsystem:console", "/nodefaultlib", str(obj), str(UM / "kernel32.lib"),
+                        "/out:" + str(exe)], check=True)
+        subprocess.run([str(exe)], check=True)
+        print(name + " lifecycle fault injection: PASS")

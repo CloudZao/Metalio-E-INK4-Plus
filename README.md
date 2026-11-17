@@ -1,7 +1,7 @@
 # Metalio E-Ink4-Plus
 
 <p align="center">
-  <img src="images/product_en.png" alt="Metalio E-Ink4-Plus" width="720"/>
+  <img src="docs/images/product_en.png" alt="Metalio E-Ink4-Plus" width="720"/>
 </p>
 
 [中文](README_zn.md) | **English**
@@ -10,6 +10,9 @@
 
 - ESP-IDF docs: [ESP32-S31 Get Started](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32s31/get-started/index.html)
 - Sibling product: [Metalio E-Ink 4](https://github.com/CloudZao/Metalio-E-INK4) (3.97" SPI)
+
+- [App Store](docs/app-store_en.md)
+- [ELF app developer guide](tools/elf_app/DEVELOPMENT.md)
 
 ---
 
@@ -63,10 +66,10 @@ Product data lives under SD `metalio/e-ink/`. Cloud APIs use **ink-screen** push
 - **Logical UI size**: 680x1212 with 2px insets on all sides; standby and shutdown use the full 684x1216 panel (`DISPLAY_CONTENT_*` in `config.h`).
 - **Library**: 3x3 cover grid -> detail -> body; `.ebook` / `.epub` / `.txt`
 - **UI scheduling**: reader navigation and page pixels are prepared in background workers; input dispatch and result publication stay on the UI task. See [UI scheduling](docs/ui-scheduling.md).
-- **Fonts**: UI fontpack on Flash `font_data`; reader `.ef` fonts on SD or via Transfer
-- **Text layout**: Adjust paragraph, letter, line and margin spacing, with first-line indentation from 0–3 characters. Hold adjustment buttons to repeat; preferences save automatically. Backgrounds and underlines affect drawing without changing pagination. See [reader layout and cards](docs/ui-scheduling.md).
+- **Fonts**: UI uses Flash `font_data` first and an SD extension for missing glyphs; see [building and installing an extension](docs/ui-font-extension.md). The supported MiSans `.ef` reader fonts also use same-size fallback; reader `.ef` fonts are stored on SD or downloaded via Transfer
+- **Text layout**: Adjust paragraph, letter and line spacing, with first-line indentation from 0–3 characters. Select Top, Bottom, Left or Right to adjust each reading margin independently. Hold adjustment buttons to repeat; preferences save automatically. Backgrounds and underlines affect drawing without changing pagination. See [reader layout and cards](docs/ui-scheduling.md).
 - **Text direction**: Nine setting cards open individual option pages. Horizontal or vertical writing is independent of screen rotation. Vertical columns can run left to right (default) or right to left, with underlines on the right of each column.
-- **BLE page turner**: Supports `Free 2`, `Free3-R`, `Smart 1-E`, `HBTR002-X` and `HBTR003-X`. See [behavior and protocol details](docs/ui-scheduling.md) and the [BLE module directory](main/boards/common/bluetooth/).
+- **BLE page turner**: Supports `Free 2`, `Free3-R`, `Smart 1-E`, `HBTR002-X` and `HBTR003-X`. See [behavior and protocol details](docs/ui-scheduling.md) and the [BLE module directory](main/boards/common/bluetooth/). Turning the switch off or reaching the automatic connection timeout fully deinitializes BLE in the background. With the switch off, leaving manual discovery also releases the stack. Enabling or scanning again reinitializes BLE; saved devices and button bindings are retained.
 - **Toolchain**: `tools/ebook/` converts PDF/EPUB/MOBI/TXT to device `.ebook` (with Web preview)
 
 ### 2.3 Local multimodal features
@@ -393,11 +396,21 @@ main/
 |-- audio/                         # record / play
 |-- protocols/                     # WebSocket / MQTT
 
+main/assets/embedded/                  # Firmware-embedded images and backgrounds
+main/assets/device/                    # Device icons and resource pack
+main/assets/factory-test/              # Factory test audio
+build/esp-idf/main/generated/      # Generated resource index header
+docs/images/                      # Documentation images
+docs/datasheets/                  # Hardware datasheets
+tools/assets/                     # Resource generation and packing
+tools/firmware/                   # Build, merge and release scripts
+tools/git/                        # Git helper scripts
+tools/tests/                      # Host-side regression tests
 tools/ebook/                       # .ebook convert, Web, emulator
 tools/fontpack/                    # UI font packaging
 partitions/v1/16m.csv              # active 16MB partition table
-use_font/font.fontpack             # merged into font_data
-merge_firmware.sh                  # build + merge full bin
+main/assets/fonts/font.fontpack         # merged into font_data
+tools/firmware/merge_firmware.sh    # build + merge full bin
 ```
 
 ### 9.5 Flash partitions (`sdkconfig` -> `partitions/v1/16m.csv`)
@@ -423,7 +436,7 @@ At boot, network time prefers the cloud response. If no cloud time is received a
 
 Primary voice transport remains **WebSocket / MQTT+UDP**. Device tools can be exposed via **MCP**.
 
-The camera tool `self.camera.take_photo` accepts a required `question` string. Hardware is probed when the camera instance is first requested; the photo tool is registered only if detection succeeds. The result is cached until restart, so restart the device after reconnecting a camera. In Baiwen AI, ask the assistant to look at or identify something to request a photo. The GC2145 captures a 640×480 color JPEG and sends it with the question to the vision service supplied by the server in MCP `initialize.params.capabilities.vision.url`; `vision.token` is an optional Bearer credential. The vision endpoint must accept multipart fields `question` and `file` (`camera.jpg`, `image/jpeg`) and return the recognition result in an HTTP 200 response. The tool returns that result to the assistant. Without a vision URL, calls fail with a configuration error. This endpoint is separate from `api::VisionUploadUrl()`; configuring cloud file upload alone does not enable MCP vision. Capture and hardware JPEG encoding share the factory test's hardware lock and release camera and display resources before HTTP upload; a busy camera or capture failure returns an error. The factory test keeps its local grayscale preview.
+In Baiwen AI, ask the assistant to look at or identify something to request a photo. Hardware is probed on first camera use, and the photo tool is enabled only after successful detection. Restart the device after reconnecting a camera. The GC2145 captures a 640×480 color JPEG, and the photo and question are processed by the vision service configured on the server. This service requires separate configuration; configuring cloud file upload alone does not enable vision recognition. A busy camera, capture failure or missing service configuration returns an error. Capture and hardware JPEG encoding share the factory test hardware lock and release camera and display resources before upload. The factory test retains its local grayscale preview.
 
 ---
 
@@ -474,9 +487,11 @@ See `main/display/screen/assistant_screen/README.md`.
 - Grayscale images use fixed level-5 darkening (gamma 2.0), covering reading illustrations, covers, wallpaper thumbnails and previews, standby and shutdown wallpapers, photos, and assistant images. Midtones are darkened only during drawing, preserving pure black and white, source images, and caches. Text antialiasing and UI backgrounds remain unchanged; content configured for black-and-white display retains that policy. All refresh profiles and full-screen wallpapers share the same darkening curve and 16-level grayscale quantization rule.
 - EPUBs whose reading-order documents each contain one image and no body text, and `.ebook` files marked as page images, use full-page image reading. Images fit proportionally within the drawable area after subtracting all four reading margins and the footer. Chapter headings are not inserted. Text fonts, line spacing, paragraph gaps, underlines, text antialiasing, writing mode, and reading backgrounds do not affect these pages; all settings remain available, including font selection and management. Text preferences are saved with a notice that they do not apply to comics; they take effect when opening a text book. Margins, screen orientation, footer, and page-turn settings remain available. Complex CSS, image rotation, and synthetic spreads are not fully supported. Books exceeding the image-page inspection budget use normal text-and-image layout.
 - Comic footers use page numbers, and the progress panel offers previous/next page navigation. The current image loads first, followed by alternating forward/backward prefetch. The target is 3–10 images on each side, reduced or paused when memory is limited. The L8 cache holds at most 21 images, uses no more than half the available PSRAM, and leaves at least 2 MiB for decoding and other work. Cache hits display directly; misses show a centered loading message. Prefetch does not refresh the screen. Opening settings pauses prefetch. Orientation or drawable-area changes clear old-size entries; standby SD detachment and book closure release the cache.
+- When powered off from a reading page (including standby over that page), the device saves the book and reading position. The next boot opens that book directly after SD initialization, using the normal reader controls. Missing SD cards or book files return to Home; open failures use the existing reader error screen. Forced power cuts do not guarantee the latest position or automatic restoration.
 - TXT supports UTF-8 and GB18030 (including GBK/GB2312) with streaming decoding; no full-book conversion is required. Contents detection accepts Chinese chapter headings without leading indentation and English numbered headings with optional indentation, up to 60 characters. English chapter numbers and names on consecutive lines form one heading; standalone Roman numerals and names matched against an initial Contents list are supported. Recognized TXT headings and EPUB HTML headings use centered bold styling in horizontal layout. TXT indexes rebuild automatically after format updates. Detection filters common dates, measurements, list markers, and obvious prose references. Dense contents excerpts that lack body text and repeat later in the book are excluded; contents appear in batches during scanning and are finalized after indexing. Glyph display depends on the selected font's character coverage.
 - Fonts: `.../fonts/*.ef`
-- The font card combines `.../fonts/*.ef` and TTF/OTF files in `.../fonts_ttf`, showing up to nine entries per page with swipe-based page switching and a position scrollbar. TTF/OTF sizes range from 20–80px in 1px steps; EF uses its embedded size. Long-press to select and delete fonts. Restore defaults resets only the font. See [font scanning and application](docs/ap-file-transfer.md).
+- The font card lists the current page from the reading and source font directories in directory order, with nine entries per page, swipe paging and a position scrollbar; only files directly in the font roots are listed. The total page count appears after lightweight counting. TTF/OTF sizes range from 20–80px in 1px steps; EF uses its embedded size. Long-press to select and delete files on the current page. Restore defaults resets only the font. See [font scanning and application](docs/ap-file-transfer.md).
+- The bookshelf reads the current directory by page; wallpaper and font browsers list only files in their respective roots and load progress, covers and previews for visible entries with memory-bounded nearby-page prefetch. Startup does not scan the full library; recent reading and statistics retain their existing storage. Counting does not delay the first page, and tasks end on completion, navigation away or standby. Automatic reading-statistics snapshot reporting that requires a full library scan is disabled.
 - Layout prefs in NVS; **no scroll** on list/body; VK / volume keys page
 - Reading settings → Orientation: portrait, left landscape, right landscape, or auto; the selection is saved. Auto works in the reading page, reading settings, fonts, bookmarks, and contents. It uses the SC7A20H gravity readings and rotates after the detected orientation remains stable for 0.8 seconds. Ambiguous readings keep the current orientation; upside-down portrait is excluded from auto mode. While the new page layout is pending, a loading message replaces only the reading content, leaving menus, navigation, and standby available. The current page replaces the message when ready. Leaving the reader restores portrait.
 - Reading settings → Page turn: slide or white wipe; the selection is saved. White wipe runs right to left for the next page and left to right for the previous page in either orientation. Required cleaning uses a full refresh.
@@ -529,11 +544,17 @@ APP push writes books, fonts and wallpapers to SD in fixed-size chunks without a
 | **Haptics** | Key vibration on / off |
 | **Charging** | 0.5A / 1A / 1.5A; default 1A; saved and restored after reboot |
 | **Power** | AppIdle CPU, standby delay, network grace, cumulative power-off |
-| **Screen** | Refresh mode, black depth, and frontlight color and brightness; frontlight controls are also available in the global swipe-down panel |
+| **Screen** | Refresh mode, black depth showing the BH calibration value, and frontlight color and brightness; the [VCOM factory tool](tools/vcom/README.md) supports scanner programming, verified readback and cloud sync; frontlight controls are also available in the global swipe-down panel |
 | **Conversation** | Baiwen TTS server preference |
 | **Bluetooth** | Modes 1/2/3, scan/pair (12.1) |
 | **Test** | Factory / aging entry; auto test cycles the frontlight through cool + warm, cool, warm and off, then restores the previous state on exit |
 | **About** | Model, chip, FW version, MAC, Flash, PSRAM |
+
+Settings → Test → Margin test calibrates the position of the entire UI without changing layout dimensions or control spacing. Up, Down, Left and Right each range from −20–20 pixels and initially use 0. Negative values move in the opposite direction; opposite directions cancel. Drawing and touch coordinates move together, with off-panel pixels clipped. Reading content margins remain independent in reading settings. The page retains hold-to-repeat buttons and sliders, with a calibration chart covering the drawable UI area rather than the full physical panel. Set as default saves the current offsets; Restore defaults applies and saves the stored defaults. A top notification confirms a successful save or restore. The calibration chart is hidden before standby and restored on wake.
+
+Settings → Screen shows Clear, Balanced and Fast refresh modes in one row, with Clear as the default. Previously saved Ultra fast selections use Fast.
+
+VCOM factory programming supports scanner input, persistent BH1098 storage and readback verification, with cloud sync handled by the HTML tool. Bluetooth module firmware **1.08 or later** is required; see the [VCOM factory guide](tools/vcom/README.md).
 
 Swiping down in an area without an actual vertical scroll range opens the quick panel, including scroll-enabled containers whose content fits within the viewport. Lists with vertical overflow retain their own gestures, including at the top and bottom. The panel includes the top status bar. Swipe up outside the sliders, tap outside the panel, or press Back or Home to close it while keeping the current page. OTA upgrades and standby dismiss and block the panel. Opening and closing it requests a GC16 full refresh, which produces a visible flash.
 
@@ -551,7 +572,7 @@ Product root: `/sdcard/metalio/e-ink/` (`sd_paths.h`)
 |:---|:---|
 | `.../books` | Book content, with optional category subdirectories; legacy sidecars remain supported |
 | `.../wallpaper` | Wallpapers and shutdown art |
-| `.../fonts`, `.../fonts_ttf` | Reader `.ef` fonts and `.ttf` / `.otf` fonts |
+| `.../fonts`, `.../fonts_ttf` | Reader `.ef` fonts, extension `.fontpack` files and `.ttf` / `.otf` fonts |
 | `.../settings` | Wi-Fi configuration; `books/` stores reading positions, time and bookmarks; `system/logs/` stores runtime logs and crash dumps |
 | `.../temp/books` | `cache/` stores rebuildable covers, page counts and TXT indexes; `work/` stores pagination work files |
 | `.../temp/bwchat` | `images/` stores chat images; `messages/` stores session JSON for the current boot, cleared on startup |
@@ -560,7 +581,7 @@ Product root: `/sdcard/metalio/e-ink/` (`sd_paths.h`)
 
 SD mounting ensures the application layout, cleans pagination work files and recovers wallpaper backups left by interrupted saves. HTTP downloading and JPEG decoding clean their own temporary files on first use; failed cleanup prevents new work files from being created and can be retried. Wallpaper saves and deletions clean their own work files beforehand. It does not scan book libraries, wallpaper libraries or auxiliary cache libraries, move existing auxiliary data, or read or update a migration-complete flag. Existing auxiliary files remain at their current locations for both reading and writing. Book-side legacy files take precedence, followed by grouped and flat files in the new directories; files are created in the new layout only when no existing data is found. Wallpaper names support adjacent `.meta.json` and `.meta` files as well as existing files in the new metadata directory. New book auxiliary files and wallpaper metadata use `0`–`f` subdirectories based on the first hash character to limit directory size. Old files are not reorganized automatically; back up existing data before organizing it on a computer. Clearing `temp/` preserves reading positions and bookmarks. Covers and indexes can be rebuilt; missing wallpaper metadata falls back to the filename. New Baiwen sessions use the new directories directly. Old session caches and log directories are not moved automatically. Explicit book and wallpaper renames, moves and deletions maintain the corresponding auxiliary data. Existing `ui/` and `recordings/` directories remain untouched; the recordings directory is no longer created by default. Both upload instruction files remain at the application root.
 
-The bookshelf, cloud library and file transfer page share book and wallpaper deletion handling. Deleting a book removes associated progress, bookmarks, covers, indexes, legacy pagination work files and recent-reading entries, and subtracts its contribution to the home-page reading-time and finished-book totals. Dated reading history is retained. Legacy covers shared by another format of the same title are kept while that book exists. Books being opened or read cannot be deleted; successful deletion cancels pending progress writes. Recursive directory deletion processes books before sidecar files. Deleting a wallpaper also removes its name metadata, save backup and corresponding selections. Direct deletion through a computer USB drive does not run this application cleanup.
+The bookshelf, cloud library and file transfer page share book and wallpaper deletion handling. Deleting a book removes associated progress, bookmarks, covers, indexes, their fixed-name backups and recent-reading entries, and subtracts its contribution to the home-page reading-time and finished-book totals. Dated reading history is retained. Legacy covers shared by another format of the same title are kept while that book exists. Books being opened or read cannot be deleted; successful deletion cancels pending progress writes. Individual-book deletion cleans known paths without enumerating the book directory. Legacy pagination work files with unknown session IDs are left for removal with their containing directory. Recursive directory deletion processes books before sidecar files. Deleting a wallpaper also removes its name metadata, save backup and corresponding selections. Direct deletion through a computer USB drive does not run this application cleanup.
 
 ---
 
@@ -650,7 +671,7 @@ cd xingzhi-ai-470
 idf.py build
 ```
 
-To build the global variant, run `idf.py menuconfig` and select **Metalio E-Ink4-Plus → Board Type → Metalio E-Ink4-Plus Global (4.7 parallel)**, then build. Its board ID is `metalio-e-ink4-plus-global`; it shares the existing hardware drivers, hides WorkBuddy in all home styles, defaults to English when no language preference is saved, and uses the global NetEase Yunxin appkey for OTA/activation and WebSocket requests. The global variant uses Wi-Fi only: network settings show the Wi-Fi switch and configuration without 4G or SIM switching, and a previously saved 4G mode is ignored. A saved language preference still takes precedence, and both Chinese and English remain available in Settings. The default board remains `metalio-e-ink4-plus`.
+To build the global variant, run `idf.py menuconfig` and select **Metalio E-Ink4-Plus → Board Type → Metalio E-Ink4-Plus Global (4.7 parallel)**, then build. Its board ID is `metalio-e-ink4-plus-global`; it shares the existing hardware drivers, hides WorkBuddy in all home styles, defaults to English when no language preference is saved, and uses the global NetEase Yunxin appkey for WebSocket requests. When NetEase AI is selected, device linking is checked through the overseas binding endpoint every three seconds. At startup, unlinked devices show a brief notification directing users to NetEase AI. The AI page and the App push tab each show a QR code and linking instructions in their own content area. Navigation and other device features remain available; completing the link restores the AI conversation or App push list. The QR code is updated only when its content changes. A successful `active` response confirms device linking, not a paid subscription. Firmware updates remain independent. The global variant uses Wi-Fi only: network settings show the Wi-Fi switch and configuration without 4G or SIM switching, and a previously saved 4G mode is ignored. A saved language preference still takes precedence, and both Chinese and English remain available in Settings. The default board remains `metalio-e-ink4-plus`.
 
 ### 14.2 About sdkconfig
 
@@ -659,11 +680,11 @@ To build the global variant, run `idf.py menuconfig` and select **Metalio E-Ink4
 ### 14.3 Merge full firmware (release)
 
 ```bash
-./merge_firmware.sh
-# or: IDF_PATH=~/esp/v6.1 ./merge_firmware.sh
+./tools/firmware/merge_firmware.sh
+# or: IDF_PATH=~/esp/v6.1 ./tools/firmware/merge_firmware.sh
 ```
 
-Builds and merges per `build/flash_args` (including `use_font/font.fontpack` into `font_data`):
+Builds and merges per `build/flash_args` (including `main/assets/fonts/font.fontpack` into `font_data`):
 
 - `firmware/metalio-e-ink4-plus-{PROJECT_VER}.bin`
 - Root `metalio-e-ink4-plus.bin`

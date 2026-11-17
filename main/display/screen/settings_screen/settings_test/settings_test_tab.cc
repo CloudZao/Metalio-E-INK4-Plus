@@ -2,6 +2,7 @@
 #include "settings_test_tab.h"
 #include "settings_test_screens.h"
 #include "settings_test_display_screen.h"
+#include "settings_test_margin_screen.h"
 #include "settings_test_battery_screen.h"
 #include "settings_test_touch_screen.h"
 #include "settings_common.h"
@@ -40,4 +41,6 @@ void SettingsTestTab_Build(lv_obj_t* page) {
     SettingsCreateSelectableOption(page, Lang::Strings::SETTINGS_TEST_BATTERY, OnBatteryTestClicked, 0);
     SettingsCreateSelectableOption(page, Lang::Strings::SETTINGS_TEST_AGING, OnAgingTestClicked, 0);
     SettingsCreateSelectableOption(page, Lang::Strings::SETTINGS_TEST_DISPLAY, [](lv_event_t*) { ScreenNavigateTo(SettingsTestDisplayScreen::Create); }, 0);
+    SettingsCreateSelectableOption(page, Lang::Strings::SETTINGS_TEST_MARGIN,
+        [](lv_event_t*) { ScreenNavigateTo(SettingsTestMarginScreen::Create); }, 0);
 }

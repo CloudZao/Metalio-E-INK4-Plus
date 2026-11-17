@@ -390,13 +390,13 @@ bool CommitDownloadedFile(const std::string& tmp_path, const std::string& final_
     }
     if (rename(tmp_path.c_str(), final_path.c_str()) != 0) {
         if (exists && rename(backup.c_str(), final_path.c_str()) != 0) {
-            ESP_LOGE(TAG, "restore original failed: %s", backup.c_str());
+            ESP_LOGE(TAG, "operation=commit stage=restore_original result=failed errno=%d", errno);
         }
         err_out = Lang::Strings::CLOUD_SAVE_FAIL;
         return false;
     }
     if (exists && unlink(backup.c_str()) != 0) {
-        ESP_LOGW(TAG, "remove backup failed: %s", backup.c_str());
+        ESP_LOGW(TAG, "operation=commit stage=remove_backup result=failed errno=%d", errno);
     }
     return true;
 }

@@ -26,6 +26,18 @@
 #include "reader/reader.h"
 #include "reader/book_library.h"
 #include "reader/book_home_snapshot.h"
+#include "book_screen/shelf/book_shelf_ops.h"
+#include "reader/book_progress_cache.h"
+#include "sd_access.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <new>
+#include <esp_log.h>
+#include "application.h"
+#include "settings.h"
+#include "home_screen/home_screen.h"
+#include <unistd.h>
+#include <cerrno>
 #include "screen_common.h"
 #include "vk_key_handler.h"
 
@@ -41,8 +53,42 @@ BookUiState& Book_State() {
     return s;
 }
 
-static lv_obj_t* CreateBookHome(bool continue_latest) {
+static std::atomic<unsigned> s_recent_generation{0};
+struct RecentProgressWork {
+    unsigned generation = 0; // 阅读首页代次
+    lv_obj_t* screen = nullptr; // 仅在 UI 回调中比较，不由后台访问
+    std::vector<std::string> paths; // 最多两本可见最近阅读
+};
+
+static void LoadRecentProgress(void* arg) {
+    auto* work = static_cast<RecentProgressWork*>(arg);
+    {
+        sd_access::Transaction transaction;
+        if (transaction) {
+            for (const auto& path : work->paths) {
+                if (work->generation != s_recent_generation.load() || sd_access::IsQuiescing()) break;
+                reader::book_progress_cache::Upsert(path.c_str(), reader::BookSession::PeekProgress(path.c_str()));
+            }
+        }
+    }
+    if (!ScreenLvAsync([](void* arg) {
+        auto* work = static_cast<RecentProgressWork*>(arg);
+        if (work->generation == s_recent_generation.load() && Book_State().shelf.list_scr == work->screen &&
+            lv_screen_active() == work->screen) RenderReadingHome();
+        delete work;
+    }, work)) {
+        ESP_LOGW("BookHome", "recent progress UI delivery unavailable");
+        delete work;
+    }
+    vTaskDelete(nullptr);
+}
+
+static std::string s_boot_resume_path;
+
+static lv_obj_t* CreateBookHome(bool continue_latest, const std::string& resume_path = {}) {
+    ++s_recent_generation;
     auto& st = Book_State();
+    CancelShelfDirectory();
     ReleaseReaderSessionForLeave();
     st.shelf.shelf_multi = false;
     st.shelf.shelf_selected.clear();
@@ -57,9 +103,13 @@ static lv_obj_t* CreateBookHome(bool continue_latest) {
     ScreenSetIsHome(false);
 
     if (continue_latest && !ReaderWorkersBusy() && !st.reader.deferred_cleanup && SdCardManager::GetInstance().IsMounted()) {
-        const std::string latest = reader::book_home_snapshot::LoadLatestAbsPath();
+        const std::string latest = resume_path.empty() ? reader::book_home_snapshot::LoadLatestAbsPath() : resume_path;
         if (!latest.empty()) {
-            reader::LoadBookLibrary(reader::kDefaultBooksDir, st.shelf.books);
+            reader::BookInfo info;
+            info.path = latest;
+            info.title = reader::TitleFromPath(latest.c_str());
+            info.format = reader::DetectFormatByPath(latest.c_str());
+            st.shelf.books = {info};
             for (size_t i = 0; i < st.shelf.books.size(); ++i) {
                 if (st.shelf.books[i].path == latest) {
                     st.shelf.selected = static_cast<int>(i);
@@ -136,9 +186,31 @@ static lv_obj_t* CreateBookHome(bool continue_latest) {
     }
 
     st.shelf.books.clear();
-    // 优先复用开机/上次扫库缓存，未命中再扫盘
-    reader::LoadBookLibrary(reader::kDefaultBooksDir, st.shelf.books);
+    // 首页只恢复固定数量的最近阅读，不枚举书库。
+    std::vector<std::string> recent;
+    reader::book_home_snapshot::LoadRecentAbsPaths(recent);
+    for (const auto& path : recent) {
+        reader::BookInfo info;
+        info.path = path;
+        info.title = reader::TitleFromPath(path.c_str());
+        info.format = reader::DetectFormatByPath(path.c_str());
+        st.shelf.books.push_back(std::move(info));
+        if (st.shelf.books.size() >= reader::book_home_snapshot::kRecentDisplayMax) break;
+    }
     RenderReadingHome();
+    if (!st.shelf.books.empty()) {
+        auto* work = new(std::nothrow) RecentProgressWork;
+        if (work) {
+            work->screen = scr;
+            work->generation = s_recent_generation.load();
+            for (const auto& info : st.shelf.books) work->paths.push_back(info.path);
+            if (xTaskCreatePinnedToCore(LoadRecentProgress, "recent_progress", 6144, work,
+                    tskIDLE_PRIORITY + 1, nullptr, 0) != pdPASS) {
+                delete work;
+                ESP_LOGE("BookHome", "recent progress task creation failed");
+            }
+        } else ESP_LOGE("BookHome", "recent progress allocation failed");
+    }
 
     // factory=Create：进百问后返回阅读首页
     VkKey_AttachScreen(scr, kScreenLibrary, BookAiLongPressDesc(BookScreen::Create));
@@ -151,4 +223,77 @@ lv_obj_t* BookScreen::Create() {
 
 lv_obj_t* BookScreen::CreateLatest() {
     return CreateBookHome(true);
+}
+
+bool BookScreen::LoadBootResume() {
+    Settings settings("reader_boot", true);
+    s_boot_resume_path = settings.GetString("book");
+    if (s_boot_resume_path.empty()) return false;
+    settings.EraseKey("book");
+    if (!settings.Commit() || !settings.GetString("book").empty()) {
+        ESP_LOGE("BookBoot", "boot resume consumption failed; opening home");
+        s_boot_resume_path.clear();
+        return false;
+    }
+    return true;
+}
+
+lv_obj_t* BookScreen::CreateBootResume() {
+    std::string path = std::move(s_boot_resume_path);
+    s_boot_resume_path.clear();
+    if (path.empty()) {
+        ESP_LOGD("BookBoot", "resume skipped reason=no_record");
+        return HomeScreen::Create();
+    }
+    sd_access::Transaction transaction;
+    const char* reason = nullptr;
+    int file_error = 0;
+    if (!SdCardManager::GetInstance().IsMounted()) reason = "sd_unmounted";
+    else if (!transaction) reason = "transaction_rejected";
+    else if (access(path.c_str(), R_OK) != 0) {
+        file_error = errno;
+        reason = file_error == ENOENT ? "file_missing" : "file_access";
+    }
+    if (reason) {
+        ESP_LOGW("BookBoot", "resume unavailable reason=%s errno=%d; opening home", reason, file_error);
+        return HomeScreen::Create();
+    }
+    ESP_LOGI("BookBoot", "restoring reader");
+    return CreateBookHome(true, path);
+}
+
+bool BookScreen::PreparePowerOff() {
+    static std::atomic<int> saved{0}; // 0 未投递，1 写入中，2 已完成
+    auto& st = Book_State();
+    if (!st.reader.powering_off) {
+        st.reader.powering_off = true;
+        OnEnterStandby();
+    }
+    if (ReaderWorkersBusy()) return false;
+    if (saved.load(std::memory_order_acquire) == 2) return true;
+    if (saved.load(std::memory_order_acquire) == 1) return false;
+    std::string path;
+    sd_access::Permit permit;
+    if (st.reader.read_scr && st.reader.read_scr == lv_screen_active() &&
+        !st.reader.deferred_cleanup && st.reader.session && st.reader.session->IsOpen()) {
+        EndReadingTimeTracking();
+        if (!st.reader.session->SaveProgress())
+            ESP_LOGE("BookBoot", "shutdown progress enqueue failed; retaining last saved position");
+        path = st.reader.session->Info().path;
+    }
+    // Storage 串行队列先完成此前提交的 .pos 写入，再持久化具体书籍的恢复记录。
+    saved.store(1, std::memory_order_release);
+    if (!Application::GetInstance().Schedule([path = std::move(path)] {
+        Settings settings("reader_boot", true);
+        if (path.empty()) settings.EraseKey("book");
+        else settings.SetString("book", path);
+        const bool ok = settings.Commit() && settings.GetString("book") == path;
+        if (!ok) ESP_LOGE("BookBoot", "shutdown resume record failed");
+        else ESP_LOGI("BookBoot", "shutdown resume saved reader=%d", !path.empty());
+        saved.store(2, std::memory_order_release);
+    }, Application::TaskDomain::Storage)) {
+        saved.store(2, std::memory_order_release);
+        ESP_LOGE("BookBoot", "shutdown resume scheduling failed");
+    }
+    return false;
 }

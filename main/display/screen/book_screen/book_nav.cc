@@ -112,9 +112,10 @@ bool RequestReaderNavigation(Kind kind, int value) {
     if (!st.reader.session || !st.reader.session->IsOpen() || st.reader.opening.load() ||
         st.reader.deferred_cleanup || st.reader.standby_paused) return false;
     if (BookFontReloadBusy()) return false;
-    if (kind != Kind::kRefresh && st.reader.session->HasCurrentPagePreview()) return false;
     if (kind == Kind::kRefresh && (pending || ready ||
         (page_work_busy && !prefetching && page_work_generation == generation))) return true;
+    if (kind != Kind::kRefresh && !pending && st.reader.session->HasCurrentPagePreview())
+        ScreenShowToast(Lang::Strings::BOOK_LAYOUT_BUSY);
     const bool relative = kind == Kind::kDelta || kind == Kind::kChapterDelta;
     if (kind == Kind::kDelta && pending && pending_kind != kind) {
         after_absolute_delta = std::clamp(after_absolute_delta + std::clamp(value, -128, 128), -128, 128);
@@ -328,7 +329,8 @@ void PollReaderPageWork() {
             break;
         }
     }
-    if (!ReaderPageWorkPending() && !ready && st.reader.content && st.reader.session &&
+    if (!page_work_busy && !ready && st.reader.content && st.reader.session &&
+        (!pending || st.reader.session->HasCurrentPagePreview()) &&
         st.reader.session->IsOpen() && !st.reader.standby_paused && !st.reader.prefs_reopen_pending && !ReaderWorkersBusy() &&
         s_reader_paint.seq.load() == s_reader_paint.done.load() &&
         (esp_timer_get_time() >= idle_after_us || st.reader.session->HasCurrentPagePreview())) {
@@ -339,6 +341,8 @@ void PollReaderPageWork() {
         idle_after_us = INT64_MAX;
     }
     if (!pending || !st.reader.session || !st.reader.content || st.reader.standby_paused || st.reader.deferred_cleanup) return;
+    // 章节预览只有当前页；保留导航请求，待新页表发布后再定位。
+    if (st.reader.session->HasCurrentPagePreview()) return;
     if (st.reader.opening.load() || st.reader.chapter_pages_busy.load() ||
         st.reader.page_image_busy.load() || page_work_busy || BookFontReloadBusy() ||
         st.reader.layout_again || st.reader.prefs_reopen_pending) return;

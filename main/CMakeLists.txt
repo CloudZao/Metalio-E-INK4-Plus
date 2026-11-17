@@ -36,6 +36,9 @@ file(GLOB BOARD_SRCS
 file(GLOB WORKBUDDY_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/workbuddy/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/workbuddy_screen/*.cc")
 
+file(GLOB APP_STORE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/app_store/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/app_store_screen/*.cc")
+
 file(GLOB HOME_SCREEN_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/home_screen/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/home_screen/pixel/*.cc"
@@ -127,6 +130,7 @@ idf_component_register(
         "app_main.cc"
         "application.cc"
         "application_tasks.cc"
+        "yunxin_binding/yunxin_binding.cc"
         "ask_ai_boot_stubs.cc"
         "settings.cc"
         "haptic_feedback.cc"
@@ -189,6 +193,7 @@ idf_component_register(
         ${READER_SRCS}
         ${OTA_UI_SRCS}
         ${HOME_SCREEN_SRCS}
+        ${APP_STORE_SRCS}
         ${WORKBUDDY_SRCS}
         ${SETTINGS_SCREEN_SRCS}
         ${BLUETOOTH_SCREEN_SRCS}
@@ -198,7 +203,7 @@ idf_component_register(
         "boards/common/sensor/sc7a20h.cc"
         "boards/metalio-e-ink4-plus/periph/metalio_accel.cc"
     EMBED_FILES
-        "factory-test-assets/factory_test_audio.ogg"
+        "${PROJECT_DIR}/main/assets/factory-test/factory_test_audio.ogg"
         "boards/metalio-e-ink4-plus/display/firmware/ft6336u_v04_app.bin"
     INCLUDE_DIRS
         "."
@@ -250,7 +255,8 @@ idf_component_register(
         app_update spi_flash esp_psram esp_wifi esp_netif esp_http_client esp_http_server
         mbedtls esp_timer efuse espcoredump 78__uart-uhci espressif__iot_eth esp_driver_cam esp_driver_i2c
     PRIV_REQUIRES
-        bt
+        esp_driver_usb_serial_jtag
+        bt elf_loader
         esp-wifi-connect esp-ml307 espressif__cjson 78__esp-opus-encoder 78__esp-opus esp_driver_jpeg
 )
 
@@ -377,24 +383,26 @@ foreach(_lvgl_comp lvgl__lvgl lvgl)
 endforeach()
 
 # Lossless icon tiles keep source pixels in Flash; decode buffers are session-local.
-file(GLOB _home_icon_pngs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/xingzhi-assets/ic_app_home_*.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/xingzhi-assets/ic_s_standby_calendar.png")
-file(GLOB _home_icon_overrides CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded/ic_app_home_*.png")
-set(_pixel_icon_dir "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded/pixel")
+file(GLOB _home_icon_pngs CONFIGURE_DEPENDS "${PROJECT_DIR}/main/assets/device/ic_app_home_*.png"
+    "${PROJECT_DIR}/main/assets/device/ic_s_standby_calendar.png")
+file(GLOB _home_icon_overrides CONFIGURE_DEPENDS "${PROJECT_DIR}/main/assets/embedded/ic_app_home_*.png")
+set(_pixel_icon_dir "${PROJECT_DIR}/main/assets/embedded/pixel")
 file(GLOB _pixel_icon_pngs CONFIGURE_DEPENDS "${_pixel_icon_dir}/ic_px_*.png")
 set(_home_icon_pixels "${CMAKE_CURRENT_BINARY_DIR}/home_icon_pixels.cc")
 add_custom_command(OUTPUT "${_home_icon_pixels}"
     COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/generate_home_icon_pixels.py"
-        --assets "${CMAKE_CURRENT_SOURCE_DIR}/xingzhi-assets" --output "${_home_icon_pixels}"
-        --override-dir "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded"
+        --assets "${PROJECT_DIR}/main/assets/device" --output "${_home_icon_pixels}"
+        --override-dir "${PROJECT_DIR}/main/assets/embedded"
         --pixel-dir "${_pixel_icon_dir}"
     DEPENDS ${_home_icon_pngs} ${_home_icon_overrides} ${_pixel_icon_pngs} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/generate_home_icon_pixels.py"
-        "${CMAKE_CURRENT_SOURCE_DIR}/xingzhi-assets" "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded" "${_pixel_icon_dir}"
+        "${PROJECT_DIR}/main/assets/device" "${PROJECT_DIR}/main/assets/embedded" "${_pixel_icon_dir}"
     VERBATIM)
 target_sources(${COMPONENT_LIB} PRIVATE "${_home_icon_pixels}" "${CMAKE_CURRENT_SOURCE_DIR}/display/home_icon_decoder.cc")
 
+target_add_binary_data(${COMPONENT_LIB} "${PROJECT_DIR}/main/assets/embedded/margin_calibration.png" BINARY)
+
 foreach(_shutdown_lang en zh)
-    set(_shutdown_source "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded/bg_shutdown_${_shutdown_lang}.a2i1")
+    set(_shutdown_source "${PROJECT_DIR}/main/assets/embedded/bg_shutdown_${_shutdown_lang}.a2i1")
     set(_shutdown_packed "${CMAKE_CURRENT_BINARY_DIR}/bg_shutdown_${_shutdown_lang}.a2i1.z")
     add_custom_command(OUTPUT "${_shutdown_packed}"
         COMMAND ${PYTHON} "${PROJECT_DIR}/tools/compress_binary.py" "${_shutdown_source}" "${_shutdown_packed}"
@@ -403,7 +411,7 @@ foreach(_shutdown_lang en zh)
     target_add_binary_data(${COMPONENT_LIB} "${_shutdown_packed}" BINARY)
 endforeach()
 
-set(_quick_icon_dir "${CMAKE_CURRENT_SOURCE_DIR}/assets/embedded/quick_controls")
+set(_quick_icon_dir "${PROJECT_DIR}/main/assets/embedded/quick_controls")
 set(_quick_icon_pixels "${CMAKE_CURRENT_BINARY_DIR}/quick_control_icons.cc")
 add_custom_command(OUTPUT "${_quick_icon_pixels}"
     COMMAND ${PYTHON} "${PROJECT_DIR}/tools/generate_quick_control_icons.py"
@@ -413,34 +421,41 @@ add_custom_command(OUTPUT "${_quick_icon_pixels}"
     VERBATIM)
 target_sources(${COMPONENT_LIB} PRIVATE "${_quick_icon_pixels}")
 
+set(_resource_include_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${_resource_include_dir}")
+target_include_directories(${COMPONENT_LIB} PRIVATE "${_resource_include_dir}")
+
 spiffs_create_partition_assets(
     resources
-    "./xingzhi-assets"
+    "${PROJECT_DIR}/main/assets/device"
+    IMPORT_INC_PATH "${_resource_include_dir}"
     FLASH_IN_PROJECT
     MMAP_FILE_SUPPORT_FORMAT ".jpg,.png,.eaf,.a2i1"
     MMAP_SUPPORT_SJPG
     MMAP_SUPPORT_SPNG
     MMAP_SPLIT_HEIGHT 16
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/xingzhi-assets"
+    DEPENDS "${PROJECT_DIR}/main/assets/device"
 )
+# 资源打包会同时生成索引头，须先完成再编译引用它的源码。
+add_dependencies(${COMPONENT_LIB} assets_resources_bin)
 
 # 设备页面压缩并嵌入 Flash。
 add_custom_command(OUTPUT "${AP_FILEMAN_GZ}"
-    COMMAND "${PYTHON}" "${PROJECT_DIR}/scripts/pack_ap_fileman.py"
+    COMMAND "${PYTHON}" "${PROJECT_DIR}/tools/assets/pack_ap_fileman.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/fileman.html"
         "${AP_FILEMAN_GZ}"
-    DEPENDS "${PROJECT_DIR}/scripts/pack_ap_fileman.py"
+    DEPENDS "${PROJECT_DIR}/tools/assets/pack_ap_fileman.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/fileman.html"
         "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/cloudzao-logo.png"
     VERBATIM)
 target_add_binary_data(${COMPONENT_LIB} "${AP_FILEMAN_GZ}" BINARY)
 
 add_custom_command(OUTPUT "${AP_FILEMAN_EN_GZ}"
-    COMMAND "${PYTHON}" "${PROJECT_DIR}/scripts/pack_ap_fileman.py"
+    COMMAND "${PYTHON}" "${PROJECT_DIR}/tools/assets/pack_ap_fileman.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/fileman.html"
         "${AP_FILEMAN_EN_GZ}"
         "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/fileman.en.json"
-    DEPENDS "${PROJECT_DIR}/scripts/pack_ap_fileman.py"
+    DEPENDS "${PROJECT_DIR}/tools/assets/pack_ap_fileman.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/fileman.html"
         "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/fileman.en.json"
         "${CMAKE_CURRENT_SOURCE_DIR}/display/screen/cloud_screen/ap/cloudzao-logo.png"

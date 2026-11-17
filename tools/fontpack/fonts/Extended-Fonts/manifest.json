@@ -1,0 +1,84 @@
+{
+  "format": "EFNT v1",
+  "file": "metalio/e-ink/fonts/extended-fonts.fontpack",
+  "bytes": 267832481,
+  "sha256": "7cad7820f4a304535392d118e7b9c01e6ed02c797376d82278afb0f4a4489de6",
+  "unicode_version": "17.0.0",
+  "codepoints_per_variant": 104774,
+  "han_codepoints_per_variant": 102998,
+  "glyph_entries": 838192,
+  "max_bitmap_bytes": 676,
+  "variants": {
+    "20:2": {
+      "MiSans-Light.ttf": 29557,
+      "PlangothicP1-Regular.ttf": 1677,
+      "MiSans-L3.ttf": 60117,
+      "PlangothicP2-Regular.ttf": 13423
+    },
+    "25:2": {
+      "MiSans-Light.ttf": 29557,
+      "PlangothicP1-Regular.ttf": 1677,
+      "MiSans-L3.ttf": 60117,
+      "PlangothicP2-Regular.ttf": 13423
+    },
+    "30:2": {
+      "MiSans-Light.ttf": 29557,
+      "PlangothicP1-Regular.ttf": 1677,
+      "MiSans-L3.ttf": 60117,
+      "PlangothicP2-Regular.ttf": 13423
+    },
+    "30:4": {
+      "MiSans-Semibold.ttf": 29557,
+      "PlangothicP1-Regular.ttf": 1677,
+      "MiSans-L3.ttf": 60117,
+      "PlangothicP2-Regular.ttf": 13423
+    },
+    "35:2": {
+      "MiSans-Light.ttf": 29557,
+      "PlangothicP1-Regular.ttf": 1677,
+      "MiSans-L3.ttf": 60117,
+      "PlangothicP2-Regular.ttf": 13423
+    },
+    "40:2": {
+      "MiSans-Light.ttf": 29557,
+      "PlangothicP1-Regular.ttf": 1677,
+      "MiSans-L3.ttf": 60117,
+      "PlangothicP2-Regular.ttf": 13423
+    },
+    "45:2": {
+      "MiSans-Light.ttf": 29557,
+      "PlangothicP1-Regular.ttf": 1677,
+      "MiSans-L3.ttf": 60117,
+      "PlangothicP2-Regular.ttf": 13423
+    },
+    "50:2": {
+      "MiSans-Light.ttf": 29557,
+      "PlangothicP1-Regular.ttf": 1677,
+      "MiSans-L3.ttf": 60117,
+      "PlangothicP2-Regular.ttf": 13423
+    }
+  },
+  "sources": [
+    {
+      "name": "MiSans-Light.ttf",
+      "sha256": "5c306154f81ca5888cd517c16493a9ecc7561deb0b7b449d59fc61e8b41021f0"
+    },
+    {
+      "name": "MiSans-Semibold.ttf",
+      "sha256": "77c23f31ae124867778344970155a0c8d34a89897dedaab81aeee82ff00a4ce6"
+    },
+    {
+      "name": "MiSans-L3.ttf",
+      "sha256": "710bc52d40d01d8846254a095780bec95e2f39382500939e4536e4a999bdd844"
+    },
+    {
+      "name": "PlangothicP1-Regular.ttf",
+      "sha256": "322a96735fd2ee13bb58337e338d891eda3c3a8231f866222e684c9a4b1b5833"
+    },
+    {
+      "name": "PlangothicP2-Regular.ttf",
+      "sha256": "33d6a17c587fcce54bab5d0aeeeacd0c632e0d2fd4754c89af401d859207d44c"
+    }
+  ],
+  "missing_unicode17_han": []
+}

@@ -10,6 +10,7 @@
 
 #include "application.h"
 #include "assistant_screen/assistant_screen.h"
+#include "app_store_screen/app_store_screen.h"
 #include "workbuddy_screen/workbuddy_screen.h"
 #include "book_screen/book_screen.h"
 #include "cloud_screen/cloud_screen.h"
@@ -22,10 +23,10 @@
 #include "task_screen/task_screen.h"
 #include "settings_screen/settings_screen.h"
 #include "settings_screen/settings_test/settings_test_battery_screen.h"
+#include "settings_screen/settings_test/settings_test_margin_screen.h"
 #include "vk_key_handler.h"
 #include "sd_access.h"
 #include "sd_log_writer.h"
-#include "book_library_warmup.h"
 
 #include <atomic>
 #include <esp_log.h>
@@ -146,6 +147,7 @@ void StandbyScreen::Show() {
         ESP_LOGW(TAG, "show: no active screen");
         return;
     }
+    SettingsTestMarginScreen::SetStandby(true);
     if (auto* disp = LVAdapterDisplay::Instance()) disp->PrepareWallpaperOverlay();
     ESP_LOGI(TAG, "show overlay on screen=%p", static_cast<void*>(under));
     if (!PreferWallpaperVariant()) {
@@ -183,6 +185,7 @@ void StandbyScreen::Show() {
     BlePageTurner::SetStandby(true);
     BookScreen::OnEnterStandby();
     AssistantScreen::SetStandby(true);
+    AppStoreScreen::SetStandby(true);
     WorkBuddyScreen::SetStandby(true);
     // Stop the log producer before closing admission. Existing file handles and
     // the explicitly permitted standby decoder finish before SD is removed.
@@ -227,9 +230,11 @@ void StandbyScreen::Dismiss() {
     s_underlying_scr = nullptr;
 
     DisplayUiSetFullScreen(false);
+    SettingsTestMarginScreen::SetStandby(false);
     PowerPolicy::GetInstance().OnStandbyOverlayDismissed();
     BlePageTurner::SetStandby(false);
     AssistantScreen::SetStandby(false);
+    AppStoreScreen::SetStandby(false);
     WorkBuddyScreen::SetStandby(false);
 
     // 清除待机前电量，待唤醒负载稳定 3s 后重新校准。
@@ -242,9 +247,6 @@ void StandbyScreen::Dismiss() {
         TaskScreen::OnResumeFromStandby();
     }
     BookScreen::OnResumeFromStandby();
-    if (!reader::book_library_warmup::IsProgressCacheReady()) {
-        reader::book_library_warmup::RequestBootWarmup();
-    }
     SettingsScreen_OnResumeFromStandby();
     SettingsTestBatteryScreen_ResumeFromStandby();
     if (auto* disp = LVAdapterDisplay::Instance()) {

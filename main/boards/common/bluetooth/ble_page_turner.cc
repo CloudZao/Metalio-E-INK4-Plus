@@ -45,6 +45,7 @@ bool s_profiles_loaded = false; // 由 s_mutex 保护，配置只加载一次
 std::atomic<CommandHandler> s_handler{nullptr};
 std::atomic<bool> s_started{false};
 std::atomic<bool> s_synced{false};
+std::atomic<bool> s_host_running{false}; // 主机任务已建立，允许在未同步或重置后停止
 ble_npl_event s_control;
 uint8_t s_pressed_key = 0; // 过滤同一协议按压中的重复非零报告
 HbtrGestureButtons::Decoder s_hbtr_gesture_buttons;
@@ -53,7 +54,6 @@ enum class Request {
     kAutoScan, // 自动连接扫描
     kAutoConnect, // 自动寻找过程中连接候选设备
     kEnable, // 开启自动连接
-    kDisable, // 关闭并断开
     kSuspend, // 待机暂停，保留开关
     kPersist, // 保存开关
     kNone, // 无待处理请求
@@ -95,6 +95,10 @@ bool s_pairing_reference = false;
 std::atomic<bool> s_stopping{false};
 std::atomic<bool> s_host_stopped{false};
 std::atomic<bool> s_suspended{false};
+bool s_release_pending = false; // 由 s_mutex 保护，完整释放前禁止重新启动
+bool s_release_queued = false; // 由 s_mutex 保护，复用现有后台回收任务
+bool s_scan_pending = false; // 释放期间重新进入设备管理，完成后再扫描
+int64_t s_release_retry = 0; // 初始化未完成或释放失败时延后重试
 bool s_auto_scan = false;
 bool s_manual_discovery = false; // 由 s_mutex 保护，设备管理持有扫描
 bool s_stop_scan_requested = false; // 由 BLE 任务取消扫描，不覆盖连接等请求
@@ -115,6 +119,7 @@ int GapEvent(ble_gap_event* event, void*);
 void Fail(int error);
 void StopActivities();
 bool Submit(Request request, int index = -1, bool replace = true, const char* address = nullptr);
+void QueueRelease();
 void StartScan(bool automatic = false, bool keep_results = false);
 void BeginAutoLocked() {
     s_status.searching = true;
@@ -176,6 +181,7 @@ void CancelInput() {
 
 // 调用方持有 s_mutex，保证解码、取消及输入分发不会交错。
 void InputLocked(uint8_t key) {
+    if (s_release_pending) return;
     if (key == s_pressed_key) return;
     s_pressed_key = key;
     if (!key) return;
@@ -540,7 +546,7 @@ void ConnectTo(const ble_addr_t& address, Model model) {
     s_cancelled = false;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        if (s_suspended || s_request == Request::kDisable || s_request == Request::kSuspend) return;
+        if (s_release_pending || s_suspended || s_request == Request::kSuspend) return;
         s_status.scanning = false;
         EnableLocked(true);
         FormatAddress(s_status.target_address, address);
@@ -607,7 +613,7 @@ void Control(ble_npl_event*) {
         s_status.binding_pending = false;
         s_status.operation_failed = !success;
         ++s_status.revision;
-    } else if (request == Request::kDisable || request == Request::kSuspend) {
+    } else if (request == Request::kSuspend) {
         StopActivities();
     } else if (request == Request::kEnable || request == Request::kAutoScan) {
         if (GetSnapshot().enabled && !s_suspended && s_connection == BLE_HS_CONN_HANDLE_NONE) StartScan(true);
@@ -856,7 +862,9 @@ void Reset(int reason) {
 }
 
 void HostTask(void*) {
+    s_host_running = true;
     nimble_port_run();
+    s_host_running = false;
     nimble_port_freertos_deinit();
 }
 
@@ -889,17 +897,17 @@ bool Start(CommandHandler handler) {
     s_handler = handler;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        if (s_stopping || s_host_stopped || (!s_started.load() && esp_timer_get_time() < s_init_retry)) return false;
+        if (s_release_pending || s_stopping || s_host_stopped ||
+            (!s_started.load() && esp_timer_get_time() < s_init_retry)) return false;
+        if (s_started.load()) return true;
+        s_started = true;
+        SetStateLocked(State::kStarting);
     }
-    bool expected = false;
-    if (s_started.compare_exchange_strong(expected, true)) {
-        SetState(State::kStarting);
-        if (xTaskCreate(InitTask, "pager_init", 4096, nullptr, 4, nullptr) != pdPASS) {
-            s_started = false;
-            SetState(State::kError);
-            { std::lock_guard<std::mutex> lock(s_mutex); s_init_retry = esp_timer_get_time() + 1000000; }
-            return false;
-        }
+    if (xTaskCreate(InitTask, "pager_init", 4096, nullptr, 4, nullptr) != pdPASS) {
+        s_started = false;
+        SetState(State::kError);
+        { std::lock_guard<std::mutex> lock(s_mutex); s_init_retry = esp_timer_get_time() + 1000000; }
+        return false;
     }
     return true;
 }
@@ -907,7 +915,7 @@ bool Start(CommandHandler handler) {
 bool Submit(Request request, int index, bool replace, const char* address) {
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        if (s_stopping || s_host_stopped || (!replace && s_request != Request::kNone)) return false;
+        if (s_release_pending || s_stopping || s_host_stopped || (!replace && s_request != Request::kNone)) return false;
         const bool scanning = request == Request::kScan || request == Request::kRefreshScan;
         if ((s_status.state == State::kConnecting || s_suspended) && (scanning || request == Request::kForget)) return false;
         const bool scanned = request == Request::kConnect || request == Request::kAutoConnect;
@@ -960,7 +968,7 @@ bool Submit(Request request, int index, bool replace, const char* address) {
                 s_status.state = State::kIdle;
                 ++s_status.revision;
             }
-        } else if (connecting || request == Request::kForget || request == Request::kDisable || request == Request::kSuspend) {
+        } else if (connecting || request == Request::kForget || request == Request::kSuspend) {
             s_manual_discovery = false;
         }
         s_request = request;
@@ -968,6 +976,30 @@ bool Submit(Request request, int index, bool replace, const char* address) {
         if (s_synced.load()) ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &s_control);
     }
     return true;
+}
+
+void QueueRelease() {
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (!s_release_pending || s_release_queued || esp_timer_get_time() < s_release_retry) return;
+        s_release_queued = true;
+    }
+    if (Application::GetInstance().Schedule([]() {
+        PersistEnabled();
+        const bool released = PrepareSleep();
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_release_queued = false;
+        if (released) {
+            s_release_pending = false;
+            s_release_retry = 0;
+        } else {
+            s_release_retry = esp_timer_get_time() + 1000000;
+        }
+    }, Application::TaskDomain::Cleanup)) return;
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_release_queued = false;
+    s_release_retry = esp_timer_get_time() + 1000000;
+    ESP_LOGW(TAG, "BLE release enqueue failed; retry deferred");
 }
 } // namespace
 
@@ -1020,6 +1052,7 @@ void Init(CommandHandler handler) {
 
 bool SetEnabled(bool enabled) {
     GetSnapshot();
+    bool releasing;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         s_boot_pending = false;
@@ -1028,12 +1061,18 @@ bool SetEnabled(bool enabled) {
         CancelInput();
         if (enabled) {
             s_suspended = false;
-            if (s_status.state != State::kConnected) BeginAutoLocked();
+            if (s_status.state != State::kConnected || s_release_pending || s_stopping || s_host_stopped)
+                BeginAutoLocked();
+        } else {
+            s_scan_pending = false;
+            s_manual_discovery = false;
         }
+        if (!enabled || s_stopping || s_host_stopped) s_release_pending = true;
+        releasing = s_release_pending;
     }
-    if (!enabled && !s_started.load()) { QueuePreferenceWrite(); return true; }
+    if (releasing) { QueueRelease(); return true; }
     if (!Start(s_handler.load())) return false;
-    return Submit(enabled ? Request::kEnable : Request::kDisable);
+    return Submit(Request::kEnable);
 }
 
 void SetStandby(bool standby) {
@@ -1042,6 +1081,7 @@ void SetStandby(bool standby) {
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         s_suspended = standby;
+        if (standby) s_scan_pending = false;
         s_boot_pending = false;
         enabled = s_status.enabled;
         CancelInput();
@@ -1058,12 +1098,15 @@ void SetStandby(bool standby) {
 }
 
 void Poll() {
+    QueueRelease();
     Request request = Request::kNone;
     bool start_needed = false;
     bool persist_needed = false;
+    bool scan_needed = false;
+    bool release_needed = false;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        if (s_suspended || s_stopping || s_host_stopped) return;
+        if (s_release_pending || s_suspended || s_stopping || s_host_stopped) return;
         const auto now = esp_timer_get_time();
         if (s_boot_pending && now >= s_boot_not_before) {
             s_boot_pending = false;
@@ -1073,7 +1116,10 @@ void Poll() {
             EnableLocked(false);
             s_status.timed_out = true;
             CancelInput();
-            request = Request::kDisable;
+            s_manual_discovery = false;
+            s_scan_pending = false;
+            s_release_pending = true;
+            release_needed = true;
             ESP_LOGI(TAG, "Automatic connection timed out after 30s; disabled");
         }
         start_needed = !s_started.load() && s_status.enabled && !s_boot_pending;
@@ -1086,13 +1132,32 @@ void Poll() {
             } else if (s_enabled_dirty && now >= s_persist_retry) request = Request::kPersist;
         }
     }
+    if (release_needed) { QueueRelease(); return; }
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        scan_needed = s_scan_pending;
+        s_scan_pending = false;
+        if (!s_status.enabled && !s_manual_discovery && !scan_needed &&
+            s_started.load() && s_request == Request::kNone) s_release_pending = true;
+    }
+    QueueRelease();
+    if (scan_needed) { Scan(s_handler.load()); return; }
     if (persist_needed) QueuePreferenceWrite();
     if (start_needed) Start(s_handler.load());
-    if (request != Request::kNone) Submit(request, -1, request == Request::kDisable);
+    if (request != Request::kNone) Submit(request, -1, false);
 }
 
 
 bool Scan(CommandHandler handler, bool keep_results) {
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_release_pending || s_stopping || s_host_stopped) {
+            if (s_suspended) return false;
+            s_handler = handler;
+            s_scan_pending = true;
+            return true;
+        }
+    }
     if (!Submit(keep_results ? Request::kRefreshScan : Request::kScan, -1, false)) return false;
     if (Start(handler)) return true;
     StopScan();
@@ -1101,6 +1166,7 @@ bool Scan(CommandHandler handler, bool keep_results) {
 
 void StopScan() {
     std::lock_guard<std::mutex> lock(s_mutex);
+    s_scan_pending = false;
     if (!s_manual_discovery) return;
     s_manual_discovery = false;
     if (s_request == Request::kScan || s_request == Request::kRefreshScan) s_request = Request::kNone;
@@ -1114,7 +1180,7 @@ bool ConnectSaved(const char* address) { return s_synced.load() && Submit(Reques
 bool Forget(const char* address) { return s_synced.load() && Submit(Request::kForget, -1, true, address); }
 bool SetLearning(bool enabled) {
     std::lock_guard<std::mutex> lock(s_mutex);
-    if (enabled && (s_status.state != State::kConnected || s_status.binding_pending || s_status.active_saved < 0 ||
+    if (enabled && (s_release_pending || s_status.state != State::kConnected || s_status.binding_pending || s_status.active_saved < 0 ||
         !SupportsButtonLearning(s_profiles[s_status.active_saved].device.model))) return false;
     if (!enabled && !s_status.learning) return true;
     CancelInput();
@@ -1128,7 +1194,7 @@ bool Bind(Action action, uint8_t key) {
     const auto index = static_cast<unsigned>(action);
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        if (index >= 2 || key > 2 || s_status.state != State::kConnected || s_status.active_saved < 0 ||
+        if (s_release_pending || index >= 2 || key > 2 || s_status.state != State::kConnected || s_status.active_saved < 0 ||
             !s_status.learning || s_status.binding_pending || s_request != Request::kNone || !s_synced.load()) return false;
         s_requested_address = s_profiles[s_status.active_saved].address;
         s_binding_key = key;
@@ -1148,7 +1214,7 @@ bool PrepareSleep() {
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         if (!s_started.load()) return true;
-        if (s_stopping || (!s_synced.load() && !s_host_stopped)) return false;
+        if (s_stopping || (!s_host_running.load() && !s_host_stopped)) return false;
         CancelInput();
         s_stopping = true;
         s_synced = false;
@@ -1156,16 +1222,19 @@ bool PrepareSleep() {
         s_manual_discovery = false;
         s_stop_scan_requested = false;
     }
-    int rc = s_host_stopped ? 0 : nimble_port_stop();
-    if (!rc) {
-        s_host_stopped = true;
-        ble_npl_event_deinit(&s_control);
-        rc = nimble_port_deinit();
+    int rc = 0;
+    if (!s_host_stopped) {
+        rc = nimble_port_stop();
+        if (!rc) {
+            s_host_stopped = true;
+            ble_npl_event_deinit(&s_control);
+        }
     }
+    if (!rc) rc = nimble_port_deinit();
     std::lock_guard<std::mutex> lock(s_mutex);
     s_stopping = false;
     if (rc) {
-        ESP_LOGW(TAG, "BLE sleep preparation failed: %d", rc);
+        ESP_LOGW(TAG, "BLE stack release failed: %d", rc);
         if (!s_host_stopped) {
             s_synced = ble_hs_synced();
         }
@@ -1182,10 +1251,15 @@ bool PrepareSleep() {
     s_status.active_saved = -1;
     s_status.learning = false;
     s_status.learned_key = 0;
+    s_status.operation_failed = s_status.binding_pending;
+    s_status.binding_pending = false;
+    s_status.count = 0;
+    if (!s_status.enabled) s_status.searching = false;
     ++s_status.revision;
     s_control = {};
     s_host_stopped = false;
     s_started = false;
+    ESP_LOGI(TAG, "BLE stack released");
     return true;
 }
 } // namespace BlePageTurner

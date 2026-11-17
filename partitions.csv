@@ -7,6 +7,6 @@ model,     data, spiffs,   0x10000,  400K,
 ota_0,     app,  ota_0,    0x80000,  5M,
 ota_1,     app,  ota_1,    0x580000, 5M,
 resources, data, spiffs,   0xa80000, 400K,
-# ebook 24x24 1bpp 点阵（assets/epd_font24.bin ≈1.48MiB）
+# ebook 24x24 1bpp 点阵（main/assets/fonts/epd_font24.bin ≈1.48MiB）
 font_data, data, 0x40,     0xae4000, 5M,
 coredump,  data, coredump, 0xfe4000, 64K,

@@ -260,6 +260,7 @@ void ClosePreview() {
     Wallpaper_State().preview.idx = -1;
     ClearPreviewImage();
     ShowMode(UiMode::kList);
+    CollectWallpapers();
     RebuildListPage();
     Wallpaper_RevealAfterWhite();
 }

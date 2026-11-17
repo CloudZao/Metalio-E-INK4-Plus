@@ -13,8 +13,11 @@
  * | .../Read_Before_Upload.txt | 上传前必读（英文；无则开机生成） |
  * | .../settings/wificonfig.json | Wi-Fi 配置，与 NVS 同步保存 |
  * | .../books | 电子书 .epub/.txt/.ebook；新建辅助文件另存，兼容保留旧旁路文件 |
- * | .../fonts | 阅读用 .ef 字体（云推送 .ef 亦落此） |
+ * | .../fonts | 阅读用 .ef 字体及拓展字库 .fontpack |
  * | .../fonts_ttf | 阅读用 .ttf/.otf（支持直接加载或转换为 .ef） |
+ * | .../apps | 商店应用安装清单、ELF 与恢复备份 |
+ * | .../settings/apps | 按应用名称和 ID 隔离的应用持久状态 |
+ * | .../temp/app_store | 按应用名称和 ID 归档的下载与安装工作文件 |
  * | .../temp/bwchat/images | A2UI 图片会话缓存（开机清空） |
  * | .../temp/bwchat/messages | 百问AI 本机会话 JSON（开机清空；无卡不写） |
  * | .../wallpaper | 壁纸库（关机/待机启用仅 NVS 记文件名；关机无/坏图则用固件内置 bg_shutdown.a2i1） |
@@ -79,11 +82,15 @@ static inline size_t SdUtf8PrefixLength(const char* text, size_t max_bytes) {
 #define SD_PATH_RECORDINGS  SD_APP_ROOT "/recordings"   // 录音
 #define SD_PATH_BOOKS       SD_APP_ROOT "/books"        // 电子书
 #define SD_PATH_FONTS       SD_APP_ROOT "/fonts"        // 阅读 .ef 字体
+#define SD_PATH_FONT_EXT    SD_PATH_FONTS "/extended-fonts.fontpack" // UI 与阅读缺字拓展字库
 #define SD_PATH_FONT_SRC    SD_APP_ROOT "/fonts_ttf"    // 待转换 TTF/OTF
 #define SD_PATH_A2UI_CACHE  SD_PATH_BWCHAT_TEMP "/images"   // A2UI 图片缓存
 #define SD_PATH_CHAT_LOG    SD_PATH_BWCHAT_TEMP "/messages"     // 百问会话 JSON
 #define SD_PATH_WALLPAPER    SD_APP_ROOT "/wallpaper"    // 壁纸库
 #define SD_PATH_TEMP SD_APP_ROOT "/temp" // 临时工作文件根目录
+#define SD_PATH_APPS SD_APP_ROOT "/apps" // 商店安装的应用
+#define SD_PATH_APP_STATE SD_PATH_SETTINGS "/apps" // 应用私有持久数据
+#define SD_PATH_APP_STORE_TEMP SD_PATH_TEMP "/app_store" // 商店下载与安装工作文件
 #define SD_PATH_BOOK_STATE SD_PATH_SETTINGS "/books" // 进度、时长与书签
 #define SD_PATH_BOOK_TEMP SD_PATH_TEMP "/books" // 阅读应用缓存
 #define SD_PATH_BOOK_WORK SD_PATH_BOOK_TEMP "/work" // 阅读会话工作文件
