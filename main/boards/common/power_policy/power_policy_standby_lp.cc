@@ -209,7 +209,7 @@ bool DrainSdAndBootWork()
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     // 业务任务归还网络和音频后，才允许暂停 CPU 并切断共享外设电源。
-    while (Application::GetInstance().HasNetworkAudioWork() ||
+    while (Application::GetInstance().HasNetworkAudioWork() || Application::GetInstance().HasLocalPlaybackWork() ||
            PowerPolicy::GetInstance().HasForegroundNetworkWork() || pwr::HasPendingHardwareWork()) {
         if (PollStandbyPhysicalKeys()) return true;
         vTaskDelay(pdMS_TO_TICKS(20));

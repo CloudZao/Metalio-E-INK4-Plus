@@ -1,6 +1,6 @@
 /**
  * @file metalio_e_ink4_plus_board.cc
- * @brief Metalio E-Ink4-Plus：DualNetworkBoard + BH1098 音频 + EPDiy
+ * @brief Metalio E-Ink4-Plus：DualNetworkBoard + 蓝牙芯片音频 + EPDiy
  */
 
 #include "dual_network_board.h"

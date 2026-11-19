@@ -31,6 +31,8 @@ extern const char* BOOK_TURN_SLIDE;
 extern const char* BOOK_TURN_PUSH;
 extern const char* BOOK_TURN_TITLE;
 extern const char* BOOK_AUTO_TURN;
+extern const char* BOOK_SHAKE_TURN;
+extern const char* BOOK_SHAKE_LEVEL;
 extern const char* BOOK_PRESET_SMALL;
 extern const char* BOOK_PRESET_LARGE;
 extern const char* BOOK_PRESET_XLARGE;

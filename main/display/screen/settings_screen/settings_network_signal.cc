@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <string>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -24,6 +25,7 @@ constexpr const char* TAG = "SettingsSignal";
 constexpr uint32_t kSignalPollMs = 2000; // 采样周期；4G 查询需占用 AT 通道
 constexpr lv_coord_t kSignalTitleW = UiSx(120);
 constexpr size_t kSignalTextMax = 48;
+constexpr size_t kIccidTextMax = 32;
 
 // 采样在后台执行；页面删除时递增代数，使迟到结果失效。
 struct SignalUiMsg {
@@ -32,11 +34,24 @@ struct SignalUiMsg {
 };
 
 lv_obj_t* s_signal_value = nullptr;
+lv_obj_t* s_iccid_value = nullptr;
 lv_timer_t* s_signal_timer = nullptr;
 std::atomic<bool> s_signal_alive{false};
 std::atomic<uint32_t> s_signal_generation{0};
 std::atomic<bool> s_signal_busy{false};
 char s_last_signal_text[kSignalTextMax] = {};
+char s_last_iccid_text[kIccidTextMax] = {};
+
+bool IsCellularMode() {
+    auto* dual = dynamic_cast<DualNetworkBoard*>(&Board::GetInstance());
+    return dual != nullptr && dual->GetNetworkType() == NetworkType::CELLULAR;
+}
+
+Nt26Board* CurrentNt26() {
+    auto& board = Board::GetInstance();
+    auto* dual = dynamic_cast<DualNetworkBoard*>(&board);
+    return dynamic_cast<Nt26Board*>(dual != nullptr ? &dual->GetCurrentBoard() : &board);
+}
 
 void StopSignalTimer() {
     if (s_signal_timer != nullptr) {
@@ -50,7 +65,9 @@ void InvalidateSignalSession() {
     s_signal_generation.fetch_add(1, std::memory_order_acq_rel);
     StopSignalTimer();
     s_signal_value = nullptr;
+    s_iccid_value = nullptr;
     s_last_signal_text[0] = '\0';
+    s_last_iccid_text[0] = '\0';
 }
 
 void FormatWifiSignal(char* ui, size_t ui_len) {
@@ -72,9 +89,7 @@ void FormatWifiSignal(char* ui, size_t ui_len) {
 }
 
 void FormatCellSignal(char* ui, size_t ui_len) {
-    auto& board = Board::GetInstance();
-    auto* dual = dynamic_cast<DualNetworkBoard*>(&board);
-    auto* nt26 = dynamic_cast<Nt26Board*>(dual != nullptr ? &dual->GetCurrentBoard() : &board);
+    auto* nt26 = CurrentNt26();
     if (nt26 == nullptr) {
         std::snprintf(ui, ui_len, "%s", Lang::Strings::SETTINGS_TEST_SIGNAL_CELL_UNAVAIL);
         return;
@@ -104,6 +119,17 @@ void SampleSignalText(char* ui, size_t ui_len) {
     }
 }
 
+void RefreshIccidFromCache() {
+    if (s_iccid_value == nullptr || !lv_obj_is_valid(s_iccid_value)) return;
+    auto* nt26 = CurrentNt26();
+    const std::string iccid = nt26 != nullptr ? nt26->GetIccid() : std::string{};
+    const char* text = iccid.empty() ? Lang::Strings::SETTINGS_TEST_SIGNAL_ICCID_UNKNOWN : iccid.c_str();
+    if (std::strncmp(s_last_iccid_text, text, kIccidTextMax) == 0) return;
+    lv_label_set_text(s_iccid_value, text);
+    std::strncpy(s_last_iccid_text, text, kIccidTextMax - 1);
+    s_last_iccid_text[kIccidTextMax - 1] = '\0';
+}
+
 void ApplySignalUi(void* p) {
     auto* msg = static_cast<SignalUiMsg*>(p);
     if (msg == nullptr) {
@@ -119,6 +145,7 @@ void ApplySignalUi(void* p) {
             std::strncpy(s_last_signal_text, msg->text, kSignalTextMax - 1);
             s_last_signal_text[kSignalTextMax - 1] = '\0';
         }
+        RefreshIccidFromCache();
     }
     delete msg;
 }
@@ -174,9 +201,10 @@ void KickSignalSample() {
 
 void OnSignalPollTimer(lv_timer_t* /*t*/) {
     KickSignalSample();
+    RefreshIccidFromCache();
 }
 
-lv_obj_t* CreateSignalPanel(lv_obj_t* page) {
+lv_obj_t* CreateInfoRow(lv_obj_t* page, const char* title_text, const char* value_text) {
     lv_obj_t* row = lv_obj_create(page);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, lv_pct(100));
@@ -194,7 +222,7 @@ lv_obj_t* CreateSignalPanel(lv_obj_t* page) {
     lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* title = lv_label_create(row);
-    lv_label_set_text(title, Lang::Strings::SETTINGS_TEST_SIGNAL_TITLE);
+    lv_label_set_text(title, title_text);
     lv_obj_set_width(title, kSignalTitleW);
     lv_obj_set_height(title, LV_SIZE_CONTENT);
     lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
@@ -203,7 +231,7 @@ lv_obj_t* CreateSignalPanel(lv_obj_t* page) {
     lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* value = lv_label_create(row);
-    lv_label_set_text(value, Lang::Strings::SETTINGS_TEST_SIGNAL_READING);
+    lv_label_set_text(value, value_text);
     lv_obj_set_width(value, 0);
     lv_obj_set_flex_grow(value, 1);
     lv_obj_set_height(value, LV_SIZE_CONTENT);
@@ -215,11 +243,54 @@ lv_obj_t* CreateSignalPanel(lv_obj_t* page) {
     return value;
 }
 
+/** @brief ICCID 标题与号码上下分行，避免长号码横向挤换行 */
+lv_obj_t* CreateIccidRow(lv_obj_t* page) {
+    lv_obj_t* row = lv_obj_create(page);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_ver(row, UiSy(4), 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(row, 2, 0);
+    lv_obj_set_style_border_color(row, lv_color_black(), 0);
+    lv_obj_set_style_pad_hor(row, 4, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(row, UiSy(2), 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t* title = lv_label_create(row);
+    lv_label_set_text(title, Lang::Strings::SETTINGS_TEST_SIGNAL_ICCID_TITLE);
+    lv_obj_set_width(title, lv_pct(100));
+    lv_obj_set_height(title, LV_SIZE_CONTENT);
+    lv_obj_set_style_text_font(title, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(title, lv_color_black(), 0);
+    lv_obj_clear_flag(title, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t* value = lv_label_create(row);
+    lv_label_set_text(value, Lang::Strings::SETTINGS_TEST_SIGNAL_ICCID_UNKNOWN);
+    lv_obj_set_width(value, lv_pct(100));
+    lv_obj_set_height(value, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(value, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(value, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(value, lv_color_black(), 0);
+    lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_clear_flag(value, LV_OBJ_FLAG_CLICKABLE);
+    return value;
+}
+
 }  // namespace
 
 void SettingsNetworkSignal_Build(lv_obj_t* parent) {
     InvalidateSignalSession();
-    s_signal_value = CreateSignalPanel(parent);
+    s_signal_value = CreateInfoRow(parent, Lang::Strings::SETTINGS_TEST_SIGNAL_TITLE,
+                                   Lang::Strings::SETTINGS_TEST_SIGNAL_READING);
+    if (IsCellularMode()) {
+        s_iccid_value = CreateIccidRow(parent);
+        RefreshIccidFromCache();
+    }
     lv_obj_add_event_cb(s_signal_value, [](lv_event_t* e) {
         if (lv_event_get_target(e) == s_signal_value) {
             InvalidateSignalSession();

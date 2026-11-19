@@ -4,7 +4,7 @@
  *
  * 档位摘要：Full=电话/BT；NetActive=满频保网（PA 另算）；
  * AppIdle=关 WiFi + 空闲降频（设置可选 160/240/320，默认 320）；断网前可暂留 NetActive（30/60/120s 或永不）。
- * PA：仅 Full（电话/BT）或 Speaking/音频测试；Connecting/Listening 保网但不拉 PA。
+ * PA：Full（电话/BT）、Speaking、音频测试或 LocalPlayback；Connecting/Listening 保网但不拉 PA。
  * 翻译页 UiKeepNet 不参与 PA_en。
  * StandbyInhibit / UsbVirtualDisk：禁无操作进待机，不硬占网、不拉 PA。
  */
@@ -33,6 +33,7 @@ enum class PowerNeed : uint8_t {
     StandbyInhibit, // 产测老化等：禁止无操作进待机；不硬占网、不驱动 PA（PA 仍靠 DeviceState）
     PeripheralReset, // 共享电源复位：保持活动、保网，强制关闭 PA
     ForegroundNetwork, // 前台联网页面及其查询：软保网，不刷新无操作计时，不干预 PA
+    LocalPlayback, // 本地音频播放：保持功放，不要求联网
     kCount
 };
 

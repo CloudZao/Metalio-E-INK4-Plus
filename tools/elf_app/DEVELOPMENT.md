@@ -9,7 +9,7 @@ This guide covers third-party ELF app development, builds and publishing. [app_a
 - The target is ESP32-S31, using the firmware-matched RISC-V toolchain. Packages are ELF32, little-endian, RISC-V, ET_DYN with `ilp32f`; the app ABI is `XZ_APP_ABI_VERSION == 1`. Desktop ELF binaries, other chip firmware and complete ESP-IDF firmware images are not app packages.
 - The entry is `int app_main(int argc, char** argv)`. `argc == 1`; `argv[0]` points to `xz_app_api_t`, not a command-line string. Return zero for successful initialization or nonzero for failure.
 - The host owns ELF loading, widgets, callbacks and cleanup. Registered callbacks may run after the entry returns; apps must not create permanent background tasks.
-- There are no public audio, HTTP, accelerometer, pedometer, background alarm, standby wake, arbitrary filesystem or general image-widget interfaces. Hardware presence or internal firmware classes do not grant ELF access. Store networking is not an app networking API.
+- There are no public HTTP, pedometer, background alarm, standby wake, arbitrary filesystem or general image-widget interfaces. Hardware presence or internal firmware classes do not grant ELF access. Store networking is not an app networking API.
 - Native apps share the firmware execution environment and are not sandboxed. Install trusted apps only. SHA256 checks integrity, not publisher identity. LAN HTTP does not authenticate transport; do not expose the service publicly.
 
 ## 2. Quick start
@@ -135,10 +135,56 @@ if ((api->capabilities & required) != required || !api->host_context ||
 
 ### Basic UI
 
-- `label`, `button` create widgets under a parent and return opaque handles. Button `context` identifies app state. Do not cast handles to LVGL objects.
+- `label`, `button` create widgets under a parent and return opaque handles. Button `context` identifies app state. Do not cast handles to LVGL objects. `button` automatically binds system click haptics, respecting the system vibration switch and click-feedback strength. Apps do not need to call the vibration API for each button; deletion removes the binding.
 - `set_text` copies text into labels, buttons or input fields, not containers or progress bars.
 - Optional `set_style` controls font size, alignment, radius, border and black-filled white-text appearance. Zero font size preserves the font. It does not load font files or provide arbitrary colors or animation.
 - Optional `set_enabled` controls the disabled state, not visibility. Disabled buttons do not replace useful error feedback.
+- Font sizes and glyph coverage depend on the installed fontpack. Built-in Chinese fonts use sizes 25 and 30; do not assume Chinese sizes 20 or 44 exist. Check arrow and symbol coverage, or draw them geometrically to avoid missing-glyph placeholders.
+
+### Monochrome drawing and acceleration
+
+`XZ_APP_CAP_DRAWING` provides `drawing`, `draw` and `clear_children`. Drawing areas are limited to 1024×1600, with up to 1024 copied line, rectangle or circle commands per update. Coordinates are local and must remain inside the area. Stroke width is 1–8 and `reserved` must be zero. The host owns command copies and invalidates the changed area; apps may reuse their arrays after return. `clear_children` deletes every child and its event bindings. Old handles become invalid; never delete widgets from drawing events.
+
+`XZ_APP_CAP_ACCELERATION` provides `set_acceleration`, `get_acceleration` and `foreground_ms`. Subscribe before reading sensor X/Y/Z in mg. Disabled subscriptions, inactive pages and samples older than 500ms return `NOT_READY`. These are acceleration values, not gyroscope angular velocity; coordinates are not automatically rotated. In portrait, positive X points down and positive Y points left. Reader and app subscriptions are independent. Exit releases the app subscription; standby and inactive pages suspend sampling. `foreground_ms` accumulates foreground time for this app run, excluding standby, inactive pages and white-wipe transitions. A 200ms host timer checks foreground transitions. This is not an absolute time that survives restart. Check tail boundaries, capability bits and function pointers first. Gravity Maze demonstrates combining these services.
+
+### In-app Back and screen transitions
+
+`XZ_APP_CAP_BACK` provides `set_on_back` to register one Back handler for this run. A short Back press calls the app handler first: nonzero consumes the press; zero invokes normal host navigation. An app home page normally returns zero, while levels or dialogs handle their internal parent navigation. The host clears the callback before exit. Older apps without a handler retain existing behavior.
+
+`XZ_APP_CAP_SCREEN_CHANGE` provides `request_screen_change`, requesting the system white-wipe transition on the next physical submission before displaying the target frame. Build the target UI after requesting; do not block or guess completion using a fixed delay. Sampling and foreground timing resume only after a newly submitted frame physically completes, so transitions do not consume timed gameplay.
+
+### Vibration: `XZ_APP_CAP_VIBRATION`
+
+`vibrate(host, duration_ms)` requests one pulse lasting 1–15000ms and returns immediately. The host and existing motor timer control completion without blocking the UI. Check the tail boundary, capability bit and pointer first. Out-of-range durations return `INVALID`; inactive apps, white-wipe transitions, closed hosts, unavailable base timers and unfinished pulses return `NOT_READY`. The system vibration switch is respected: disabled vibration returns success without driving the motor. The request changes neither the switch nor motor intensity. A separate keep-awake hold lasts through the pulse and is released afterward. Manual standby and page exit cancel unfinished app vibration. The host cleans up before exit; exit callbacks cannot restart vibration.
+
+### Audio: `XZ_APP_CAP_AUDIO`
+
+Audio functions are appended to ABI 1. Check `XZ_APP_HAS_FIELD(api, audio_get_status)`, the capability and required pointers, then query `audio_get_caps`. The implementation accepts one mono Opus logical stream in Ogg, or 16kHz mono 16-bit PCM in RIFF/WAVE, and outputs 16kHz, 16-bit PCM. Multichannel, chained streams and packets or tags larger than 8192 bytes are unsupported. Other formats and output rates are not exposed.
+
+`audio_play(host, &config)` accepts an asynchronous request; set `config.struct_size = sizeof(config)`, `format = XZ_APP_AUDIO_OGG_OPUS` or `XZ_APP_AUDIO_WAV_PCM` and `loop` to 0 or 1. Sources are:
+
+- `XZ_APP_AUDIO_ASSET`: the current ELF's `.xz.app.assets` region. Set `path = NULL`; `offset` and `length` select a byte region, with zero length meaning the remainder. Save an Ogg file as `assets.bin` in the app directory for the existing build script to embed.
+- `XZ_APP_AUDIO_SD`: `path` is relative to `metalio/e-ink/`, such as `music/theme.ogg`; set `offset = length = 0`. Absolute or empty paths, `.`/`..` segments and invalid filenames are rejected. Files are limited to 2GiB−1 bytes. No general directory browser is provided.
+
+The host copies parameters and paths; its worker keeps no ELF callback or reference. Decoding and output use a PSRAM stack at the refresh scheduler priority, below screen scan-data feeding tasks; hardware startup runs on the internal-RAM Audio worker, and system-volume persistence uses the Storage worker. NVS reads can also enter cache-disabled flash paths and must not run directly on PSRAM stacks. `OK` means accepted, not successfully playing. `audio_get_status` returns LOADING, PLAYING, PAUSED, ENDED, STOPPED or ERROR, with `result`, `position_ms` within the current loop, `duration_ms`, completed `loops` and system `volume`. Position measures submitted audio rather than an exact hardware playback cursor. Each app has one session; another play request stops the previous session. Corrupt files, SD errors and unavailable hardware produce an error status. Apps should keep unrelated functions usable.
+
+`audio_pause(host, 1)` pauses; 0 resumes. `audio_stop` stops. Pause and stop are asynchronous; the worker releases hardware and closes the file. Resume preserves decoding position and checks file size, modification time and the audio-region header again; changes stop playback with an error. A normal SD remount during standby does not terminate playback. Output waits for audio-mode initialization and retains parser, decoder and playback position. Do not replace an active source file. Audio regions up to 256KiB are cached in PSRAM before playback; longer files or allocation failures use streaming. The cache is released with the session, and reopening after standby still validates the source. Standby, loss of foreground or white-wipe transitions suspend playback. App timers, foreground time, sampling and music resume only after the wake target frame physically succeeds. Exit cancels the worker, which finishes cleanup using host-owned resources. Playback holds PA and inhibits idle standby without requiring networking; power-key standby remains available. System audio takes priority and can preempt app playback; after an error, the user can initiate playback again.
+
+Music uses the system volume, 0–100, with 0 meaning mute. `audio_set_volume` asynchronously changes and saves that same system volume. System settings and volume keys also affect app music; there is no separate app gain. Pause, resume and loops can be affected by hardware buffer boundaries; sample-perfect gapless playback is not guaranteed.
+
+Compressed recording, a general file picker, seeking, mixing, MP3/AAC and variable output rates are not implemented. Future extensions must append functions and capabilities without reordering existing fields. `gravity_maze` demonstrates embedded looping music and playback lifecycle handling.
+
+### Recording: `XZ_APP_CAP_RECORDING`
+
+Recording functions append to ABI 1. Check the ABI, `XZ_APP_HAS_FIELD(api, record_get_status)`, the capability bit and required pointers before calling `record_get_caps`. Input currently supports only 16kHz mono 16-bit PCM WAV; the Bluetooth chip reference channel is excluded. Variable rates, recording gain and encoder controls are not exposed.
+
+`record_start(host)` asynchronously starts the single recording slot. `record_pause(host, 1)` pauses writing; zero resumes. `record_stop(host)` requests completion and saving. Pause retains microphone ownership and drains input without counting it toward duration. Set `struct_size` before `record_get_status`; states are PREPARING, RECORDING, PAUSED, SAVING, SAVED, ERROR and IDLE. `duration_ms` and `bytes` describe captured PCM for this take. `saved_duration_ms` and `path` describe the last successfully saved file, which may remain available during recording or after failure. Success means request acceptance; wait for SAVED before playing the new file. The first status query creates a host session on demand and probes an existing recording; starting during probing returns BUSY.
+
+The saved file is `SD_APP_ROOT/settings/apps/<installedName>--<appId>/recording.wav`; its pending file is `recording.wav.part` in the existing per-app work directory. The host chooses paths and accepts no arbitrary write path. After completing the WAV header, flushing and closing, the existing backup-and-replace transaction replaces the previous file. Empty or failed recordings preserve the previous file and normally remove the temporary file. Power loss may leave a temporary file or recovery backup and does not guarantee recovery of this take. Updates preserve data; uninstall uses existing app-private data and temporary-file cleanup without new top-level paths. The file limit is 2GiB−1 bytes; reaching it saves captured data and reports LIMIT. No general directory or multiple-recording management interface is exposed.
+
+Recording and app playback are mutually exclusive; sessions still releasing hardware return BUSY. Stop playback and wait for background cleanup before recording. Hardware starts on the internal-RAM Audio task. Recording and recording pause inhibit idle standby. Active standby, leaving the foreground, exit or SD quiescing stops and saves; waking never starts another recording automatically. Background cleanup retains host data only, without ELF references. System audio may preempt recording; loss of ownership fails the take and preserves the previous saved file. Write failures appear in status and host error logs.
+
+The [Recorder example](recorder/README.md) polls state in `Tick` and invokes recording/playback from `Click`. After saving, pass `status.path` as an SD relative path to `audio_play`, using `XZ_APP_AUDIO_WAV_PCM`, `loop = 0` and `offset = length = 0`. Use `audio_get_status` position and duration for progress. Playback follows system volume.
 
 ### Time: `XZ_APP_CAP_TIME`
 
@@ -182,6 +228,16 @@ Version and validate stored formats, including length and checksums when appropr
 ### Return values
 
 `XZ_APP_OK` is zero. Errors are `XZ_APP_ERR_INVALID` for arguments, `XZ_APP_ERR_NOT_READY` for unavailable resources, `XZ_APP_ERR_NOT_FOUND` for missing objects, `XZ_APP_ERR_LIMIT` for capacity, `XZ_APP_ERR_IO` for storage and the defined `XZ_APP_ERR_MEMORY` allocation code. Not all functions use these results: check null widget handles, zero timer IDs, nonnegative text/storage byte counts and 1 from `get_local_date`. Void functions have no status. Nonzero does not universally mean failure.
+
+### Gravity Maze: combined capabilities and compatibility failures
+
+[Gravity Maze](gravity_maze/README.md) checks the ABI, the boundary of `audio_get_status`, required capability bits and function pointers before querying audio formats, sources, sample rate and channels. Missing requirements return `XZ_APP_ERR_UNSUPPORTED` before callbacks or UI creation. Optional features may degrade gracefully, but apps must never read an absent tail field.
+
+This host preserves the ELF entry result: zero means successful initialization; `XZ_APP_ERR_UNSUPPORTED` displays an incompatibility message with firmware upgrade guidance. Other nonzero results display a startup failure and compatibility guidance. Failure cancels registered timers, acceleration, audio, vibration, keep-awake ownership and Back callbacks, runs exit cleanup and deletes partially created widgets, leaving an error page that supports returning. Unsupported relocations or imports also leave an error page without executing the entry.
+
+Future extensions append fields and capability bits and follow the same check order. Store target, firmware version and ABI filtering cannot replace runtime checks; the current Store manifest has no per-capability requirements negotiation. This handling relies on apps returning failures as specified. Native ELF apps share the firmware address space; arbitrary invalid pointers, out-of-bounds accesses and entries that never return are not isolated.
+
+In this sample, `DrawMaze` combines drawing commands, `Tick` reads acceleration and uses `foreground_ms` for game timing, and `Back` handles in-app navigation. Screen changes request a white wipe; completion feedback calls `vibrate(..., 500)`. `MusicStart` loops five Ogg/Opus regions using offsets generated with the resources by `build_content.py`. Pause/resume retains the audio session, and returning from Settings preserves playback position. Private storage saves language, music preferences, scores and completion times. The host manages exit and standby lifecycles for resources, sampling and audio. Refer to each capability section above for parameters and limits.
 
 ## 6. Icons and content assets
 

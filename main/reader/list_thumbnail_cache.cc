@@ -39,9 +39,9 @@ static size_t TrimListThumbnails() {
 }
 
 bool CanPrefetchListThumbnail(size_t pixels) {
+    // 连续空间由实际分配结果判断，避免整堆遍历阻塞扫描中断。
     const size_t free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     return pixels && pixels <= kCapacity && free > kReserve && pixels <= (free - kReserve) / 2 &&
-           heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) >= pixels &&
            heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) >= 50 * 1024;
 }
 

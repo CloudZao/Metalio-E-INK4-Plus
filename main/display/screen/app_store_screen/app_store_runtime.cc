@@ -6,11 +6,14 @@
 #include "assets/lang_config.h"
 #include "assets/lang_app_store.h"
 #include "fontpack_lvgl.h"
+#include "haptic_feedback.h"
 #include "screen_common.h"
+#include "standby_screen/standby_screen.h"
 #include "vk_key_handler.h"
 #include <memory>
 #include <new>
 #include <ctime>
+#include <cstring>
 #include <esp_elf.h>
 #include <esp_log.h>
 #include <esp_heap_caps.h>
@@ -43,6 +46,15 @@ struct ButtonContext {
     void* context; // 应用自持回调数据
 };
 AppStore::Item s_pending;
+std::weak_ptr<Runtime> s_active_runtime;
+
+bool RuntimeKey(const char* key) {
+    if (StandbyScreen::IsResuming()) return true;
+    if (std::strcmp(key, "vk_home") != 0 && std::strcmp(key, "vk_prev") != 0) return false;
+    auto runtime = s_active_runtime.lock();
+    if (!runtime || !runtime->services.open || runtime->services.closing || !runtime->services.on_back) return false;
+    return runtime->services.on_back(runtime->services.back_context) != 0;
+}
 
 void Style(lv_obj_t* obj,int x,int y,int width,int height) {
     lv_obj_set_pos(obj,x,y);
@@ -64,7 +76,8 @@ void* Label(void* parent,int x,int y,int width,int height,const char* text) {
 void ButtonEvent(lv_event_t* e) {
     auto* data=static_cast<ButtonContext*>(lv_event_get_user_data(e));
     if(lv_event_get_code(e)==LV_EVENT_DELETE) delete data;
-    else if(lv_event_get_code(e)==LV_EVENT_CLICKED && data->callback) data->callback(data->context);
+    else if(lv_event_get_code(e)==LV_EVENT_CLICKED && data->callback &&
+            !StandbyScreen::IsActive() && !StandbyScreen::IsResuming()) data->callback(data->context);
 }
 void* Button(void* parent,int x,int y,int width,int height,const char* text,xz_app_click_t click,void* context) {
     auto* data=new(std::nothrow) ButtonContext{click,context};
@@ -81,6 +94,7 @@ void* Button(void* parent,int x,int y,int width,int height,const char* text,xz_a
     lv_label_set_text(label,text ? text : "");
     lv_obj_center(label);
     lv_obj_add_event_cb(button,ButtonEvent,LV_EVENT_ALL,data);
+    HapticAttachClick(button);
     return button;
 }
 void SetText(void* widget,const char* text) {
@@ -154,14 +168,17 @@ void Tick(lv_timer_t* timer) {
     const auto asset_size = runtime.api.asset_size;
     runtime.api={XZ_APP_ABI_VERSION,sizeof(xz_app_api_t),page->content,
         lv_obj_get_width(page->content),lv_obj_get_height(page->content),Lang::Current(),Label,Button,SetText,&runtime,asset_size,ReadAsset,WidgetStyle,WidgetEnabled,LocalDate};
-    AppRuntimeServices::Bind(runtime.services,runtime.api,page->content,runtime.item.app_id,runtime.item.installed_name);
+    AppRuntimeServices::Bind(runtime.services,runtime.api,page->content,runtime.item);
+    s_active_runtime = page->runtime;
     char* args[]={reinterpret_cast<char*>(&runtime.api),nullptr};
     const int result=esp_elf_request(&runtime.elf,0,1,args);
     if(result!=0) {
         ESP_LOGE("AppRuntime", "operation=launch stage=entry result=failed code=%d",result);
         AppRuntimeServices::Close(runtime.services);
         lv_obj_clean(page->content);
-        lv_label_set_text(page->status,Lang::Strings::STORE_RUN_ERROR);
+        s_active_runtime.reset();
+        lv_label_set_text(page->status,result == XZ_APP_ERR_UNSUPPORTED ?
+            Lang::Strings::STORE_INCOMPATIBLE : Lang::Strings::STORE_RUN_ERROR);
         return;
     }
     ESP_LOGI("AppRuntime", "operation=launch result=success");
@@ -232,6 +249,7 @@ lv_obj_t* CreateRuntime() {
     lv_obj_add_event_cb(root,Delete,LV_EVENT_DELETE,page);
     VkKeyScreenDesc keys;
     keys.factory=CreateRuntime;
+    keys.on_key=RuntimeKey;
     VkKey_AttachScreen(root,"AppRuntime",keys);
     auto* holder=new(std::nothrow) std::shared_ptr<Runtime>(page->runtime);
     // 加载器会同步 PSRAM 代码缓存，任务栈必须位于内部 RAM。

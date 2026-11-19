@@ -625,7 +625,8 @@ void ApplyLocked(Mode next)
         const bool want_pa =
             !NeedHeld(PowerNeed::PeripheralReset) &&
             !NeedHeld(PowerNeed::UiKeepNet) &&
-            ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)));
+            ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)) ||
+             (next != Mode::StandbyUi && NeedHeld(PowerNeed::LocalPlayback)));
         if (!NeedHeld(PowerNeed::UiKeepNet)) {
             power_hw_pa_set(want_pa);
         }
@@ -658,7 +659,8 @@ void ApplyLocked(Mode next)
     const bool want_pa =
         !NeedHeld(PowerNeed::PeripheralReset) &&
         !NeedHeld(PowerNeed::UiKeepNet) &&
-        ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)));
+        ((next == Mode::Full) || (next == Mode::NetActive && DeviceWantsPa(device_state)) ||
+         (next != Mode::StandbyUi && NeedHeld(PowerNeed::LocalPlayback)));
     QueueCpuMhzLocked(want_mhz);
 
     if (!NeedHeld(PowerNeed::UiKeepNet)) {

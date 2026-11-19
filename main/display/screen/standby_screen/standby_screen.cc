@@ -16,6 +16,7 @@
 #include "cloud_screen/cloud_screen.h"
 #include "bq27220_gauge.h"
 #include "display_orient.h"
+#include "epd_refresh.h"
 #include "lv_adapter_display.h"
 #include "wallpaper_frame.h"
 #include "power_policy.h"
@@ -30,6 +31,7 @@
 
 #include <atomic>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <lvgl.h>
@@ -41,6 +43,13 @@ static constexpr const char* kScreenId = "standby";
 enum class StandbyVariant : uint8_t { None = 0, Classic = 1, Wallpaper = 2 };
 
 static std::atomic<bool> s_host_alive{false};
+static uint64_t s_standby_started_ms = 0;
+static uint64_t s_standby_duration_ms = 0;
+static std::atomic<bool> s_resume_pending {false};
+static uint64_t s_resume_started_ms = 0;
+static uint32_t s_resume_after = 0;
+static uint32_t s_resume_sequence = 0;
+static lv_obj_t* s_resume_screen = nullptr;
 static bool s_as_overlay = false;
 static lv_obj_t* s_overlay_root = nullptr;
 static lv_obj_t* s_underlying_scr = nullptr;
@@ -50,6 +59,22 @@ static std::atomic<uint32_t> s_paint_flushed{0};
 static SemaphoreHandle_t s_park_done = nullptr;
 static std::atomic<bool> s_park_ok{false};
 static std::atomic<unsigned> s_wake_request{0};
+
+static void SetStandbyActive(bool active) {
+    if (s_host_alive.load() == active) return;
+    const uint64_t now = static_cast<uint64_t>(esp_timer_get_time() / 1000);
+    if (active) s_standby_started_ms = now;
+    else s_standby_duration_ms += now - s_standby_started_ms;
+    s_host_alive = active;
+}
+
+static void FinishResumeTiming() {
+    if (s_resume_pending.exchange(false)) {
+        s_standby_duration_ms += static_cast<uint64_t>(esp_timer_get_time() / 1000) - s_resume_started_ms;
+    }
+    s_resume_sequence = 0;
+    s_resume_screen = nullptr;
+}
 
 static void EnsureStandbyPortrait() {
     DisplayUiSetFullScreen(true);
@@ -97,7 +122,7 @@ static void TeardownHostState() {
     TeardownVariant();
     WallpaperFrame_Clear();
     DisplayUiSetFullScreen(false);
-    s_host_alive = false;
+    SetStandbyActive(false);
     s_as_overlay = false;
     s_overlay_root = nullptr;
     s_underlying_scr = nullptr;
@@ -127,7 +152,8 @@ lv_obj_t* StandbyScreen::Create() {
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_CLICKABLE);
     ClearStatusBindings();
     s_as_overlay = false;
-    s_host_alive = true;
+    SetStandbyActive(true);
+    FinishResumeTiming();
     MountVariant(scr, false);
     lv_obj_add_event_cb(scr, OnScreenUnloaded, LV_EVENT_SCREEN_UNLOADED, nullptr);
     VkKey_AttachScreen(scr, kScreenId,
@@ -167,7 +193,8 @@ void StandbyScreen::Show() {
     s_underlying_scr = under;
     s_overlay_root = overlay;
     s_as_overlay = true;
-    s_host_alive = true;
+    SetStandbyActive(true);
+    FinishResumeTiming();
     s_paint_token.fetch_add(1, std::memory_order_relaxed);
     s_paint_flushed.store(0, std::memory_order_relaxed);
 
@@ -203,6 +230,9 @@ void StandbyScreen::Dismiss() {
     if (!s_host_alive) {
         return;
     }
+    s_resume_after = EpdGetStats().submitted;
+    s_resume_sequence = 0;
+    s_resume_screen = nullptr;
     ExitEpdSleep();
     sd_access::Resume();
     SdLogWriter_OnSdMounted();
@@ -215,7 +245,9 @@ void StandbyScreen::Dismiss() {
 
     lv_obj_t* overlay = s_overlay_root;
     s_overlay_root = nullptr;
-    s_host_alive = false;
+    s_resume_started_ms = static_cast<uint64_t>(esp_timer_get_time() / 1000);
+    s_resume_pending.store(true);
+    SetStandbyActive(false);
 
     if (overlay != nullptr) {
         lv_obj_remove_event_cb(overlay, OnOverlayDeleted);
@@ -232,10 +264,6 @@ void StandbyScreen::Dismiss() {
     DisplayUiSetFullScreen(false);
     SettingsTestMarginScreen::SetStandby(false);
     PowerPolicy::GetInstance().OnStandbyOverlayDismissed();
-    BlePageTurner::SetStandby(false);
-    AssistantScreen::SetStandby(false);
-    AppStoreScreen::SetStandby(false);
-    WorkBuddyScreen::SetStandby(false);
 
     // 清除待机前电量，待唤醒负载稳定 3s 后重新校准。
     Bq27220Gauge::GetInstance().ResetFilter();
@@ -243,15 +271,8 @@ void StandbyScreen::Dismiss() {
         disp->UpdateStatusBar(true);
     }
 
-    if (TaskScreen::IsActive()) {
-        TaskScreen::OnResumeFromStandby();
-    }
     BookScreen::OnResumeFromStandby();
     SettingsScreen_OnResumeFromStandby();
-    SettingsTestBatteryScreen_ResumeFromStandby();
-    if (auto* disp = LVAdapterDisplay::Instance()) {
-        disp->ResumeStandbyBackgroundWork();
-    }
     // 勿在此 FullRefresh：会堵 LVGL 数秒，浅醒后侧键同步易把仍按下的电源当成已满长按→关机图
     // 底层下一帧落墨后再开前光（见 RequestRestoreFrontlightAfterCommit）
     if (auto* disp = LVAdapterDisplay::Instance()) {
@@ -260,12 +281,54 @@ void StandbyScreen::Dismiss() {
             lv_obj_invalidate(lv_screen_active());
         }
     }
+}
+
+bool StandbyScreen::IsResuming() {
+    return s_resume_pending.load();
+}
+
+void StandbyScreen::PollResume() {
+    if (!s_resume_pending.load() || s_host_alive.load() || !s_resume_sequence) return;
+    const auto stats = EpdGetStats();
+    if (s_resume_screen != lv_screen_active()) {
+        s_resume_after = stats.submitted;
+        s_resume_sequence = 0;
+        if (auto* disp = LVAdapterDisplay::Instance()) disp->RequestFullOnNextCommit();
+        if (lv_screen_active()) lv_obj_invalidate(lv_screen_active());
+        return;
+    }
+    if (static_cast<int32_t>(stats.completed - s_resume_sequence) < 0) return;
+    if (!EpdWait(s_resume_sequence, 0)) {
+        ESP_LOGW(TAG, "wake target refresh failed code=%d; retry before resuming business", stats.last_error);
+        s_resume_after = stats.submitted;
+        s_resume_sequence = 0;
+        if (auto* disp = LVAdapterDisplay::Instance()) disp->RequestFullOnNextCommit();
+        if (lv_screen_active()) lv_obj_invalidate(lv_screen_active());
+        return;
+    }
+    FinishResumeTiming();
+    ESP_LOGI(TAG, "wake target shown; resuming foreground business");
+    BlePageTurner::SetStandby(false);
+    AssistantScreen::SetStandby(false);
+    AppStoreScreen::SetStandby(false);
+    WorkBuddyScreen::SetStandby(false);
+    if (TaskScreen::IsActive()) TaskScreen::OnResumeFromStandby();
+    SettingsTestBatteryScreen_ResumeFromStandby();
+    if (auto* disp = LVAdapterDisplay::Instance()) disp->ResumeStandbyBackgroundWork();
     WallpaperScreen::SetDecodePaused(false);
     CloudScreen::ReloadApAfterStandby();
 }
 
 bool StandbyScreen::IsActive() {
     return s_host_alive;
+}
+
+uint64_t StandbyScreen::TotalDurationMs() {
+    const uint64_t current = s_host_alive.load() ?
+        static_cast<uint64_t>(esp_timer_get_time() / 1000) - s_standby_started_ms : 0;
+    const uint64_t resuming = s_resume_pending.load() ?
+        static_cast<uint64_t>(esp_timer_get_time() / 1000) - s_resume_started_ms : 0;
+    return s_standby_duration_ms + current + resuming;
 }
 
 void StandbyScreen::RequestWake(bool assistant) {
@@ -295,6 +358,13 @@ bool StandbyScreen::IsPaintReady() {
 }
 
 void StandbyScreen::NotifyFlushCompleted() {
+    if (s_resume_pending.load() && !s_resume_sequence) {
+        const auto stats = EpdGetStats();
+        if (static_cast<int32_t>(stats.submitted - s_resume_after) > 0) {
+            s_resume_sequence = stats.submitted;
+            s_resume_screen = lv_screen_active();
+        }
+    }
     if (!s_host_alive) {
         return;
     }

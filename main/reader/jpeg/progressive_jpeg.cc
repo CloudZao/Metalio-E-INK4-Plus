@@ -261,8 +261,7 @@ bool DecodeProgressiveJpeg(const uint8_t* data, size_t len, int max_w, int max_h
         // 沿用 RasterImage 的 L8 容器；拒绝大块像素落入内部 RAM。
         const size_t bytes = static_cast<size_t>(w) * h;
         const size_t psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        ok = bytes <= ctx.limit - ctx.used && psram >= kPsramReserve && bytes <= psram - kPsramReserve &&
-            bytes <= heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        ok = bytes <= ctx.limit - ctx.used && psram >= kPsramReserve && bytes <= psram - kPsramReserve;
         if (!ok) ctx.no_memory = true;
         if (ok) {
             try {

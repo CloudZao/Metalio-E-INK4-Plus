@@ -173,11 +173,11 @@ Key scanning resumes only after input configuration and baseline sampling succee
 退出请求由待机线程收尾，即使请求发生在等待 SD 或刷屏之前，也走同一恢复流程：
 
 1. 待机线程先恢复外围电源与屏幕总线，失败时重试。板级恢复直接接通 P5，等待 `POWER_RAIL_SETTLE_MS` 指定的电源稳定时间后恢复总线；保留 P14 状态。成功后更新蜂窝板恢复状态，前光保持关闭；这不代表音频模式或联网已就绪。随后调用 `power_hw_sd_restore()` 尝试恢复 SD，并按当前网络板型请求蜂窝异步恢复；清除已消费的电源键点击，再向优先 UI 队列投递 `FinishWake()`。此处未按 SD 恢复返回值阻止退出，挂载失败时仍继续处理退出请求，业务访问受实际挂载状态约束。不会因主应用循环正在等网络而丢弃退出请求。
-2. `StandbyScreen::Dismiss()` 解除显示提交冻结、准备前光亮度恢复，执行 `sd_access::Resume()` 重新开放普通 SD 访问，并恢复 SD 日志生产；随后移除待机变体、定时器和 Overlay。显示任务在退出回调完成资源恢复后再绘制底层页面。
-3. `OnStandbyOverlayDismissed()` 清理待机请求和累计时间，刷新用户活动时间并重新评估档位。网络恢复由新的需求驱动，不保证返回首页就立即联网；手动关闭 Wi-Fi 的设置优先。
-4. 仍保留在底层的助手或 WorkBuddy 页面重新申请前台保网需求并恢复会话/授权检查，不自动录音，也不重发已受理请求。旧代后台结果不能访问已作废的控件或覆盖新会话。
-5. 重置电量滤波，等待唤醒负载稳定后重新采样；恢复清单、阅读、字体/书籍句柄、必要的书库预热、设置前光控件、电池测试轮询和触控采样。阅读恢复须等待先前工作真正结束。
-6. 请求恢复底层页面画面并登记前光恢复标记，随后解除壁纸解码暂停，并由传输页按需重新建立 AP；这些软件恢复不等待物理刷新。**前光由刷新任务在对应画面物理提交完成后恢复**，并非在 `Dismiss()` 中同步点亮。
+2. `StandbyScreen::Dismiss()` 解除显示冻结并恢复普通 SD 接纳，移除待机 Overlay，先恢复绘制原页面所需的资源与控件。此时进入 `IsResuming()` 阶段，Overlay 关闭不代表前台业务已经恢复。
+3. `OnStandbyOverlayDismissed()` 清理电源层待机请求和累计时间，刷新用户活动时间并重新评估档位。网络恢复由新的需求驱动，手动关闭 Wi-Fi 的设置优先。
+4. 唤醒页面的 LVGL 末包提交后，记录目标 EPD 序号。UI 节拍中的 `PollResume()` 非阻塞检查该序号是否完成并成功；目标屏幕改变时重新等待新页面，刷新失败时重试，不能以固定延时或仅提交成功作为完成条件。前光仍由刷新任务在关联画面物理提交成功后恢复。
+5. 目标画面成功显示后，才恢复助手、WorkBuddy 和应用商店的会话/授权检查、清单任务、电池测试轮询、触控、壁纸解码与按需 AP。ELF 托管定时回调、采样、音乐和按钮业务在此之前保持暂停；前台计时扣除待机及唤醒刷新时间。普通唤醒不自动录音；BOOT 长按进入助手时仍按实际按住状态处理。
+6. 阅读恢复先等待旧工作结束并恢复绘图所需字体、书籍句柄与页面状态；电量滤波在恢复阶段重置。旧代后台结果不能访问已作废的控件或覆盖新会话。
 
 ## 当前限制与失败保护
 
@@ -196,10 +196,10 @@ Key scanning resumes only after input configuration and baseline sampling succee
 |---|---|
 | `Full` | 电话或蓝牙音频需求：运行频率、PA；这些需求优先于普通无操作待机。 |
 | `NetActive` | 硬网络需求、前台软保网、配网/激活或断网暂留：运行频率并按需保网。Connecting/Listening 不拉 PA，Speaking/AudioTesting 可开 PA。 |
-| `AppIdle` | Idle 且无保网需求、暂留已满：关 PA、暂停 STA，CPU 使用设置的空闲频率。共享电源这里只改策略状态。 |
+| `AppIdle` | Idle 且无保网需求、暂留已满：无本地播放需求时关 PA、暂停 STA，CPU 使用设置的空闲频率。共享电源这里只改策略状态。 |
 | `StandbyUi` | 无操作达到阈值或请求待机：显示 Overlay，执行上述收尾及浅睡眠流程。 |
 
-`PeripheralReset` 抑制 PA；`UiKeepNet` 持有时策略不改 PA。`ForegroundNetwork` 只软保网，不刷新无操作时间、不影响 PA、不阻止自动待机。实际录音、OTA/下载、Connecting/Listening/Speaking/Upgrading 等硬需求阻止自动待机；`UsbVirtualDisk`、`StandbyInhibit` 只禁止无操作待机，不额外强占网络或开启 PA。硬需求、USB 占用或禁待机需求释放后会刷新无操作时间，避免立即进入待机。
+`LocalPlayback` 保持功放但不要求联网；本地播放会话另持有 `StandbyInhibit`，暂停或停止后释放。`PeripheralReset` 抑制 PA；`UiKeepNet` 持有时策略不改 PA。`ForegroundNetwork` 只软保网，不刷新无操作时间、不影响 PA、不阻止自动待机。实际录音、OTA/下载、Connecting/Listening/Speaking/Upgrading 等硬需求阻止自动待机；`UsbVirtualDisk`、`StandbyInhibit` 只禁止无操作待机，不额外强占网络或开启 PA。硬需求、USB 占用或禁待机需求释放后会刷新无操作时间，避免立即进入待机。
 
 入口：设置 → 功耗。无操作进入待机固定为 5 分钟，待机累计自动关机固定为 30 分钟；界面仅显示时间说明，旧 NVS 时长不再读取。空闲频率和断网暂留仍可选择，修改经内部 RAM 栈任务异步保存至 NVS `power` 命名空间。
 

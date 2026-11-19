@@ -24,7 +24,8 @@ public:
     virtual void EnableInput(bool enable);
     virtual void EnableOutput(bool enable);
 
-    virtual void OutputData(std::vector<int16_t>& data);
+    /** @brief 输出 PCM 数据，完整写入时返回 true */
+    virtual bool OutputData(std::vector<int16_t>& data);
     virtual bool InputData(std::vector<int16_t>& data);
     virtual void Start();
     /** @brief 查询硬件是否就绪，支持派生类按需管理 DMA 生命周期 */

@@ -70,6 +70,9 @@ public:
     // AT+CSQ：0–31 有效，99/-1 未知；modem 未就绪时返回 99。
     int GetSignalStrength();
 
+    // 读取开机联网已缓存的 ICCID，不发 AT；未就绪或未缓存时返回空。
+    std::string GetIccid();
+
     /**
      * P14 掉电前调用（供电仍在）：干净 Stop + 释放 modem，避免掉电后
      * 软件仍以为已初始化、或 UART/DMA 任务空转。

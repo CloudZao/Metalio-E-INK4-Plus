@@ -1,5 +1,8 @@
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <esp_log.h>
 #include "settings_frontlight_tab.h"
-
 #include "assets/lang_config.h"
 #include "assets/lang_screen.h"
 #include "application.h"
@@ -11,11 +14,6 @@
 #include "settings.h"
 #include "settings_common.h"
 
-#include <algorithm>
-#include <cstdio>
-#include <cstring>
-#include <esp_log.h>
-
 namespace {
 
 struct SettingsFrontlightUi {
@@ -24,7 +22,11 @@ struct SettingsFrontlightUi {
     lv_obj_t* brightness_label = nullptr; // 目标亮度
     lv_obj_t* profiles[3] = {}; // 刷新模式选项
     lv_obj_t* refresh_hint = nullptr; // 刷新模式说明
-    lv_obj_t* depth_label = nullptr; // BH 校准值
+    lv_obj_t* depth_label = nullptr; // 蓝牙芯片校准值或备用档位标题
+    lv_obj_t* depth_row = nullptr; // 无有效蓝牙芯片校准记录时的档位行
+    lv_obj_t* depths[3] = {}; // 原黑色深度选项
+    lv_obj_t* depth_hint = nullptr; // 非默认档位的风险提示
+    int depth_selected = -1; // 已绘制档位，避免轮询时重复设置样式
     lv_timer_t* depth_timer = nullptr; // 页面存活期间更新校准值
 };
 
@@ -49,15 +51,39 @@ static void SaveFrontlight() {
 }
 
 static void RefreshDepth() {
-    if (s_ui.depth_label) {
-        const auto state = PanelVcomGetState();
-        char text[96];
-        if (state.ok && state.vcom_mv) snprintf(text, sizeof(text), "%s：%dmv",
-            Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_TITLE, state.vcom_mv);
-        else snprintf(text, sizeof(text), "%s：%s", Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_TITLE,
-            Lang::Strings::SETTINGS_VCOM_UNKNOWN);
-        if (strcmp(lv_label_get_text(s_ui.depth_label), text)) lv_label_set_text(s_ui.depth_label, text);
+    if (!s_ui.depth_label) return;
+    const auto state = PanelVcomGetState();
+    const bool calibrated = state.vcom_mv != 0;
+    const bool fallback = !calibrated && state.revision != 0;
+    char text[128];
+    if (calibrated) {
+        std::snprintf(text, sizeof(text), "%s：%dmv", Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_TITLE, state.vcom_mv);
+    } else if (fallback) {
+        std::snprintf(text, sizeof(text), "%s", Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_TITLE);
+    } else {
+        std::snprintf(text, sizeof(text), "%s：%s", Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_TITLE,
+                      Lang::Strings::SETTINGS_TEST_SIGNAL_READING);
     }
+    if (std::strcmp(lv_label_get_text(s_ui.depth_label), text)) lv_label_set_text(s_ui.depth_label, text);
+    if (fallback) lv_obj_clear_flag(s_ui.depth_row, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(s_ui.depth_row, LV_OBJ_FLAG_HIDDEN);
+    const int depth = static_cast<int>(EpdGetBlackDepth());
+    if (s_ui.depth_selected != depth) {
+        for (int i = 0; i < 3; ++i) {
+            SettingsStyleSelectable(s_ui.depths[i], lv_obj_get_child(s_ui.depths[i], 0), depth == i);
+        }
+        s_ui.depth_selected = depth;
+    }
+    if (fallback && depth != 0) lv_obj_clear_flag(s_ui.depth_hint, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(s_ui.depth_hint, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void OnDepthClicked(lv_event_t* event) {
+    const auto depth = static_cast<EpdBlackDepth>(reinterpret_cast<intptr_t>(lv_event_get_user_data(event)));
+    if (!EpdSetBlackDepth(depth) && !PanelVcomGetState().vcom_mv) {
+        ESP_LOGE("SettingsFl", "black depth change rejected level=%d", static_cast<int>(depth));
+    }
+    RefreshDepth();
 }
 
 static void RefreshOptions() {
@@ -189,6 +215,20 @@ void SettingsFrontlightTab_Build(lv_obj_t* page) {
     lv_label_set_long_mode(s_ui.depth_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_ui.depth_label,fontpack_lv_font_ui(),0);
     lv_obj_set_style_text_color(s_ui.depth_label,lv_color_black(),0);
+    s_ui.depth_row = OptionRow(page);
+    const char* depth_names[] = {Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_DEFAULT,
+        Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_MEDIUM, Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_STRONG};
+    for (int i = 0; i < 3; ++i) {
+        s_ui.depths[i] = SettingsCreateSelectableOption(s_ui.depth_row, depth_names[i], OnDepthClicked, i);
+        FitRowButton(s_ui.depths[i]);
+    }
+    s_ui.depth_hint = lv_label_create(page);
+    lv_label_set_text(s_ui.depth_hint, Lang::Strings::SETTINGS_SCREEN_BLACK_DEPTH_HINT);
+    lv_obj_set_width(s_ui.depth_hint, lv_pct(100));
+    lv_label_set_long_mode(s_ui.depth_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(s_ui.depth_hint, fontpack_lv_font_ui(), 0);
+    lv_obj_set_style_text_color(s_ui.depth_hint, lv_color_black(), 0);
+    lv_obj_clear_flag(s_ui.depth_hint, LV_OBJ_FLAG_CLICKABLE);
     s_ui.depth_timer=lv_timer_create([](lv_timer_t*) { RefreshDepth(); }, 500, nullptr);
     lv_obj_add_event_cb(s_ui.depth_label, [](lv_event_t*) {
         if (s_ui.depth_timer) lv_timer_delete(s_ui.depth_timer);

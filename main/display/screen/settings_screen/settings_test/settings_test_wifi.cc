@@ -1,24 +1,9 @@
-#include "assets/lang_cellular.h"
-#include "settings_test_wifi.h"
-
-#include "settings_test_common.h"
-
-#include "assets/lang_config.h"
-#include "fontpack_lvgl.h"
-#include "haptic_feedback.h"
-#include "screen_common.h"
-#include "settings_common.h"
-
-#include <wifi_scan_lease.h>
-#include <wifi_station.h>
-
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <new>
 #include <vector>
-
 #include <esp_event.h>
 #include <esp_log.h>
 #include <esp_netif.h>
@@ -27,6 +12,16 @@
 #include <freertos/event_groups.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <wifi_scan_lease.h>
+#include <wifi_station.h>
+#include "assets/lang_cellular.h"
+#include "settings_test_wifi.h"
+#include "settings_test_common.h"
+#include "assets/lang_config.h"
+#include "fontpack_lvgl.h"
+#include "haptic_feedback.h"
+#include "screen_common.h"
+#include "settings_common.h"
 
 namespace settings_test_wifi_detail {
 
@@ -252,14 +247,15 @@ void WifiTeardownIfOwned() {
 }
 
 void CloseWifiPopup() {
-    if (SettingsTest_Ui().wifi_mask != nullptr) {
-        lv_obj_delete(SettingsTest_Ui().wifi_mask);
-    }
+    auto* mask = SettingsTest_Ui().wifi_mask;
     SettingsTest_Ui().wifi_mask = nullptr;
     SettingsTest_Ui().wifi_status = nullptr;
     SettingsTest_Ui().wifi_list = nullptr;
     SettingsTest_Ui().wifi_page_lbl = nullptr;
     SettingsTest_Ui().wifi_rescan_btn = nullptr;
+    if (mask != nullptr) {
+        lv_obj_delete(mask);
+    }
 }
 
 void SetWifiRescanEnabled(bool enabled) {
@@ -408,6 +404,14 @@ void OpenWifiPopup() {
 
     lv_obj_t* mask = lv_obj_create(SettingsTest_Ui().root_scr);
     SettingsTest_Ui().wifi_mask = mask;
+    lv_obj_add_event_cb(mask, [](lv_event_t* e) {
+        if (lv_event_get_target(e) != SettingsTest_Ui().wifi_mask) {
+            return;
+        }
+        // 父页面销毁时只失效引用，由 LVGL 继续删除弹窗及其子控件。
+        SettingsTest_Ui().wifi_mask = nullptr;
+        CloseWifiPopup();
+    }, LV_EVENT_DELETE, nullptr);
     lv_obj_remove_style_all(mask);
     lv_obj_set_size(mask, LV_HOR_RES, LV_VER_RES);
     lv_obj_set_pos(mask, 0, 0);

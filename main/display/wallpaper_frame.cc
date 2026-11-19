@@ -1,26 +1,17 @@
-#include "wallpaper_frame.h"
-#include "display_orient.h"
-#include "epd_refresh.h"
-#include "epdiy.h"
-#include "image_tone.h"
-#include "reader_types.h"
-
 #include <cstring>
 #include <memory>
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include "wallpaper_frame.h"
+#include "epd_refresh.h"
+#include "epdiy.h"
+#include "image_tone.h"
+#include "reader_types.h"
 
-namespace {
-std::unique_ptr<uint8_t, decltype(&heap_caps_free)> s_base(nullptr, heap_caps_free);
-lv_point_t s_size{};
-struct NativePoint {
-    int x = 0; // 面板列坐标
-    int y = 0; // 面板行坐标
-};
-NativePoint s_origin{}, s_step_x{}, s_step_y{};
-size_t FrameBytes() { return size_t(epd_width() / 2) * epd_height(); }
-}
+static std::unique_ptr<uint8_t, decltype(&heap_caps_free)> s_base(nullptr, heap_caps_free);
+static lv_point_t s_size{};
+static size_t FrameBytes() { return size_t(epd_width() / 2) * epd_height(); }
 
 bool WallpaperFrame_Capture() {
     if (s_base) return true;
@@ -29,18 +20,8 @@ bool WallpaperFrame_Capture() {
     s_base.reset(static_cast<uint8_t*>(heap_caps_malloc(FrameBytes(), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
     if (!s_base) return false;
     std::memcpy(s_base.get(), frame, FrameBytes());
-    DisplayUiLogicalToPanel(0, 0, &s_origin.x, &s_origin.y);
-    DisplayUiLogicalToPanel(1, 0, &s_step_x.x, &s_step_x.y);
-    DisplayUiLogicalToPanel(0, 1, &s_step_y.x, &s_step_y.y);
-    s_step_x.x -= s_origin.x;
-    s_step_x.y -= s_origin.y;
-    s_step_y.x -= s_origin.x;
-    s_step_y.y -= s_origin.y;
-    // 叠图与全屏壁纸使用相同面板边界，保留原界面方向而不触发 LVGL 重排。
-    s_size = {s_step_x.x ? epd_width() : epd_height(),
-              s_step_y.x ? epd_width() : epd_height()};
-    s_origin.x = (s_step_x.x < 0 || s_step_y.x < 0) ? epd_width() - 1 : 0;
-    s_origin.y = (s_step_x.y < 0 || s_step_y.y < 0) ? epd_height() - 1 : 0;
+    // 底图保持原始帧，壁纸统一使用完整竖屏范围，不改变当前界面方向。
+    s_size = {epd_height(), epd_width()};
     return true;
 }
 
@@ -66,8 +47,8 @@ bool WallpaperFrame_Draw(const reader::RasterImage& image, const std::vector<uin
             const size_t index = size_t(y) * image.width + x;
             const unsigned opacity = alpha.empty() ? 255 : alpha[index];
             if (opacity == 0) continue;
-            const int px = s_origin.x + (left + x) * s_step_x.x + (top + y) * s_step_y.x;
-            const int py = s_origin.y + (left + x) * s_step_x.y + (top + y) * s_step_y.y;
+            const int px = top + y;
+            const int py = epd_height() - 1 - (left + x);
             if (px < 0 || py < 0 || px >= epd_width() || py >= epd_height()) return false;
             uint8_t& pair = frame[size_t(py) * stride + px / 2];
             const int shift = (px & 1) * 4;

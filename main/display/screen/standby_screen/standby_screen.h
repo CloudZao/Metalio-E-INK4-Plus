@@ -16,6 +16,15 @@ public:
 
     /** @brief Overlay 是否处于显示状态 */
     static bool IsActive();
+
+    /** @brief Overlay 已关闭但唤醒目标画面尚未完成物理刷新 */
+    static bool IsResuming();
+
+    /** @brief 在 UI 节拍检查唤醒目标帧，成功显示后恢复前台业务，不阻塞 UI */
+    static void PollResume();
+
+    /** @brief 获取本次启动累计待机界面时长，包含当前待机及唤醒目标画面刷新；仅在 UI 线程调用 */
+    static uint64_t TotalDurationMs();
     // Requests survive a blocking panel refresh; LP restores hardware before FinishWake.
     static void RequestWake(bool assistant = false);
     static bool HasWakeRequest();

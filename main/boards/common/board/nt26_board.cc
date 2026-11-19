@@ -405,7 +405,7 @@ std::string Nt26Board::GetBoardJson() {
         cJSON_AddStringToObject(root, "carrier", modem->GetCarrierName().c_str());
         cJSON_AddStringToObject(root, "csq", std::to_string(GetSignalStrength()).c_str());
         cJSON_AddStringToObject(root, "imei", modem->GetImei().c_str());
-        cJSON_AddStringToObject(root, "iccid", modem->GetIccid().c_str());
+        cJSON_AddStringToObject(root, "iccid", modem->CachedIccid().c_str());
         const auto cell = modem->GetCellInfo();
         auto* registration = cJSON_AddObjectToObject(root, "cereg");
         cJSON_AddNumberToObject(registration, "stat", cell.stat);
@@ -438,6 +438,16 @@ int Nt26Board::GetSignalStrength() {
     cached_csq_.store(csq, std::memory_order_relaxed);
     signal_sample_us_.store(esp_timer_get_time());
     return csq;
+}
+
+std::string Nt26Board::GetIccid() {
+    std::shared_ptr<UartEthModem> modem;
+    {
+        std::lock_guard<std::mutex> lock(lifecycle_mu_);
+        modem = modem_;
+    }
+    if (!modem || !powered_.load()) return {};
+    return modem->CachedIccid();
 }
 
 esp_err_t Nt26Board::SendAtCommand(const std::string& cmd, std::string& response,

@@ -1,5 +1,9 @@
+#include <atomic>
+#include <esp_log.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "settings_test_audio.h"
-
 #include "application.h"
 #include "assets/lang_config.h"
 #include "audio_service.h"
@@ -12,13 +16,6 @@
 #include "settings_common.h"
 #include "ui_scale.h"
 
-#include <atomic>
-
-#include <esp_log.h>
-#include <esp_timer.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-
 namespace {
 
 constexpr const char* kTag = "SettingsTestAudio";
@@ -27,7 +24,7 @@ constexpr const char* kIconFail = "A:ic_app_test_fail.spng";
 constexpr uint32_t kMaxRecordMs = 5000;
 constexpr uint32_t kPlaybackMarginMs = 500;
 constexpr uint32_t kConfirmDelayMs = 1000;
-constexpr lv_coord_t kRowH = UiSy(56);
+constexpr lv_coord_t kRowH = UiSy(44);
 constexpr lv_coord_t kIconSz = UiSx(28);
 
 enum class State {

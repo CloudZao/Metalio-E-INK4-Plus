@@ -28,7 +28,7 @@ Store work files live in `metalio/e-ink/temp/app_store/<app-name>--<appId>/`. Na
 - `download.part.json.cloud-backup`: checkpoint replacement backup, restored or cleaned when downloading again.
 - `manifest.json.part`: installation manifest awaiting commit.
 
-Failure, cancellation and leaving the page retain resumable data. Retrying verifies complete blocks again. Successful installation or app removal cleans these work files and the empty directory, leaving unknown files untouched. Work directories can be deleted manually while no installation is active; subsequent installation downloads the data again.
+Failure, cancellation and leaving the page retain resumable data. Retrying verifies complete blocks again. Successful installation or app removal cleans these work files and the empty directory, leaving unknown files untouched. Delete work directories manually only when no installation is active and the related app is not recording or writing data. Removing download staging files requires downloading the data again.
 
 `manifest.json.cloud-backup` provides manifest recovery. During an update, the previous ELF is retained as `<old-sha256>.elf` until the new manifest commits. Failure or cancellation before commit restores the previous version and retains the new package for resuming. Recovery after a power interruption uses the manifest digest to select the matching ELF rather than relying only on file size. Private state and recovery backups live in `metalio/e-ink/settings/apps/<app-name>--<appId>/`, with write staging files in the Store work directory. Updates retain persistent state. Uninstall deletes the app's state, recovery backups and write staging files, so reinstalling starts with fresh state. State cleanup failure reports a storage error and retains the installation manifest so removal can be retried. File formats and read, write, recovery and cleanup rules are documented in the [private storage interface](../tools/elf_app/DEVELOPMENT.md#private-storage-xz_app_cap_storage).
 
@@ -40,9 +40,18 @@ Icons are uploaded, verified and updated with the ELF and shared by home, Store 
 
 App entry, compatibility checks, coding rules, builds, publishing, resources and runtime limits are maintained in [ELF app developer guide](../tools/elf_app/DEVELOPMENT.md). [app_api.h](../main/app_store/app_api.h) is authoritative for signatures.
 
-### Foundation services
+### Available capabilities
 
-See [capability interfaces](../tools/elf_app/DEVELOPMENT.md#5-capability-interfaces) for time, timers, private storage, widgets, keyboard, exit callbacks, notifications and keep-awake, including results and limits.
+- UI and interaction: text, buttons, containers, inputs, the system keyboard, progress bars and monochrome geometric drawing, with in-app Back and white-wipe transitions.
+- Time and data: local time, monotonic timing, accumulated foreground time, hosted timers and app-private storage.
+- Device feedback: three-axis acceleration, timed vibration and button haptics that follow system settings. Gyroscope angular velocity is not exposed.
+- Audio playback: embedded ELF resources or SD files containing Ogg/Opus or PCM WAV, with looping, pause, resume, stop and progress queries. Volume follows the system.
+- Recording and playback: a single recording slot with start, pause, resume, stop/save and status queries. Files use 16kHz mono 16-bit PCM WAV and can be played through the audio interface. A new recording replaces the previous file only after saving succeeds; failed or empty takes preserve it.
+- Lifecycle: exit cleanup, notifications, idle-standby inhibition and foreground resource management. App business resumes after the wake target frame physically succeeds. Active standby or leaving the foreground stops and saves recording without automatically starting another take.
+
+Playback output is fixed to 16kHz mono 16-bit PCM. Recording and app playback are mutually exclusive; system audio has priority. Saved recordings share app-private data with settings and usage records, while pending files use the matching temporary directory. Updates preserve data; uninstall removes it. Parameters, paths, results and limits are maintained in [capability interfaces](../tools/elf_app/DEVELOPMENT.md#5-capability-interfaces).
+
+[Gravity Maze](../tools/elf_app/gravity_maze/README.md) demonstrates drawing, acceleration, foreground timing, vibration and looping music. [Recorder](../tools/elf_app/recorder/README.md) demonstrates single-file recording, saving and playback progress.
 
 ## Installation queue and resources
 
@@ -56,7 +65,7 @@ The Downloading filter includes active downloads, queued apps and verification. 
 
 ## App launch
 
-Launch centers the ELF icon, app name and loading message, with 16px between the icon and name and 40px between the name and message. App content appears only after the loading page has reached the display and ELF initialization succeeds. On failure, the loading page remains with an error. Apps use the full area below the status bar. The host adds no app-name heading; apps decide whether to draw their own title.
+Launch centers the ELF icon, app name and loading message, with 16px between the icon and name and 40px between the name and message. App content appears only after the loading page has reached the display and ELF initialization succeeds. On failure, the loading page remains with an error. An unsupported-capability entry result displays an incompatibility message with firmware upgrade guidance. Other nonzero entry results display a startup failure; partially created widgets and hosted resources are cleaned up. Matching ABI versions do not guarantee matching capabilities: apps must check table size, capability bits and function pointers. Native ELF apps share firmware address space; error handling does not isolate arbitrary out-of-bounds access. Apps use the full area below the status bar. The host adds no app-name heading; apps decide whether to draw their own title.
 
 ## App information
 

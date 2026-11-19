@@ -141,6 +141,7 @@ protected:
 private:
     std::atomic<bool> system_ready_pending_{false}; // 板级就绪通知，由 Tick 完成启动收尾
     bool powering_off_ = false; // UI 锁保护：关机保存期间停止接受新输入
+    bool aging_resume_pending_ = false; // 优先恢复尚未结束的老化测试
     bool boot_resume_pending_ = false; // SD 就绪后替换启动占位屏
 
     /** @brief 写 status 文案（含前缀）并缓存，供通知结束后恢复 */

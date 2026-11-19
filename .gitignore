@@ -45,6 +45,7 @@ tools/ebook/.venv/
 
 # Generated sample app packages and reading pages.
 tools/elf_app/*/*.elf
+tools/elf_app/*/manifest.json
 tools/elf_app/english_reader/content.h
 
 tools/elf_app/*/assets.bin

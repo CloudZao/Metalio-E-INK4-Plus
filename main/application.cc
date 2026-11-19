@@ -222,9 +222,63 @@ void Application::RequestAudioServiceRelease(AudioClient client) {
     xEventGroupSetBits(event_group_, MAIN_EVENT_RELEASE_AUDIO);
 }
 
+bool Application::AcquireLocalPlayback(void* owner) {
+    std::lock_guard<std::recursive_mutex> lock(audio_service_mutex_);
+    if (!owner || audio_clients_.load() || audio_running_ ||
+        GetDeviceState() != kDeviceStateIdle || !MetalioAudio_ModeReady()) return false;
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    if (!codec || codec->output_channels() != 1) return false;
+    codec->Start();
+    if (!codec->HardwareReady()) return false;
+    audio_clients_.fetch_or(static_cast<uint32_t>(AudioClient::AppPlayback));
+    local_playback_owner_.store(owner);
+    return true;
+}
+
+bool Application::AcquireLocalRecording(void* owner) {
+    std::lock_guard<std::recursive_mutex> lock(audio_service_mutex_);
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    if (!codec || codec->input_sample_rate() != 16000 ||
+        (codec->input_channels() != 1 && !(codec->input_channels() == 2 && codec->input_reference()))) return false;
+    return AcquireLocalPlayback(owner);
+}
+
+bool Application::ReadLocalRecording(void* owner, std::vector<int16_t>& pcm) {
+    std::lock_guard<std::recursive_mutex> lock(audio_service_mutex_);
+    if (!owner || local_playback_owner_.load() != owner || !MetalioAudio_ModeReady()) return false;
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    if (!codec || !codec->HardwareReady()) return false;
+    const size_t channels = codec->input_channels();
+    pcm.resize(320 * channels);
+    if (!codec->InputData(pcm)) return false;
+    if (channels == 2) {
+        for (size_t i = 0; i < 320; ++i) pcm[i] = pcm[i * 2];
+        pcm.resize(320);
+    }
+    return true;
+}
+
+bool Application::WriteLocalPlayback(void* owner, std::vector<int16_t>& pcm) {
+    std::lock_guard<std::recursive_mutex> lock(audio_service_mutex_);
+    if (!owner || local_playback_owner_.load() != owner || !MetalioAudio_ModeReady()) return false;
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    return codec && codec->HardwareReady() && codec->OutputData(pcm);
+}
+
+void Application::ReleaseLocalPlayback(void* owner) {
+    std::lock_guard<std::recursive_mutex> lock(audio_service_mutex_);
+    if (!owner || local_playback_owner_.load() != owner) return;
+    local_playback_owner_.store(nullptr);
+    audio_clients_.fetch_and(~static_cast<uint32_t>(AudioClient::AppPlayback));
+    if (auto* codec = Board::GetInstance().GetAudioCodec()) codec->ReleaseHardware();
+}
+
 void Application::EnsureAudioServiceRunning() {
     std::lock_guard<std::recursive_mutex> audio_lock(audio_service_mutex_);
-    // 与 397 一致：先等 BH 模式1（提供 I2S 时钟），再 Start codec
+    if (local_playback_owner_.exchange(nullptr)) {
+        audio_clients_.fetch_and(~static_cast<uint32_t>(AudioClient::AppPlayback));
+    }
+    // 与 397 一致：先等蓝牙芯片模式1（提供 I2S 时钟），再 Start codec
     if (!MetalioAudio_ModeReady()) {
         MetalioAudio_RequestModeInit();
         return;
@@ -261,14 +315,19 @@ void Application::EnsureAudioServiceRunning() {
     }
 }
 
-void Application::StopAudioServiceIfRunning() {
+void Application::StopAudioServiceIfRunning(bool force) {
     std::lock_guard<std::recursive_mutex> audio_lock(audio_service_mutex_);
-    if (SettingsTestAgingScreen::IsActive() ||
-        (audio_clients_ & static_cast<uint32_t>(AudioClient::AgingTest))) {
+    if (local_playback_owner_.exchange(nullptr)) {
+        audio_clients_.fetch_and(~static_cast<uint32_t>(AudioClient::AppPlayback));
+        if (auto* codec = Board::GetInstance().GetAudioCodec()) codec->ReleaseHardware();
+    }
+    if (!force && (SettingsTestAgingScreen::IsActive() ||
+        (audio_clients_ & static_cast<uint32_t>(AudioClient::AgingTest)))) {
         ESP_LOGW(TAG, "Audio stop skipped: aging test owns audio");
         return;
     }
     if (!audio_running_) {
+        if (force) audio_service_.Stop();
         return;
     }
     audio_service_.EnableWakeWordDetection(false);
@@ -2185,7 +2244,8 @@ void Application::Reboot() {
     protocol_.reset();
     protocol_ready_ = false;
     xiaozhi_voice_active_ = false;
-    StopAudioServiceIfRunning();
+    // 重启前必须退出音频任务并停止 I2S DMA，不能被老化占用保护跳过。
+    StopAudioServiceIfRunning(true);
 
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();

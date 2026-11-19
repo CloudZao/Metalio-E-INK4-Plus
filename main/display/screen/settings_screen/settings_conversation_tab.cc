@@ -422,6 +422,7 @@ void SettingsConversationTab_Build(lv_obj_t* page) {
     lv_label_set_text(cloud_title, CloudText("云服务切换", "Cloud service"));
     lv_obj_set_style_text_font(cloud_title, fontpack_lv_font_ui(), 0);
     for (int i = 0; i < chat_cloud::kProviderCount; ++i) {
+        if (static_cast<chat_cloud::Provider>(i) != chat_cloud::kDefaultProvider) continue;
         s_ui.cloud_btns[i] = SettingsCreateSelectableOption(page,
             i == 0 ? CloudText("百问AI", "Baiwen AI") :
             i == 1 ? CloudText("小智AI", "Xiaozhi AI") : CloudText("网易AI", "NetEase AI"),

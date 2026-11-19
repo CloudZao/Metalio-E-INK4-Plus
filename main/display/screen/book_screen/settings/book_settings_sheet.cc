@@ -668,6 +668,7 @@ enum SettingsPage { kSettingsHome, kSettingsRotation, kSettingsFooter, kSettings
     kSettingsWriting, kSettingsAntialias, kSettingsSpacing, kSettingsUnderline, kSettingsTurning };
 constexpr int kAdjustFont = 100;
 constexpr int kAdjustAutoTurn = 101;
+constexpr int kAdjustShake = 102;
 static BookTextOption s_margin_option = BookTextOption::MarginTop; // 当前选中的阅读边距
 struct NumericRow {
     int option = 0, value = 0, original = 0, minimum = 0, maximum = 0, step = 1; // 手势内的参数快照
@@ -747,6 +748,8 @@ static void CommitNumeric(NumericRow& row) {
     if (row.value == row.original) return;
     if (row.option == kAdjustFont) {
         if (BookReaderPrefsFontSize() > 0 && PrepareBookFont(BookReaderPrefsFontFile(), row.value)) ScheduleLayoutApply(true);
+    } else if (row.option == kAdjustShake) {
+        BookReaderPrefsSetShakeLevel(row.value);
     } else if (row.option == kAdjustAutoTurn) {
         BookReaderPrefsSetAutoTurnSeconds(row.value);
         ResetReaderAutoTurnDeadline();
@@ -805,7 +808,7 @@ static void AddNumericRow(lv_obj_t* parent, const char* title, int option, int v
     auto* inc = SheetButton(row, option == kAdjustFont ? Lang::Strings::BOOK_FONT_INCREASE : Lang::Strings::BOOK_INCREASE, button_width, UiSy(40), NumericEvent, index + 1, false, UiSx(7));
     lv_obj_set_pos(inc, start + button_width + value_width + 2 * gap, (height - UiSy(40)) / 2);
     auto* label = lv_obj_get_child(val, 0);
-    auto* unit = SheetLabel(val, option == kAdjustAutoTurn ? "s" : "px", SheetUiFont(14));
+    auto* unit = SheetLabel(val, option == kAdjustShake ? "" : option == kAdjustAutoTurn ? "s" : "px", SheetUiFont(14));
     lv_obj_set_style_text_color(unit, lv_color_white(), 0);
     s_numeric_rows.push_back({option, value, value, minimum, maximum, step, label, false, unit, dec, inc, enabled});
     UpdateNumericValue(s_numeric_rows.back());
@@ -863,6 +866,12 @@ static void TextChoice(lv_event_t* event) {
     RequestSettingsSheetPaint();
     if (encoded >= 10) RedrawReadingText();
     else ScheduleLayoutApply(false);
+}
+static void SheetShakeTurnToggle(lv_event_t* e) {
+    lv_event_stop_bubbling(e);
+    BookReaderPrefsSetShakeTurn(!BookReaderPrefsShakeTurn());
+    SyncReaderAutoOrient();
+    RequestSettingsSheetPaint();
 }
 static void SheetAutoTurnToggle(lv_event_t* e) {
     lv_event_stop_bubbling(e);
@@ -931,7 +940,7 @@ static void PlaceSwitchCaption(lv_obj_t* caption, int button_w) {
 }
 static void RefreshSwitchRows() {
     for (auto& row : s_switch_rows) {
-        const bool on = row.event == SheetAntialias ? BookReaderPrefsAntialias() : ReaderAutoTurnEnabled();
+        const bool on = row.event == SheetShakeTurnToggle ? BookReaderPrefsShakeTurn() : row.event == SheetAntialias ? BookReaderPrefsAntialias() : ReaderAutoTurnEnabled();
         auto* caption = lv_obj_get_child(row.button, 0);
         const char* text = on ? Lang::Strings::COMMON_ON : Lang::Strings::COMMON_OFF;
         if (row.displayed == static_cast<int>(on)) continue;
@@ -954,7 +963,7 @@ static void AddSwitchRow(lv_obj_t* body, const char* title, lv_event_cb_t event,
     const int width = lv_obj_get_content_width(body), height = UiSy(60);
     const int start = column > 0 ? column : SettingsColumn(body, {title});
     const int button_w = std::max<int>(1, static_cast<int>(width) - start);
-    const bool on = event == SheetAntialias ? BookReaderPrefsAntialias() : ReaderAutoTurnEnabled();
+    const bool on = event == SheetShakeTurnToggle ? BookReaderPrefsShakeTurn() : event == SheetAntialias ? BookReaderPrefsAntialias() : ReaderAutoTurnEnabled();
     auto* row = SheetBox(body, width, height);
     auto* label = SheetLabel(row, title);
     PlaceSettingsCaption(label, start);
@@ -997,7 +1006,8 @@ static void BuildSheetSettings(lv_obj_t* body) {
             BookReaderPrefsWritingMode() ? BOOK_WRITING_VERTICAL : BOOK_WRITING_HORIZONTAL,
             BookReaderPrefsAntialias() ? (TextValue(BookTextOption::AaStrength) == 0 ? BOOK_AA_LOW : TextValue(BookTextOption::AaStrength) == 1 ? BOOK_AA_MEDIUM : BOOK_AA_HIGH) : COMMON_OFF,
             BOOK_CUSTOM, BookReaderPrefsUnderlineMode() == 0 ? BOOK_TAP_ZONE_NONE : BookReaderPrefsUnderlineMode() == 1 ? BOOK_UNDERLINE_SOLID : BOOK_UNDERLINE_DASHED,
-            ReaderAutoTurnEnabled() ? COMMON_ON : COMMON_OFF};
+            ReaderAutoTurnEnabled() ? BOOK_AUTO_TURN : BookReaderPrefsShakeTurn() ? BOOK_SHAKE_TURN :
+                BookReaderPrefsPageTurn() == kBookReaderPageTurnWipe ? BOOK_TURN_PUSH : BOOK_TURN_SLIDE};
         const int gap = UiSx(10), card_w = (width - 2 * gap) / 3, card_h = UiSy(82);
         lv_obj_set_layout(body, LV_LAYOUT_NONE);
         for (int i = 0; i < 9; ++i) {
@@ -1086,9 +1096,11 @@ static void BuildSheetSettings(lv_obj_t* body) {
         AddNumericRow(body, BOOK_UNDERLINE_POSITION, static_cast<int>(BookTextOption::UnderlineOffset),
                       TextValue(BookTextOption::UnderlineOffset), -12, 12, 2, true, column);
     } else if (page == kSettingsTurning) {
-        const int column = SettingsColumn(body, {BOOK_TURN_TITLE, BOOK_AUTO_TURN, BOOK_TURN_INTERVAL});
+        const int column = SettingsColumn(body, {BOOK_TURN_TITLE, BOOK_AUTO_TURN, BOOK_TURN_INTERVAL, BOOK_SHAKE_TURN, BOOK_SHAKE_LEVEL});
         const char* labels[] = {BOOK_TURN_SLIDE, BOOK_TURN_PUSH}; const int values[] = {kBookReaderPageTurnSlide, kBookReaderPageTurnWipe};
         SettingsRow(body, BOOK_TURN_TITLE, 2, labels, SheetPageTurn, values, BookReaderPrefsPageTurn(), false, 0, column);
+        AddSwitchRow(body, BOOK_SHAKE_TURN, SheetShakeTurnToggle, column);
+        AddNumericRow(body, BOOK_SHAKE_LEVEL, kAdjustShake, BookReaderPrefsShakeLevel(), 1, 5, 1, true, column);
         AddSwitchRow(body, BOOK_AUTO_TURN, SheetAutoTurnToggle, column);
         AddNumericRow(body, BOOK_TURN_INTERVAL, kAdjustAutoTurn, BookReaderPrefsAutoTurnSeconds(), 5, 45, 1, true, column);
     }
@@ -1117,7 +1129,7 @@ static int SettingsBodyHeight(int page) {
             content = (LV_HOR_RES > LV_VER_RES ? UiSy(52) : row) * 6;
             break;
         case kSettingsTurning:
-            content = row * 3;
+            content = row * 5;
             break;
         default:
             content = row * 3;

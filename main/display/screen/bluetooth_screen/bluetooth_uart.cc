@@ -1,17 +1,3 @@
-#include "bluetooth_uart.h"
-
-#include "bluetooth_screen_priv.h"
-#include "bluetooth_screen_ui.h"
-#include "assets/lang_config.h"
-#include "assets/lang_bluetooth.h"
-#include "fontpack_lvgl.h"
-#include "haptic_feedback.h"
-#include "power_policy.h"
-#include "settings_common.h"
-#include "screen_common.h"
-#include "screen_text.h"
-#include "simple_uart.hpp"
-
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -19,10 +5,22 @@
 #include <new>
 #include <string>
 #include <vector>
-
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include "bluetooth_uart.h"
+#include "bluetooth_screen_priv.h"
+#include "bluetooth_screen_ui.h"
+#include "assets/lang_config.h"
+#include "assets/lang_bluetooth.h"
+#include "fontpack_lvgl.h"
+#include "haptic_feedback.h"
+#include "metalio_audio.h"
+#include "power_policy.h"
+#include "settings_common.h"
+#include "screen_common.h"
+#include "screen_text.h"
+#include "simple_uart.hpp"
 
 namespace {
 std::mutex audio_power_mutex;
@@ -90,14 +88,10 @@ bool Bluetooth_parse_bt_device_line(const std::string& line, char* address, size
 }
 
 bool Bluetooth_query_version() {
-    auto& uart = SimpleUart::getInstance();
-    if (!uart.isInitialized()) {
-        ESP_LOGE(TAG, "version query: UART not initialized");
-        Bluetooth_post_status(Lang::Strings::BT_UART_NOT_INIT);
-        return false;
-    }
-    if (!uart.sendString("AT+GVER=1\r\n")) {
-        ESP_LOGW(TAG, "TX failed: AT+GVER=1");
+    const esp_err_t err = MetalioAudio_QueryVersion();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "version query failed err=%d", static_cast<int>(err));
+        if (err == ESP_ERR_INVALID_STATE) Bluetooth_post_status(Lang::Strings::BT_UART_NOT_INIT);
         return false;
     }
     ESP_LOGI(TAG, "TX: AT+GVER=1");

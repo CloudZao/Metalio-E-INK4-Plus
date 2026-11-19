@@ -143,7 +143,7 @@
 #define SDMMC_D3_PIN  GPIO_NUM_23
 
 /*
- * 蓝牙音频 BH1098G（原理图 V1.2）
+ * 蓝牙音频蓝牙芯片 G 型（原理图 V1.2）
  * I2S：ESP Slave ← 外置芯片时钟；UART：AT 控模式
  * PA_EN：TCA IO_P4，1=开 0=关（NS4150B CTRL）
  */
@@ -153,7 +153,7 @@
 #define AUDIO_I2S_WS   GPIO_NUM_43 // I2S_WS
 #define AUDIO_I2S_DOUT GPIO_NUM_44 // I2S_DO（主控→喇叭）
 #define AUDIO_I2S_DIN  GPIO_NUM_45 // I2S_DI（麦→主控）
-/* 38/39 接 BH 串口；无 BT RX 回显时对调（当前：39=TX，38=RX） */
+/* 38/39 接蓝牙芯片串口；无 BT RX 回显时对调（当前：39=TX，38=RX） */
 #define BT_AUDIO_TX_PIN GPIO_NUM_39 // 主控 TX → 蓝牙芯片
 #define BT_AUDIO_RX_PIN GPIO_NUM_38 // 主控 RX ← 蓝牙芯片
 

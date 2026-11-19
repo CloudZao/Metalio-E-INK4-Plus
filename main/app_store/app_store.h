@@ -61,6 +61,8 @@ bool Load(const Item& item, esp_elf_t& elf, std::string& error);
 size_t ReadAsset(const Item& item, size_t offset, void* buffer, size_t length);
 /** @brief 查询 ELF 非加载资源节的字节数，无资源返回零 */
 size_t AssetSize(const Item& item);
+/** @brief 解析应用资源节的宿主文件与有界区域，不向 ELF 暴露文件句柄 */
+bool LocateAsset(const Item& item, std::string& path, size_t& offset, size_t& length);
 /** @brief 比较三段数字版本 */
 bool Newer(const std::string& candidate, const std::string& current);
 /** @brief 检查并规范化本地服务器基址 */

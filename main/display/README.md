@@ -16,7 +16,7 @@ Standby, shutdown, and reading-background decoders resolve wallpaper selections 
 
 Once the home screen is ready, startup first performs one complete 48-phase GC16 refresh to white, then reveals the home screen with a wipe. The home screen is not drawn during cleaning. The reserved border receives only whitening pulses during the full refresh and remains undriven after success. Refresh failures retain the existing clear-and-recover path. Later clock, battery and network updates use the ordinary refresh policy.
 
-入口：**设置 → 屏幕**。刷新模式与黑色深度独立保存，重启后恢复。刷新选项同一行显示：清晰 / 均衡 / 快速；电压和波形相数只在本说明中列出，设备界面不显示。
+入口：**设置 → 屏幕**。刷新模式与无有效校准值时使用的黑色深度档位独立保存，重启后恢复。刷新选项同一行显示：清晰 / 均衡 / 快速；波形相数只在本说明中列出，设备界面仅在读取有效校准记录后显示 VCOM。
 
 普通 App 页面切换使用从左向右的 10 条窄条推进（随屏幕旋转），一次连续驱动完成擦白和新页显示。清晰 / 均衡的擦白和黑白重绘使用完整 20 相 DU，快速使用 8 相短 DU；10 个条带各错开 1 相启动。纯黑白应用切页：清晰 / 均衡为 20+20+9=49 相，快速为 8+8+9=25 相。任一页面含灰阶时，条带擦白后立即使用当前档位 GL16 绘制新灰度：清晰 20+48+9=77 相、均衡 20+37+9=66 相、快速 8+37+9=54 相。白到白像素保持不驱动，成功后才提交新页作为面板基线；灰度与条带延迟分别保存。擦白只属于应用切页动画，普通 DU / GL 更新不必预先擦白。缺少动画缓冲或动画失败时回退完整 GC16。实际耗时和残影需上机观察。
 
@@ -80,11 +80,11 @@ Home icons use the LVGL decoder interface and retain SPNG’s 16-row tile bounda
 
 ### 黑色深度
 
-“黑色深度”显示 BH1098 最近读取并校验通过的屏幕 VCOM，例如 `黑色深度：-1300mv`。不再提供固定电压档位，不加载旧档位设置。显示刷新线程在当前波形结束后应用校准值，不在扫描中途修改电压；此数值是驱动配置，不是电压实测值。
+“黑色深度”优先显示蓝牙芯片最近读取并校验通过的屏幕 VCOM，例如 `黑色深度：-1300mv`。开机读取尚未完成时显示读取状态；读取失败或没有有效记录时，恢复“默认 / 中 / 强”三档调节及已有档位设置，分别使用 −1200 / −1600 / −2000 mV。非默认档保留屏幕寿命和底色变化风险提示，建议优先使用默认档。后续查询或写入得到有效校准记录后，自动隐藏档位并使用校准值；后续操作失败不会覆盖已经确认的校准值。显示刷新线程在当前波形结束后应用电压，不在扫描中途修改；此数值是驱动配置，不是电压实测值。
 
 VCOM 校准通过 HTML 产测工具读取、写入并同步云端；设备测试菜单不提供校准入口。扫码工具、存储格式、失败处理和限制见 [VCOM 产测说明](../../tools/vcom/README_zn.md)，[English](../../tools/vcom/README.md)。
 
-Black depth displays the latest validated BH1098 VCOM in millivolts. The display worker applies it after the current waveform; it is a driver setting, not a voltage measurement. The HTML factory tool handles calibration and cloud sync. See the [factory guide](../../tools/vcom/README.md) for storage, recovery and limits.
+Black depth displays the latest validated ble_chip VCOM in millivolts. Until the boot read finishes, it shows the reading status. If the read fails or no valid record exists, Default / Medium / Strong controls and the saved selection return, using −1200 / −1600 / −2000 mV. Non-default settings retain the display lifespan and background discoloration warning. A later successful read or write hides the controls and takes priority; subsequent failures retain the validated value. The display worker applies changes after the current waveform; this is a driver setting, not a voltage measurement. The HTML factory tool handles calibration and cloud sync. See the [factory guide](../../tools/vcom/README.md) for storage, recovery and limits.
 
 30 相图片表参考来自 [read-pico-reader](https://github.com/wegooo-cell/read-pico-reader/tree/main/components/e0470_epaper_waveform)，保留 Apache-2.0 许可证。我们保留 S31 / E0470A14-AF 的扫描时序与 TPS65185 电源驱动，显示效果须在本机验收。
 

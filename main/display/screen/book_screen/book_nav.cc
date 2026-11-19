@@ -665,17 +665,9 @@ bool BookLvAsync(void (*cb)(void*), void* user_data) {
     return ok;
 }
 
-static std::atomic<bool> s_bookshelf_screen_change{false};
-
 void PaintBookshelfPage() {
     ESP_LOGD(TAG, "async RenderBookshelfPage page=%d begin", Book_State().shelf.list_page);
-    const bool screen_change=s_bookshelf_screen_change.exchange(false);
     RenderBookshelfPage();
-    if (screen_change && Book_State().shelf.list_scr==lv_screen_active()) {
-        EpdCancelPageTurn();
-        EpdRequestScreenChange();
-        lv_obj_invalidate(lv_screen_active());
-    }
     ESP_LOGD(TAG, "async RenderBookshelfPage done");
 }
 
@@ -706,7 +698,7 @@ void EnsureBookPaintFns() {
 
 // 页码已同步改完后调用：序号合并，积压回调跳过已画过的序号。
 void RequestRenderBookshelfPage(bool screen_change) {
-    if (screen_change) s_bookshelf_screen_change.store(true);
+    if (screen_change) Book_State().shelf.screen_change_pending.store(true);
     EnsureBookPaintFns();
     ScreenPaintCoalesceRequest(&s_library_paint);
 }

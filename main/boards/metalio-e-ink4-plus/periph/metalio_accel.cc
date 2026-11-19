@@ -1,31 +1,35 @@
-#include "metalio_accel.h"
-
-#include "epd_board_metalio_eink4_plus.h"
-#include "metalio_i2c1.h"
-#include "power_i2c.h"
-#include "sc7a20h.h"
-
 #include <atomic>
-
 #include <driver/i2c_master.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include "metalio_accel.h"
+#include "epd_board_metalio_eink4_plus.h"
+#include "metalio_i2c1.h"
+#include "power_i2c.h"
+#include "sc7a20h.h"
 
 #define TAG "MetalioAccel"
 #define EPDIY_I2C_PORT I2C_NUM_1
 
-namespace {
 
-std::atomic<bool> s_reading_tracking{false};
-TaskHandle_t s_accel_task = nullptr;
-portMUX_TYPE s_sample_lock = portMUX_INITIALIZER_UNLOCKED;
-int s_gravity_x = 0;
-int s_gravity_y = 0;
-int64_t s_sample_us = 0;
 
-power_i2c_t MakeBus() {
+static std::atomic<bool> s_reading_tracking{false};
+static std::atomic<bool> s_app_tracking{false};
+
+static bool Tracking() {
+    return s_reading_tracking.load() || s_app_tracking.load();
+}
+
+static TaskHandle_t s_accel_task = nullptr;
+static portMUX_TYPE s_sample_lock = portMUX_INITIALIZER_UNLOCKED;
+static int s_gravity_x = 0;
+static int s_gravity_y = 0;
+static int s_gravity_z = 0;
+static int64_t s_sample_us = 0;
+
+static power_i2c_t MakeBus() {
     power_i2c_t bus = {
         .port = EPDIY_I2C_PORT,
         .lock = metalio_i2c1_lock,
@@ -35,17 +39,17 @@ power_i2c_t MakeBus() {
     return bus;
 }
 
-void accel_irq_task(void* /*arg*/) {
+static void accel_irq_task(void* /*arg*/) {
     auto& accel = Sc7a20h::GetInstance();
     epd_board_metalio_eink4_plus_gpio2_irq_subscribe(xTaskGetCurrentTaskHandle());
     accel.ReadAndClearAoi1();
 
     while (true) {
-        ulTaskNotifyTake(pdTRUE, s_reading_tracking.load() ? pdMS_TO_TICKS(200) : portMAX_DELAY);
+        ulTaskNotifyTake(pdTRUE, Tracking() ? pdMS_TO_TICKS(50) : portMAX_DELAY);
         while (ulTaskNotifyTake(pdTRUE, 0) > 0) {
         }
         // 轻睡前会关闭传感器；恢复阅读采样时在本任务重新配置。
-        if (s_reading_tracking.load() && !accel.IsReady()) {
+        if (Tracking() && !accel.IsReady()) {
             power_i2c_t bus = MakeBus();
             if (!accel.Begin(&bus, Sc7a20h::kDefaultAddr) &&
                 !accel.Begin(&bus, Sc7a20h::kAltAddr)) {
@@ -53,7 +57,7 @@ void accel_irq_task(void* /*arg*/) {
             }
         }
         const bool motion = accel.ReadAndClearAoi1();
-        if (!motion && !s_reading_tracking.load()) {
+        if (!motion && !Tracking()) {
             continue;
         }
         int ax = 0;
@@ -68,10 +72,11 @@ void accel_irq_task(void* /*arg*/) {
             }
             continue;
         }
-        if (s_reading_tracking.load()) {
+        if (Tracking()) {
             portENTER_CRITICAL(&s_sample_lock);
             s_gravity_x = ax;
             s_gravity_y = ay;
+            s_gravity_z = az;
             s_sample_us = esp_timer_get_time();
             portEXIT_CRITICAL(&s_sample_lock);
         }
@@ -81,7 +86,7 @@ void accel_irq_task(void* /*arg*/) {
     }
 }
 
-} // namespace
+
 
 void MetalioAccel_Init(void) {
     power_i2c_t bus = MakeBus();
@@ -103,6 +108,7 @@ void MetalioAccel_Init(void) {
 
 void MetalioAccel_ReleaseIntLine(void) {
     MetalioAccel_SetReadingTracking(false);
+    MetalioAccel_SetAppTracking(false);
     if (Sc7a20h::GetInstance().IsReady()) {
         Sc7a20h::GetInstance().Deinit();
         ESP_LOGI(TAG, "INT released (was ready)");
@@ -133,14 +139,31 @@ void MetalioAccel_SetReadingTracking(bool enabled) {
     }
 }
 
-bool MetalioAccel_GetReadingGravity(int* x, int* y) {
-    if (!x || !y || !s_reading_tracking.load()) {
+static bool GetGravity(int* x, int* y, int* z) {
+    if (!x || !y || !Tracking()) {
         return false;
     }
     portENTER_CRITICAL(&s_sample_lock);
     *x = s_gravity_x;
     *y = s_gravity_y;
+    if (z) *z = s_gravity_z;
     const int64_t sampled = s_sample_us;
     portEXIT_CRITICAL(&s_sample_lock);
     return sampled != 0 && esp_timer_get_time() - sampled <= 500000;
+}
+
+void MetalioAccel_SetAppTracking(bool enabled) {
+    if (s_app_tracking.exchange(enabled) == enabled) return;
+    portENTER_CRITICAL(&s_sample_lock);
+    s_sample_us = 0;
+    portEXIT_CRITICAL(&s_sample_lock);
+    if (s_accel_task) xTaskNotifyGive(s_accel_task);
+}
+
+bool MetalioAccel_GetReadingGravity(int* x, int* y, int* z) {
+    return s_reading_tracking.load() && GetGravity(x, y, z);
+}
+
+bool MetalioAccel_GetAppGravity(int* x, int* y, int* z) {
+    return s_app_tracking.load() && GetGravity(x, y, z);
 }

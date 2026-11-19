@@ -1,6 +1,7 @@
 #pragma once
 
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <esp_err.h>
 
@@ -12,7 +13,7 @@ class AudioCodec;
 AudioCodec* MetalioAudio_GetCodec();
 
 /**
- * @brief 初始化 UART，后台先复位 BH，再配置并确认模式1；不会等待复位完成
+ * @brief 初始化 UART，后台先复位蓝牙芯片，再配置并确认模式1；不会等待复位完成
  * @param on_boot_reset_done 启动复位结束时调用一次；初始化失败时同样调用以释放等待方
  */
 void MetalioAudio_Init(void (*on_boot_reset_done)());
@@ -59,6 +60,11 @@ enum class MetalioAudioState {
 
 /** @brief 查询当前电源周期的音频初始化状态，不触发初始化或复位。 */
 MetalioAudioState MetalioAudio_GetState();
+
+/** @brief 非阻塞下发蓝牙版本查询；串口事务忙时返回 ESP_ERR_TIMEOUT。 */
+esp_err_t MetalioAudio_QueryVersion();
+/** @brief 复制最近收到的有效蓝牙版本；新查询会清除旧值，尚未收到或缓冲区不足时返回 false。 */
+bool MetalioAudio_GetVersion(char* version, size_t capacity);
 
 /**
  * @brief 设置板级功放使能状态

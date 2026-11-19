@@ -113,14 +113,13 @@ void Home_OnAppNameDraw(lv_event_t* e)
         return HomeIconSource(fallback ? fallback : entry.icon_path);
     }
     static const char* Home_AppNameStore() { return Lang::Strings::STORE_TITLE; }
-    static void Home_RefreshInstalledApps() {
+    static void Home_RefreshInstalledApps(std::vector<AppStore::Item> items) {
         kApps.assign(std::begin(kBuiltinApps), std::end(kBuiltinApps));
         kSlashApps.assign(std::begin(kBuiltinSlashApps), std::end(kBuiltinSlashApps));
         const AppEntry store = {"A:ic_app_home_cloud.spng", Home_AppNameStore, AppStoreScreen::Create};
         kApps.push_back(store);
         kSlashApps.push_back(store);
-        std::string error;
-        AppStore::Scan(s_home_installed, error);
+        s_home_installed = std::move(items);
         for (const auto& item : s_home_installed) {
             const AppEntry entry = {"A:ic_app_home_task.spng", nullptr, nullptr, item.app_id, item.name, item.name_en};
             kApps.push_back(entry);
@@ -130,7 +129,10 @@ void Home_OnAppNameDraw(lv_event_t* e)
         kSlashAppCount = static_cast<int>(kSlashApps.size());
     }
 
+static void Home_ApplyStorageApps(std::vector<AppStore::Item> items);
+
 namespace {
+
 struct HomeStorageWait {
     lv_timer_t* timer; // 首次挂载等待定时器
     unsigned ticks = 0; // 无卡时的有限等待次数
@@ -147,9 +149,15 @@ void Home_StorageReady(lv_timer_t* timer) {
     const bool ready = SdCardManager::GetInstance().IsMounted() && ScreenIsHome() &&
                        AppStore::Scan(items, error);
     if (!ready && ++wait->ticks < 120) return;
+    if (ready && !items.empty()) {
+        if (!EpdTryBeginUiRender()) return;
+        struct UiGuard {
+            ~UiGuard() { EpdEndUiRender(); }
+        } guard;
+        Home_ApplyStorageApps(std::move(items));
+    }
     wait->timer = nullptr;
     lv_timer_delete(timer);
-    if (ready && !items.empty()) ScreenNavigateTo(HomeScreen::Create);
 }
 void Home_WaitForStorage(lv_obj_t* screen) {
     if (SdCardManager::GetInstance().IsMounted()) return;
@@ -255,6 +263,25 @@ static void Home_CreatePageIndicator(lv_obj_t* screen) {
     lv_obj_clear_flag(Home_page_lbl, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_align(Home_page_lbl, LV_ALIGN_BOTTOM_MID, 0, -UiSy(8));
     Home_UpdatePageIndicator();
+}
+
+static void Home_ApplyStorageApps(std::vector<AppStore::Item> items) {
+    const int old_pages = Home_PageCount();
+    Home_RefreshInstalledApps(std::move(items));
+    const int pages = Home_PageCount();
+    if (Home_page < 0 || Home_page >= pages) Home_page = 0;
+    if (old_pages != pages) {
+        if (Home_page_lbl) lv_obj_delete(Home_page_lbl);
+        Home_page_lbl = nullptr;
+        Home_CreatePageIndicator(Home_scr);
+        if (Home_apps && !Home_slash_layout && Home_card_style != HomeScreen::kCardStylePixel) {
+            const int bottom_inset = HOME_APPS_LIFT + (pages > 1 ? HOME_PAGE_INDICATOR_H : 0);
+            lv_obj_align(Home_apps, LV_ALIGN_BOTTOM_MID, 0, -bottom_inset);
+        }
+    }
+    // 仅更新应用区，不重新进入首页，也不请求切页推白。
+    Home_FillAppsPage();
+    ESP_LOGI(TAG, "installed apps loaded in place count=%u", static_cast<unsigned>(s_home_installed.size()));
 }
 
     ScreenPaintCoalesce s_home_paint{};
@@ -488,7 +515,10 @@ void HomeScreen::SaveCardStyle(int style)
 lv_obj_t *HomeScreen::Create()
 {
     HomePixel_Stop();
-    Home_RefreshInstalledApps();
+    std::vector<AppStore::Item> items;
+    std::string error;
+    AppStore::Scan(items, error);
+    Home_RefreshInstalledApps(std::move(items));
     lv_obj_t *scr = lv_obj_create(nullptr);
     Home_scr = scr;
     Home_WaitForStorage(scr);

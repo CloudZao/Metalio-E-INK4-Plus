@@ -62,7 +62,7 @@ bool OpenWork(DecodeContext& ctx) {
 DecodeContext::~DecodeContext() {
     if (work && std::fclose(work) != 0) ESP_LOGW("ProgressiveJpeg", "work file close failed");
     if (work_path[0] && unlink(work_path) != 0)
-        ESP_LOGW("ProgressiveJpeg", "work file cleanup failed: %s", work_path);
+        ESP_LOGW("ProgressiveJpeg", "work file cleanup failed errno=%d", errno);
     heap_caps_free(work_cache);
     heap_caps_free(arena);
 }
@@ -108,11 +108,10 @@ void* DecodeContext::Allocate(size_t size) {
 void DecodeContext::CacheWork(uint32_t bytes) {
     if (work_cache || !bytes || Cancelled()) return;
     const size_t free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (free <= kPsramReserve || output_bytes > free - kPsramReserve ||
         output_bytes > kDecodeBudget - arena_size) return;
     size_t wanted = std::min({size_t(bytes), kWorkBudget - arena_size,
-        kDecodeBudget - arena_size - output_bytes, free - kPsramReserve - output_bytes, largest}) & ~size_t(511);
+        kDecodeBudget - arena_size - output_bytes, free - kPsramReserve - output_bytes}) & ~size_t(511);
     while (wanted >= 32768) {
         work_cache = static_cast<uint8_t*>(heap_caps_aligned_alloc(16, wanted, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         if (work_cache) {
@@ -128,8 +127,7 @@ bool DecodeContext::Begin(uint16_t width, uint16_t height) {
     const size_t bytes = size_t(width) * height;
     const size_t free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!bytes || bytes > kDecodeBudget - arena_size - work_cache_size || free < kPsramReserve ||
-        bytes > free - kPsramReserve ||
-        bytes > heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)) {
+        bytes > free - kPsramReserve) {
         Fail(ImageDecodeError::kNoMemory);
         return false;
     }

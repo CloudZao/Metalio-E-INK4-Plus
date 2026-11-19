@@ -182,6 +182,8 @@ public:
     std::string GetImei();
     std::string GetImsi();
     std::string GetIccid();
+    /** @brief 返回开机联网已缓存的 ICCID，不发送 AT */
+    std::string CachedIccid() const { return iccid_; }
     std::string GetCarrierName();
     std::string GetModuleRevision();
     int GetSignalStrength();  // CSQ value (0-31, 99=unknown)

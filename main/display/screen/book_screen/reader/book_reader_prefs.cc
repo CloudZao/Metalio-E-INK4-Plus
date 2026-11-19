@@ -1,10 +1,3 @@
-#include "book_screen/reader/book_reader_prefs.h"
-
-#include "assets/lang_config.h"
-#include "epd_reader_aa.h"
-#include "sd_paths.h"
-#include "settings.h"
-
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -12,10 +5,14 @@
 #include <strings.h>
 #include <mutex>
 #include <new>
-
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include "book_screen/reader/book_reader_prefs.h"
+#include "assets/lang_config.h"
+#include "epd_reader_aa.h"
+#include "sd_paths.h"
+#include "settings.h"
 
 static constexpr const char* TAG = "BookPrefs";
 static constexpr const char* kNvsNs = "reader";
@@ -67,6 +64,8 @@ static int s_footer_mask = kDefaultFooterMask;
 static int s_aa = 0;
 static int s_underline = 0;
 static int s_background = 0;
+static int s_shake_turn = 0;
+static int s_shake_level = 3;
 static int s_auto_turn_seconds = 10;
 static int s_writing_mode = kBookReaderWritingHorizontal;
 static int s_text_direction = kBookReaderTextLeftToRight;
@@ -160,6 +159,15 @@ static void LoadFromNvs() {
     }
     s_aa = settings.GetInt(kNvsAaKey, 0) != 0 ? 1 : 0;
     s_underline = ClampUnderline(settings.GetInt(kNvsUnderlineKey, 0));
+    s_shake_turn = settings.GetInt("shake_turn", 0) != 0;
+    const int shake_level = settings.GetInt("shake_level5", -1);
+    if (shake_level >= 0) {
+        s_shake_level = std::clamp(shake_level, 1, 5);
+    } else {
+        const int old_level = std::clamp<int>(settings.GetInt("shake_level", 7), 1, 10);
+        s_shake_level = std::clamp(old_level <= 7 ? (old_level - 1) / 2 :
+            (old_level * 2 - 4) / 3, 1, 5);
+    }
     s_auto_turn_seconds = std::max(5, std::min<int>(45, settings.GetInt("auto_turn_s", 10)));
     s_writing_mode = settings.GetInt("writing_mode", 0) == 1 ? 1 : 0;
     s_text_direction = settings.GetInt(kNvsTextDirectionKey, kBookReaderTextLeftToRight) ==
@@ -201,6 +209,9 @@ enum class BookPrefsPersistKind : uint8_t {
     kTextDirection = 13,
     kParaGap = 14,
     kTextValues = 15,
+    kShakeTurn,
+    kShakeLevel,
+    kCount,
 };
 
 struct BookPrefsPersistArg {
@@ -221,6 +232,9 @@ static void PersistOne(BookPrefsPersistArg* p) {
     {
         Settings settings(kNvsNs, true);
         switch (p->kind) {
+            case BookPrefsPersistKind::kCount:
+                ESP_LOGE(TAG, "invalid preference kind=%u", static_cast<unsigned>(p->kind));
+                break;
             case BookPrefsPersistKind::kTextValues:
                 for (int i = 0; i < kTextOptionCount; ++i) settings.SetInt(kTextKeys[i], p->values[i]);
                 break;
@@ -249,6 +263,12 @@ static void PersistOne(BookPrefsPersistArg* p) {
             case BookPrefsPersistKind::kAntialias:
                 settings.SetInt(kNvsAaKey, p->ival);
                 ESP_LOGI(TAG, "nvs save aa=%d", p->ival);
+                break;
+            case BookPrefsPersistKind::kShakeTurn:
+                settings.SetInt("shake_turn", p->ival);
+                break;
+            case BookPrefsPersistKind::kShakeLevel:
+                settings.SetInt("shake_level5", p->ival);
                 break;
             case BookPrefsPersistKind::kAutoTurnSeconds:
                 settings.SetInt("auto_turn_s", p->ival);
@@ -286,7 +306,7 @@ static void PersistOne(BookPrefsPersistArg* p) {
 }
 
 static std::mutex s_persist_mutex; // 串行交接，避免旧快照晚于新快照写入
-static BookPrefsPersistArg* s_pending[static_cast<unsigned>(BookPrefsPersistKind::kTextValues) + 1] = {}; // 每类偏好仅保留最新快照
+static BookPrefsPersistArg* s_pending[static_cast<unsigned>(BookPrefsPersistKind::kCount)] = {}; // 每类偏好仅保留最新快照
 static bool s_persist_running = false; // 无待写参数时退出任务
 
 static void PersistTask(void*) {
@@ -690,6 +710,36 @@ void BookReaderPrefsSetTextDirection(int direction) {
     StartPersist(arg);
 }
 
+int BookReaderPrefsShakeTurn() {
+    BookReaderPrefsEnsureLoaded();
+    return s_shake_turn;
+}
+void BookReaderPrefsSetShakeTurn(int value) {
+    BookReaderPrefsEnsureLoaded();
+    value = value != 0;
+    if (s_shake_turn == value) return;
+    s_shake_turn = value;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kShakeTurn);
+    if (!arg) return;
+    arg->ival = value;
+    StartPersist(arg);
+}
+
+int BookReaderPrefsShakeLevel() {
+    BookReaderPrefsEnsureLoaded();
+    return s_shake_level;
+}
+void BookReaderPrefsSetShakeLevel(int value) {
+    BookReaderPrefsEnsureLoaded();
+    value = std::clamp(value, 1, 5);
+    if (s_shake_level == value) return;
+    s_shake_level = value;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kShakeLevel);
+    if (!arg) return;
+    arg->ival = value;
+    StartPersist(arg);
+}
+
 int BookReaderPrefsAutoTurnSeconds() {
     BookReaderPrefsEnsureLoaded();
     return s_auto_turn_seconds;
@@ -754,5 +804,7 @@ void BookReaderPrefsResetReading() {
     BookReaderPrefsSetWritingMode(kBookReaderWritingHorizontal);
     BookReaderPrefsSetTextDirection(kBookReaderTextLeftToRight);
     BookReaderPrefsSetPageTurn(kBookReaderPageTurnSlide);
+    BookReaderPrefsSetShakeTurn(0);
+    BookReaderPrefsSetShakeLevel(3);
     BookReaderPrefsSetAutoTurnSeconds(10);
 }

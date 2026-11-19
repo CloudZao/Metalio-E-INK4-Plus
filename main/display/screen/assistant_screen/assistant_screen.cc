@@ -1,5 +1,6 @@
 // assistant_screen.cc — Create / class API / VK / lifecycle
 #include "assistant_screen.h"
+#include "standby_screen/standby_screen.h"
 #include "assistant_vk.h"
 #include "assistant_ingest.h"
 #include "assistant_flow.h"
@@ -39,6 +40,7 @@
 namespace {
 std::optional<PowerNeedHold> s_network_hold; // 仅由 LVGL 生命周期持有，独立于语音通道
 std::atomic<bool> s_standby{false}; // 阻止待机期间的迟到语音启动和 UI 更新
+bool s_resume_load_pending = false; // 唤醒时新建的助手页在目标帧显示后完成前台业务启动
 }
 
 AssistantUiState& Assistant_State() {
@@ -85,8 +87,9 @@ void Assistant_OnAssistantLifecycle(lv_event_t* e) {
     if (code == LV_EVENT_SCREEN_LOADED) {
         Assistant_State().chrome.scr = static_cast<lv_obj_t*>(lv_event_get_target(e));
         Assistant_State().active.store(true, std::memory_order_release);
-        s_standby.store(false);
-        if (!s_network_hold) s_network_hold.emplace(PowerNeed::ForegroundNetwork);
+        s_standby.store(StandbyScreen::IsResuming());
+        s_resume_load_pending = false;
+        if (!s_standby.load() && !s_network_hold) s_network_hold.emplace(PowerNeed::ForegroundNetwork);
         const bool hold_through = BootKey_IsHeld();
         if (auto* disp = LVAdapterDisplay::Instance()) {
             disp->SetStatusTitlePrefix(nullptr);
@@ -102,6 +105,10 @@ void Assistant_OnAssistantLifecycle(lv_event_t* e) {
             Assistant_ApplyPttWave(false);
             return;
         }
+        if (s_standby.load()) {
+            s_resume_load_pending = true;
+            return;
+        }
         app.Schedule([]() {
             if (AssistantScreen::IsActive()) TaskScreen::RequestCacheRefresh();
         });
@@ -110,6 +117,7 @@ void Assistant_OnAssistantLifecycle(lv_event_t* e) {
     } else if (code == LV_EVENT_SCREEN_UNLOADED) {
         ESP_LOGD(TAG, "leave -> schedule voice session stop (keep session RAM)");
         Assistant_State().active.store(false, std::memory_order_release);
+        s_resume_load_pending = false;
         s_standby.store(false);
         s_network_hold.reset();
         if (Assistant_State().stream.coalesce_timer != nullptr) {
@@ -242,7 +250,13 @@ void AssistantScreen::SetStandby(bool standby) {
         Application::GetInstance().StopXiaozhiVoice();
     } else {
         s_network_hold.emplace(PowerNeed::ForegroundNetwork);
-        Application::GetInstance().StartXiaozhiVoice(false);
+        if (s_resume_load_pending) {
+            s_resume_load_pending = false;
+            Application::GetInstance().Schedule([]() {
+                if (AssistantScreen::IsActive()) TaskScreen::RequestCacheRefresh();
+            });
+        }
+        Application::GetInstance().StartXiaozhiVoice(BootKey_IsHeld());
     }
 }
 

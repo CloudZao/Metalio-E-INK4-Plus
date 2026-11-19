@@ -161,14 +161,14 @@ int esp_elf_relocate(esp_elf_t *elf, const uint8_t *pbuf, size_t size);
 int esp_elf_relocate_source(esp_elf_t *elf, const elf_source_t *src);
 
 /**
- * @brief Request running relocated ELF function.
+ * @brief 执行重定位后的 ELF 入口并保留返回结果。
  *
  * @param elf  - ELF object pointer
  * @param opt  - Request options
  * @param argc - Arguments number
  * @param argv - Arguments value array
  *
- * @return ESP_OK if success or other if failed.
+ * @return 入口返回值；对象或入口无效时返回 -EINVAL。
  */
 int esp_elf_request(esp_elf_t *elf, int opt, int argc, char *argv[]);
 

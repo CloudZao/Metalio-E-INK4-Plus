@@ -45,6 +45,14 @@ public:
     bool IsMounted() const;
     /** @brief 查询是否持有卡对象的状态快照 */
     bool HasCard() const;
+    /**
+     * @brief 查询最近一次初始化或挂载错误快照，成功或主动卸载后为 ESP_OK
+     * @param mount_failed 可选输出，底层明确返回分区挂载失败时为 true
+     */
+    esp_err_t GetLastInitError(bool* mount_failed = nullptr) const {
+        if (mount_failed) *mount_failed = last_mount_failed_.load(std::memory_order_relaxed);
+        return last_init_error_.load(std::memory_order_relaxed);
+    }
     /** @brief 本次启动是否发生过 SD 数据读写错误 */
     bool HasIoError() const { return io_error_.load(std::memory_order_relaxed); }
     /** @brief 获取借用的卡对象，仅在持有 sd_access::Transition 时使用 */
@@ -64,7 +72,10 @@ private:
 
     std::atomic<sdmmc_card_t*> card_{nullptr};
     std::atomic<bool> mounted_{false};
+    std::atomic<bool> last_mount_failed_{false}; // 区别文件系统挂载失败与原始卡初始化失败
+    std::atomic<esp_err_t> last_init_error_{ESP_OK}; // 保留底层初始化错误供界面诊断
     std::atomic<bool> io_error_{false}; // 数据读写故障保持到重启，避免重复提示
+    uint32_t init_freq_khz_ = SDMMC_FREQ_PROBING; // 当前识别尝试的时钟，失败后降至 100 kHz
     bool raw_owned_ = false;
     void* dma_buffer_ = nullptr; // 随卡生命周期复用的对齐传输缓冲
 };

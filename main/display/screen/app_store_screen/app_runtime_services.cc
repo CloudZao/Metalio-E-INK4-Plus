@@ -1,22 +1,29 @@
-#include "app_runtime_services.h"
-#include "screen_common.h"
-#include "screen_keyboard.h"
-#include "standby_screen/standby_screen.h"
-#include "reader/http_download_file.h"
-#include "sd_access.h"
-#include "sd_paths.h"
-#include <esp_log.h>
-#include <esp_timer.h>
 #include <algorithm>
 #include <cerrno>
 #include <climits>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <dirent.h>
 #include <new>
+#include <vector>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <esp_log.h>
+#include <esp_timer.h>
+#include "app_runtime_services.h"
+#include "app_store/app_audio_player.h"
+#include "app_store/app_audio_recorder.h"
+#include "board.h"
+#include "epd_refresh.h"
+#include "haptic_feedback.h"
+#include "metalio_accel.h"
+#include "screen_common.h"
+#include "screen_keyboard.h"
+#include "standby_screen/standby_screen.h"
+#include "reader/http_download_file.h"
+#include "sd_access.h"
+#include "sd_paths.h"
 
 namespace AppRuntimeServices {
 namespace {
@@ -59,7 +66,7 @@ int LocalTime(xz_app_time_t* out) {
 uint64_t MonotonicMs() { return static_cast<uint64_t>(esp_timer_get_time()/1000); }
 void TimerTick(lv_timer_t* handle) {
     auto* timer = static_cast<Timer*>(lv_timer_get_user_data(handle));
-    if (StandbyScreen::IsActive() || lv_obj_get_screen(timer->root) != lv_screen_active()) return;
+    if ((StandbyScreen::IsActive() || StandbyScreen::IsResuming()) || lv_obj_get_screen(timer->root) != lv_screen_active()) return;
     const auto callback = timer->callback;
     void* context = timer->context;
     if (!timer->repeat) {
@@ -284,7 +291,7 @@ void* Keyboard(void* host, void* parent, void* input) {
     auto* keyboard = ScreenKeyboardCreate(static_cast<lv_obj_t*>(parent),
         [](ScreenKeyboardEvent event, const char* text, void* context) {
             auto* data = static_cast<KeyboardBinding*>(context);
-            if (!data->input || !data->state->open || data->state->closing || StandbyScreen::IsActive() ||
+            if (!data->input || !data->state->open || data->state->closing || (StandbyScreen::IsActive() || StandbyScreen::IsResuming()) ||
                 lv_obj_get_screen(data->state->root) != lv_screen_active()) return;
             if (event == ScreenKeyboardEvent::kInsert) lv_textarea_add_text(data->input,text);
             else if (event == ScreenKeyboardEvent::kBackspace) lv_textarea_delete_char(data->input);
@@ -339,6 +346,13 @@ int OnExit(void* host, xz_app_click_t callback, void* context) {
     state->exit_context = context;
     return XZ_APP_OK;
 }
+int OnBack(void* host, xz_app_back_t callback, void* context) {
+    auto* state = Active(host);
+    if (!state || state->closing) return XZ_APP_ERR_NOT_READY;
+    state->on_back = callback;
+    state->back_context = context;
+    return XZ_APP_OK;
+}
 int KeepAwake(void* host, int enabled) {
     auto* state = Active(host);
     if (!state || state->closing) return XZ_APP_ERR_NOT_READY;
@@ -346,18 +360,294 @@ int KeepAwake(void* host, int enabled) {
     else if (!enabled) state->awake.reset();
     return XZ_APP_OK;
 }
+struct Drawing {
+    std::vector<xz_app_draw_t> commands;
+};
+void DrawingEvent(lv_event_t* event) {
+    auto* data = static_cast<Drawing*>(lv_event_get_user_data(event));
+    if (lv_event_get_code(event) == LV_EVENT_DELETE) {
+        delete data;
+        return;
+    }
+    if (lv_event_get_code(event) != LV_EVENT_DRAW_MAIN) return;
+    auto* object = static_cast<lv_obj_t*>(lv_event_get_target(event));
+    lv_area_t area;
+    lv_obj_get_coords(object, &area);
+    auto* layer = lv_event_get_layer(event);
+    for (const auto& command : data->commands) {
+        if (command.kind == 0) {
+            lv_draw_line_dsc_t line;
+            lv_draw_line_dsc_init(&line);
+            line.color = lv_color_black();
+            line.width = command.width;
+            line.p1.x = area.x1 + command.x1;
+            line.p1.y = area.y1 + command.y1;
+            line.p2.x = area.x1 + command.x2;
+            line.p2.y = area.y1 + command.y2;
+            lv_draw_line(layer, &line);
+        } else {
+            lv_draw_rect_dsc_t rect;
+            lv_draw_rect_dsc_init(&rect);
+            rect.radius = command.kind == 2 ? LV_RADIUS_CIRCLE : 0;
+            rect.border_color = lv_color_black();
+            rect.border_width = command.width;
+            rect.bg_color = lv_color_black();
+            rect.bg_opa = command.filled ? LV_OPA_COVER : LV_OPA_TRANSP;
+            lv_area_t bounds = {area.x1 + command.x1, area.y1 + command.y1,
+                                area.x1 + command.x2, area.y1 + command.y2};
+            lv_draw_rect(layer, &rect, &bounds);
+        }
+    }
+}
+void* CreateDrawing(void* parent, int x, int y, int width, int height) {
+    if (!parent || width < 1 || height < 1 || width > 1024 || height > 1600) return nullptr;
+    auto* data = new(std::nothrow) Drawing;
+    if (!data) {
+        ESP_LOGE(TAG, "operation=drawing stage=allocate result=failed");
+        return nullptr;
+    }
+    auto* object = lv_obj_create(static_cast<lv_obj_t*>(parent));
+    lv_obj_remove_style_all(object);
+    lv_obj_set_pos(object, x, y);
+    lv_obj_set_size(object, width, height);
+    lv_obj_set_style_bg_color(object, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(object, data);
+    lv_obj_add_event_cb(object, DrawingEvent, LV_EVENT_ALL, data);
+    return object;
+}
+int Draw(void* widget, const xz_app_draw_t* commands, uint32_t count) {
+    if (!widget || count > 1024 || (count && !commands)) return XZ_APP_ERR_INVALID;
+    auto* object = static_cast<lv_obj_t*>(widget);
+    bool matched = false;
+    for (uint32_t i = 0; i < lv_obj_get_event_count(object); ++i) {
+        if (lv_event_dsc_get_cb(lv_obj_get_event_dsc(object, i)) == DrawingEvent) matched = true;
+    }
+    if (!matched) return XZ_APP_ERR_INVALID;
+    // LVGL 延迟计算坐标；首次提交绘图前必须落实创建时设置的尺寸。
+    lv_obj_update_layout(object);
+    auto* data = static_cast<Drawing*>(lv_obj_get_user_data(object));
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto& c = commands[i];
+        if (c.kind > 2 || c.width < 1 || c.width > 8 || c.reserved ||
+            c.x1 < 0 || c.y1 < 0 || c.x2 < 0 || c.y2 < 0 ||
+            c.x1 >= lv_obj_get_width(object) || c.x2 >= lv_obj_get_width(object) ||
+            c.y1 >= lv_obj_get_height(object) || c.y2 >= lv_obj_get_height(object) ||
+            (c.kind && (c.x2 < c.x1 || c.y2 < c.y1))) {
+            ESP_LOGE(TAG, "operation=draw stage=command result=invalid index=%lu area=%ldx%ld",
+                static_cast<unsigned long>(i), static_cast<long>(lv_obj_get_width(object)),
+                static_cast<long>(lv_obj_get_height(object)));
+            return XZ_APP_ERR_INVALID;
+        }
+    }
+    uint32_t first = 0;
+    while (first < count && first < data->commands.size() &&
+           std::memcmp(&commands[first], &data->commands[first], sizeof(xz_app_draw_t)) == 0) ++first;
+    if (first == count && first == data->commands.size()) return XZ_APP_OK;
+    lv_area_t dirty = {LV_COORD_MAX, LV_COORD_MAX, 0, 0};
+    const auto include = [&dirty](const xz_app_draw_t& c) {
+        dirty.x1 = std::min<int32_t>(dirty.x1, std::min(c.x1, c.x2) - c.width);
+        dirty.y1 = std::min<int32_t>(dirty.y1, std::min(c.y1, c.y2) - c.width);
+        dirty.x2 = std::max<int32_t>(dirty.x2, std::max(c.x1, c.x2) + c.width);
+        dirty.y2 = std::max<int32_t>(dirty.y2, std::max(c.y1, c.y2) + c.width);
+    };
+    for (uint32_t i = first; i < count; ++i) include(commands[i]);
+    for (uint32_t i = first; i < data->commands.size(); ++i) include(data->commands[i]);
+    if (count) data->commands.assign(commands, commands + count);
+    else data->commands.clear();
+    lv_area_t origin;
+    lv_obj_get_coords(object, &origin);
+    dirty.x1 += origin.x1;
+    dirty.x2 += origin.x1;
+    dirty.y1 += origin.y1;
+    dirty.y2 += origin.y1;
+    lv_obj_invalidate_area(object, &dirty);
+    return XZ_APP_OK;
+}
+void ClearChildren(void* parent) {
+    if (parent) lv_obj_clean(static_cast<lv_obj_t*>(parent));
+}
+int RequestScreenChange(void* host) {
+    auto* state = Active(host);
+    if (!state || state->closing || (StandbyScreen::IsActive() || StandbyScreen::IsResuming())) return XZ_APP_ERR_NOT_READY;
+    state->transition_sequence = EpdGetStats().submitted;
+    state->transition_pending = true;
+    state->foreground = false;
+    EpdRequestScreenChange();
+    return XZ_APP_OK;
+}
+void ReleaseVibration(State& state) {
+    if (state.vibration_until && MonotonicMs() < state.vibration_until)
+        Board::GetInstance().SetVibration(false);
+    state.vibration_until = 0;
+    state.vibration_hold.reset();
+}
+int Vibrate(void* host, uint32_t duration_ms) {
+    auto* state = Active(host);
+    if (!duration_ms || duration_ms > 15000) return XZ_APP_ERR_INVALID;
+    if (!state || state->closing || !state->foreground_timer || state->transition_pending ||
+        (StandbyScreen::IsActive() || StandbyScreen::IsResuming()) || lv_obj_get_screen(state->root) != lv_screen_active()) return XZ_APP_ERR_NOT_READY;
+    const uint64_t now = MonotonicMs();
+    if (now < state->vibration_until) return XZ_APP_ERR_NOT_READY;
+    if (!HapticIsEnabled()) return XZ_APP_OK;
+    state->vibration_hold.emplace(PowerNeed::StandbyInhibit);
+    state->vibration_until = now + duration_ms;
+    Board::GetInstance().PulseVibration(static_cast<int>(duration_ms));
+    return XZ_APP_OK;
+}
+void UpdateForeground(State& state) {
+    const uint64_t now = MonotonicMs() - StandbyScreen::TotalDurationMs();
+    if (state.transition_pending && static_cast<int32_t>(EpdGetStats().completed - state.transition_sequence) > 0)
+        state.transition_pending = false;
+    const bool active = !state.transition_pending && !(StandbyScreen::IsActive() || StandbyScreen::IsResuming()) &&
+        lv_obj_get_screen(state.root) == lv_screen_active();
+    if (state.vibration_until && (!active || MonotonicMs() >= state.vibration_until)) ReleaseVibration(state);
+    const uint64_t elapsed = now - state.foreground_last;
+    if (active && state.foreground) state.foreground_elapsed += elapsed;
+    state.foreground_last = now;
+    state.foreground = active;
+    AppAudioSetForeground(state.audio, active && !state.closing);
+    AppRecordForeground(state.recorder, active && !state.closing);
+    const bool sample = active && state.acceleration_requested;
+    // 休眠入口会清除驱动订阅，因此唤醒后重复应用启用请求。
+    if (sample || state.acceleration_running) MetalioAccel_SetAppTracking(sample);
+    state.acceleration_running = sample;
+}
+void ForegroundTick(lv_timer_t* timer) {
+    auto* state = static_cast<State*>(lv_timer_get_user_data(timer));
+    UpdateForeground(*state);
+}
+int SetAcceleration(void* host, int enabled) {
+    auto* state = Active(host);
+    if (!state || state->closing || !state->foreground_timer) return XZ_APP_ERR_NOT_READY;
+    state->acceleration_requested = enabled != 0;
+    UpdateForeground(*state);
+    return XZ_APP_OK;
+}
+int GetAcceleration(void* host, xz_app_acceleration_t* out) {
+    auto* state = Active(host);
+    if (!out) return XZ_APP_ERR_INVALID;
+    *out = {};
+    if (!state || !state->foreground || !state->acceleration_requested) return XZ_APP_ERR_NOT_READY;
+    int x, y, z;
+    if (!MetalioAccel_GetAppGravity(&x, &y, &z)) return XZ_APP_ERR_NOT_READY;
+    *out = {x, y, z};
+    return XZ_APP_OK;
+}
+uint64_t ForegroundMs(void* host) {
+    auto* state = Active(host);
+    if (!state) return 0;
+    UpdateForeground(*state);
+    return state->foreground_elapsed;
+}
 void Notify(void* host, const char* text) {
     auto* state = Active(host);
-    if (state && !state->closing && !StandbyScreen::IsActive() && lv_obj_get_screen(state->root) == lv_screen_active()) ScreenShowToast(text);
+    if (state && !state->closing && !(StandbyScreen::IsActive() || StandbyScreen::IsResuming()) && lv_obj_get_screen(state->root) == lv_screen_active()) ScreenShowToast(text);
 }
+int AudioCaps(void* host, xz_app_audio_caps_t* result) {
+    auto* state = Active(host);
+    return state && !state->closing ? AppAudioGetCaps(result) : XZ_APP_ERR_NOT_READY;
 }
-void Bind(State& state, xz_app_api_t& api, lv_obj_t* root, const std::string& app_id, const std::string& installed_name) {
+int AudioPlay(void* host, const xz_app_audio_config_t* config) {
+    auto* state = Active(host);
+    if (!state || state->closing) return XZ_APP_ERR_NOT_READY;
+    if (AppRecordBusy(state->recorder)) return XZ_APP_ERR_BUSY;
+    return AppAudioPlay(state->audio, config);
+}
+int AudioPause(void* host, int paused) {
+    auto* state = Active(host);
+    return state && !state->closing ? AppAudioPause(state->audio, paused != 0) : XZ_APP_ERR_NOT_READY;
+}
+int AudioStop(void* host) {
+    auto* state = Active(host);
+    return state && !state->closing ? AppAudioStop(state->audio) : XZ_APP_ERR_NOT_READY;
+}
+int AudioVolume(void* host, uint32_t volume) {
+    auto* state = Active(host);
+    return state && !state->closing ? AppAudioSetVolume(volume) : XZ_APP_ERR_NOT_READY;
+}
+int AudioStatus(void* host, xz_app_audio_status_t* result) {
+    auto* state = Active(host);
+    return state && !state->closing ? AppAudioGetStatus(state->audio, result) : XZ_APP_ERR_NOT_READY;
+}
+bool PrepareRecorder(State& state) {
+    if (!state.recorder) state.recorder = AppRecordCreate(state.storage_key);
+    if (!state.recorder) return false;
+    UpdateForeground(state);
+    return true;
+}
+int RecordCaps(void* host, xz_app_audio_caps_t* result) {
+    auto* state = Active(host);
+    return state && !state->closing ? AppRecordCaps(result) : XZ_APP_ERR_NOT_READY;
+}
+int RecordStart(void* host) {
+    auto* state = Active(host);
+    if (!state || state->closing) return XZ_APP_ERR_NOT_READY;
+    xz_app_audio_caps_t caps {};
+    caps.struct_size = sizeof(caps);
+    const int supported = AppRecordCaps(&caps);
+    if (supported != XZ_APP_OK) return supported;
+    if (AppAudioBusy(state->audio)) return XZ_APP_ERR_BUSY;
+    if (!PrepareRecorder(*state)) return XZ_APP_ERR_MEMORY;
+    return AppRecordStart(state->recorder);
+}
+int RecordPause(void* host, int paused) {
+    auto* state = Active(host);
+    return state && !state->closing ? AppRecordPause(state->recorder, paused != 0) : XZ_APP_ERR_NOT_READY;
+}
+int RecordStop(void* host) {
+    auto* state = Active(host);
+    return state && !state->closing ? AppRecordStop(state->recorder) : XZ_APP_ERR_NOT_READY;
+}
+int RecordStatus(void* host, xz_app_record_status_t* result) {
+    auto* state = Active(host);
+    if (!state || state->closing) return XZ_APP_ERR_NOT_READY;
+    if (!PrepareRecorder(*state)) return XZ_APP_ERR_MEMORY;
+    return AppRecordStatus(state->recorder, result);
+}
+
+}
+void Bind(State& state, xz_app_api_t& api, lv_obj_t* root, const AppStore::Item& item) {
+    const auto& app_id = item.app_id;
+    const auto& installed_name = item.installed_name;
     state.root = root;
     state.storage_key = ValidKey(app_id.c_str()) && installed_name.size() <= 72 &&
         SdIsValidFileName(installed_name.c_str()) && installed_name.front() != '.' ? installed_name+"--"+app_id : "";
     state.open = true;
+    state.audio = AppAudioCreate(item);
+    if (!state.audio) ESP_LOGE(TAG, "operation=audio_bind stage=allocate result=failed");
     api.capabilities = XZ_APP_CAP_TIME | XZ_APP_CAP_TIMER | XZ_APP_CAP_WIDGETS | XZ_APP_CAP_EXIT | XZ_APP_CAP_NOTICE | XZ_APP_CAP_KEEP_AWAKE;
     if (!state.storage_key.empty()) api.capabilities |= XZ_APP_CAP_STORAGE;
+    state.foreground_last = MonotonicMs() - StandbyScreen::TotalDurationMs();
+    state.foreground_timer = lv_timer_create(ForegroundTick, 200, &state);
+    if (!state.foreground_timer) ESP_LOGE(TAG, "operation=foreground_timer stage=allocate result=failed");
+    api.capabilities |= XZ_APP_CAP_DRAWING | XZ_APP_CAP_BACK | XZ_APP_CAP_SCREEN_CHANGE;
+    if (state.foreground_timer) api.capabilities |= XZ_APP_CAP_ACCELERATION;
+    api.clear_children = ClearChildren;
+    api.drawing = CreateDrawing;
+    api.draw = Draw;
+    api.set_acceleration = SetAcceleration;
+    api.get_acceleration = GetAcceleration;
+    api.foreground_ms = ForegroundMs;
+    api.set_on_back = OnBack;
+    api.request_screen_change = RequestScreenChange;
+    api.vibrate = Vibrate;
+    if (state.foreground_timer) api.capabilities |= XZ_APP_CAP_VIBRATION;
+    if (state.foreground_timer && state.audio) api.capabilities |= XZ_APP_CAP_AUDIO;
+    if (state.foreground_timer && !state.storage_key.empty()) api.capabilities |= XZ_APP_CAP_RECORDING;
+    api.record_get_caps = RecordCaps;
+    api.record_start = RecordStart;
+    api.record_pause = RecordPause;
+    api.record_stop = RecordStop;
+    api.record_get_status = RecordStatus;
+    api.audio_get_caps = AudioCaps;
+    api.audio_play = AudioPlay;
+    api.audio_pause = AudioPause;
+    api.audio_stop = AudioStop;
+    api.audio_set_volume = AudioVolume;
+    api.audio_get_status = AudioStatus;
     api.host_context = &state;
     api.get_local_time = LocalTime;
     api.monotonic_ms = MonotonicMs;
@@ -380,6 +670,19 @@ void Bind(State& state, xz_app_api_t& api, lv_obj_t* root, const std::string& ap
 void Close(State& state) {
     if (!state.open || state.closing) return;
     state.closing = true;
+    AppRecordClose(state.recorder);
+    state.recorder.reset();
+    AppAudioStop(state.audio);
+    AppAudioSetForeground(state.audio, false);
+    state.audio.reset();
+    ReleaseVibration(state);
+    state.on_back = nullptr;
+    state.back_context = nullptr;
+    if (state.foreground_timer) lv_timer_delete(state.foreground_timer);
+    state.foreground_timer = nullptr;
+    if (state.acceleration_running) MetalioAccel_SetAppTracking(false);
+    state.acceleration_requested = false;
+    state.acceleration_running = false;
     state.awake.reset();
     for (auto& timer : state.timers) if (timer.handle) {
         lv_timer_delete(timer.handle);

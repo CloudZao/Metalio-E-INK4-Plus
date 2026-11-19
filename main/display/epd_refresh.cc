@@ -53,7 +53,11 @@ SemaphoreHandle_t mailbox;
 TaskHandle_t worker;
 std::atomic<int> refresh_profile{0};
 std::atomic<bool> save_profile{false};
-std::atomic<int> requested_vcom{-EPD_VCOM_MV};
+constexpr int kBlackDepthMv[] = {1200, 1600, 2000}; // 原黑色深度三档电压绝对值，毫伏
+std::atomic<int> black_depth{0};
+std::atomic<bool> save_black_depth{false};
+std::atomic<bool> black_depth_fallback{false}; // 开机读取失败后才启用旧档位
+std::atomic<int> requested_vcom{0}; // 0 表示尚未取得有效校准值
 std::atomic<int> applied_vcom{0};
 bool pending_full, pending_stream, pending_light, pending_reader_aa;
 bool panel_powered=false; // Worker-owned; retained only across a page animation.
@@ -405,13 +409,20 @@ void Transition(EpdiyHighlevelState* hl, int direction, EpdEffect selected_effec
         if (result != EPD_DRAW_SUCCESS) break;
     }
 }
+static int SelectedVcomMv() {
+    const int calibrated = requested_vcom.load();
+    if (calibrated) return calibrated;
+    if (black_depth_fallback.load()) return -kBlackDepthMv[black_depth.load()];
+    return -EPD_VCOM_MV;
+}
+
 void Worker(void*) {
     auto* hl=MetalioEpd_Hl();
     uint32_t consumed=0;
     int applied_profile=refresh_profile.load();
     epd_hl_waveform(hl,ProfileWaveform(applied_profile));
     bool profile_full=true;
-    int current_vcom=requested_vcom.load();
+    int current_vcom=SelectedVcomMv();
     epd_set_vcom(-current_vcom);
     applied_vcom.store(current_vcom);
     int64_t last_full=esp_timer_get_time();
@@ -454,7 +465,14 @@ void Worker(void*) {
             Settings settings("screen",true);
             settings.SetInt("refresh_profile",selected_profile);
         }
-        const int selected_vcom=requested_vcom.load();
+        if (save_black_depth.exchange(false)) {
+            const int depth = black_depth.load();
+            Settings settings("screen", true);
+            if (!settings.SetInt("black_depth", depth) || !settings.Commit()) {
+                ESP_LOGE(TAG, "black depth save failed level=%d", depth);
+            }
+        }
+        const int selected_vcom=SelectedVcomMv();
         if (selected_vcom!=current_vcom) {
             // 与共享电源复位共用闸门，仅在当前波形结束后切换校准值。
             EpdFlashGuard panel_guard;
@@ -463,7 +481,7 @@ void Worker(void*) {
             current_vcom=selected_vcom;
             applied_vcom.store(current_vcom);
             profile_full=true;
-            ESP_LOGI(TAG,"calibrated vcom=%d mV",current_vcom);
+            ESP_LOGI(TAG,"display vcom=%d mV",current_vcom);
         }
         // 退出测试时保留物理灰阶状态，由下一次推白或必要清屏更新基线。
         if (!test_active.load()) { pattern=-1; test=false; if (job.sequence) tests_completed.store(job.sequence); }
@@ -591,6 +609,8 @@ bool EpdRefreshInit() {
         if (saved<0 || saved>2) saved=0;
         if (saved>=1 && !my_waveform_fast()) saved=0;
         refresh_profile.store(saved);
+        const int depth = settings.GetInt("black_depth", 0);
+        black_depth.store(depth >= 0 && depth <= 2 ? depth : 0);
         ESP_LOGI(TAG,"refresh profile=%d (0=clear 1=balanced 2=fast)",saved);
     }
 #if defined(CONFIG_IDF_TARGET_ESP32S31)
@@ -702,6 +722,19 @@ bool EpdSetRefreshProfile(EpdRefreshProfile profile) {
         save_profile.store(true);
         xTaskNotifyGive(worker);
     }
+    return true;
+}
+
+EpdBlackDepth EpdGetBlackDepth() {
+    return static_cast<EpdBlackDepth>(black_depth.load());
+}
+
+bool EpdSetBlackDepth(EpdBlackDepth depth) {
+    const int value = static_cast<int>(depth);
+    if (!worker || value < 0 || value > 2 || requested_vcom.load() != 0) return false;
+    if (black_depth.exchange(value) != value) save_black_depth.store(true);
+    black_depth_fallback.store(true);
+    xTaskNotifyGive(worker);
     return true;
 }
 

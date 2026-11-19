@@ -68,6 +68,7 @@ extern const char* STORE_UNSUPPORTED;
 extern const char* STORE_SERVICE_BUSY;
 extern const char* STORE_VERIFY_ERROR;
 extern const char* STORE_MEMORY_ERROR;
+extern const char* STORE_INCOMPATIBLE;
 extern const char* STORE_RUN_ERROR;
 extern const char* STORE_INVALID;
 extern const char* STORE_LIMIT;

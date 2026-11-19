@@ -1,14 +1,3 @@
-#include "metalio_audio.h"
-#include "panel_vcom.h"
-
-#include "audio_codec.h"
-#include "board.h"
-#include "config.h"
-#include "epd_board_metalio_eink4_plus.h"
-#include "power_hw.h"
-#include "power_policy.h"
-#include "simple_uart.hpp"
-
 #include <atomic>
 #include <cstring>
 #include <mutex>
@@ -19,14 +8,25 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/idf_additions.h>
+#include "metalio_audio.h"
+#include "panel_vcom.h"
+#include "audio_codec.h"
+#include "board.h"
+#include "config.h"
+#include "epd_board_metalio_eink4_plus.h"
+#include "power_hw.h"
+#include "power_policy.h"
+#include "simple_uart.hpp"
 
 #define TAG "MetalioAudio"
+
+static char s_bt_version[64] = {}; // 最近收到的有效版本，由应答互斥锁保护
 
 namespace {
 constexpr int kRetries = 3; // 首次失败后的最大重试次数
 constexpr int kAckTimeoutMs = 1000; // 模式成功应答等待上限
 constexpr int64_t kBootSettleUs = 700000; // 重新上电后的稳定时间
-std::atomic<bool> s_powered{true}; // BH 供电状态
+std::atomic<bool> s_powered{true}; // 蓝牙芯片供电状态
 std::atomic<unsigned> s_power_epoch{0}; // 当前电源周期
 std::atomic<unsigned> s_ready_epoch{~0U}; // 已确认模式成功的电源周期
 std::atomic<unsigned> s_completed_epoch{~0U}; // 本轮重试已结束的电源周期
@@ -49,7 +49,23 @@ void OnUartData(const std::vector<uint8_t>& data) {
     std::lock_guard<std::mutex> lock(s_reply_mutex);
     for (uint8_t c : data) {
         if (c == '\r' || c == '\n') {
+            while (s_reply_length > 0 && s_reply_line[s_reply_length - 1] == ' ') {
+                --s_reply_length;
+            }
             s_reply_line[s_reply_length] = 0;
+            constexpr const char* version_prefix = "AT+GVER=";
+            const char* reply = s_reply_line;
+            while (*reply == ' ') {
+                ++reply;
+            }
+            if (!s_reply_overflow && strncmp(reply, version_prefix, strlen(version_prefix)) == 0) {
+                const char* version = reply + strlen(version_prefix);
+                const size_t length = strlen(version);
+                if (length > 1 && length < sizeof(s_bt_version) && version[0] == 'V' &&
+                    strspn(version, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-_+") == length) {
+                    memcpy(s_bt_version, version, length + 1);
+                }
+            }
             if (!s_reply_overflow && s_applying) {
                 const char* mode = strstr(s_reply_line, "SET MODE 1");
                 if (s_expect_mode && mode && (mode[10] == 0 || mode[10] == ' ')) {
@@ -279,6 +295,39 @@ MetalioAudioState MetalioAudio_GetState() {
     if (s_ready_epoch.load() == epoch) return MetalioAudioState::Ready;
     if (s_completed_epoch.load() == epoch) return MetalioAudioState::Failed;
     return s_requested.load() ? MetalioAudioState::Initializing : MetalioAudioState::NotReady;
+}
+
+esp_err_t MetalioAudio_QueryVersion() {
+    auto& uart = SimpleUart::getInstance();
+    std::unique_lock<std::recursive_timed_mutex> transaction(uart.commandMutex(), std::try_to_lock);
+    if (!transaction.owns_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (!s_powered.load() || !uart.isInitialized()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    {
+        std::lock_guard<std::mutex> lock(s_reply_mutex);
+        s_bt_version[0] = '\0';
+    }
+    if (!uart.sendString("AT+GVER=1\r\n")) {
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+bool MetalioAudio_GetVersion(char* version, size_t capacity) {
+    if (version == nullptr || capacity == 0) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(s_reply_mutex);
+    const size_t length = strlen(s_bt_version);
+    if (length == 0 || length >= capacity) {
+        version[0] = '\0';
+        return false;
+    }
+    memcpy(version, s_bt_version, length + 1);
+    return true;
 }
 
 esp_err_t MetalioAudio_SetPa(bool on) {

@@ -1,10 +1,10 @@
-# BH1098 蓝牙音频协议 / BH1098 Bluetooth audio protocol
+# 蓝牙芯片音频协议 / ble_chip Bluetooth audio protocol
 
 ## 1. 功能概述 / Overview
 
-BH1098 通过 UART AT 命令切换音频工作模式，通过 I2S 与主控传输音频。工作模式包括本机音频、蓝牙发送、蓝牙接收、低功耗、蓝牙语音与 HID，以及 USB 语音与 HID。具体能力取决于芯片型号、模块固件和功能配置，BH1098G、BH1098H 与 dongle 固件的功能不能直接互相等同。
+蓝牙芯片通过 UART AT 命令切换音频工作模式，通过 I2S 与主控传输音频。工作模式包括本机音频、蓝牙发送、蓝牙接收、低功耗、蓝牙语音与 HID，以及 USB 语音与 HID。具体能力取决于芯片型号、模块固件和功能配置，蓝牙芯片 G 型、蓝牙芯片 H 型 与 dongle 固件的功能不能直接互相等同。
 
-BH1098 uses UART AT commands for mode control and I2S for host audio. Modes cover local audio, Bluetooth transmit, Bluetooth receive, low power, Bluetooth voice/HID and USB voice/HID. Availability depends on the chip variant, module firmware and feature configuration; BH1098G, BH1098H and dongle firmware are not assumed interchangeable.
+ble_chip uses UART AT commands for mode control and I2S for host audio. Modes cover local audio, Bluetooth transmit, Bluetooth receive, low power, Bluetooth voice/HID and USB voice/HID. Availability depends on the chip variant, module firmware and feature configuration; ble_chip_G, ble_chip_H and dongle firmware are not assumed interchangeable.
 
 470 当前提供模式 1、2、3、5 的界面入口。外置蓝牙音频模块与 ESP 片上 BLE 翻页器是独立通路。以下分别说明各模式的命令、应答、时序及使用限制。
 
@@ -20,17 +20,17 @@ The 470 interface currently exposes modes 1, 2, 3 and 5. External Bluetooth audi
 - [I2S 音频驱动 / I2S audio driver](../main/boards/common/audio/bt_audio_codec.cc)：音频数据传输。
 - [电源管理 / Power management](../main/boards/common/power_policy/README.md)：共享供电与硬件复位；[English](../main/boards/common/power_policy/README.en.md)。
 
-当前主控使用 UART1，115200、8N1、无流控。GPIO 引脚值以板级配置为准；扩展协议使用的 UART1 TX=GPIO7、RX=GPIO8 是 **BH 芯片侧**编号，不是 ESP 主控引脚编号。
+当前主控使用 UART1，115200、8N1、无流控。GPIO 引脚值以板级配置为准；扩展协议使用的 UART1 TX=GPIO7、RX=GPIO8 是 **蓝牙芯片侧**编号，不是 ESP 主控引脚编号。
 
-The host uses UART1 at 115200 baud, 8N1, without flow control. Host pin assignments are maintained in board configuration. GPIO7/8 in the extension protocol refer to the **BH side**, not ESP host pins.
+The host uses UART1 at 115200 baud, 8N1, without flow control. Host pin assignments are maintained in board configuration. GPIO7/8 in the extension protocol refer to the **ble_chip side**, not ESP host pins.
 
 AT 命令以 `\r` 结束；也接受 `\r\n`。当前普通 AT 发送使用 `\r\n`，HID 使用 `\r`。本文命令示例中的转义符表示实际控制字节，不是发送反斜杠文字。HID 应答以 `\r\n` 结束；页面解析按 `\n` 分行并去掉首尾空白，开机模式应答观察者可按 `\r` 或 `\n` 分行。串口一次读取不等于一条完整应答。
 
 AT commands terminate with CR; CRLF is also accepted. Current ordinary commands use CRLF and HID commands use CR. Escapes below represent actual control bytes. HID replies use CRLF. The page parser splits on LF and trims whitespace, while the boot observer accepts CR or LF. UART read chunks are not message boundaries.
 
-音频走 I2S，不通过 AT 文本传输。当前主控为 I2S Slave，BH 提供时钟；输入输出配置为 16 kHz、32 位立体声槽。输入按 32 位数据右移 12 位并限幅至 16 位；输出将单声道样本送到左右槽。I2S 有效位、左右槽来源及不同模式的麦克风路由需与模块固件匹配。
+音频走 I2S，不通过 AT 文本传输。当前主控为 I2S Slave，蓝牙芯片提供时钟；输入输出配置为 16 kHz、32 位立体声槽。输入按 32 位数据右移 12 位并限幅至 16 位；输出将单声道样本送到左右槽。I2S 有效位、左右槽来源及不同模式的麦克风路由需与模块固件匹配。
 
-Audio travels over I2S, separately from AT control. The host is an I2S slave clocked by BH, configured for 16 kHz and stereo 32-bit slots. Capture shifts 32-bit values right by 12 and clips to 16 bits; playback feeds both slots from mono samples. Valid bits, slot sources and per-mode microphone routing must match the module firmware.
+Audio travels over I2S, separately from AT control. The host is an I2S slave clocked by ble_chip, configured for 16 kHz and stereo 32-bit slots. Capture shifts 32-bit values right by 12 and clips to 16 bits; playback feeds both slots from mono samples. Valid bits, slot sources and per-mode microphone routing must match the module firmware.
 
 ## 3. 工作模式 / Operating modes
 
@@ -75,13 +75,13 @@ Integrated for receiving audio from phones or other sources. Lyrics and cover-ar
 
 ### 模式 4：低功耗 / Mode 4: low power
 
-进入命令 `AT+MODE=4\r`，应答 `SET MODE 4`。进入后要求外部 MCU 与 BH 通信的 IO 设为高阻或拉低；退出要求将 **BH GPIO20** 拉低持续 700 ms。尚未明确唤醒后的模式、应答及完整时序。
+进入命令 `AT+MODE=4\r`，应答 `SET MODE 4`。进入后要求外部 MCU 与蓝牙芯片通信的 IO 设为高阻或拉低；退出要求将 **蓝牙芯片 GPIO20** 拉低持续 700 ms。尚未明确唤醒后的模式、应答及完整时序。
 
-Entry command: `AT+MODE=4\r`, reply: `SET MODE 4`. After entry, communication IO on the external MCU must be high impedance or low. Wake requires holding **BH GPIO20** low for 700 ms. Post-wake mode, acknowledgement and full timing are unspecified.
+Entry command: `AT+MODE=4\r`, reply: `SET MODE 4`. After entry, communication IO on the external MCU must be high impedance or low. Wake requires holding **ble_chip GPIO20** low for 700 ms. Post-wake mode, acknowledgement and full timing are unspecified.
 
-当前未接入该模式及 GPIO20 唤醒流程。现有“复位蓝牙”走共享电源硬件复位，不能等同于此低功耗唤醒，也不能将 BH GPIO20 解释为 ESP GPIO20。
+当前未接入该模式及 GPIO20 唤醒流程。现有“复位蓝牙”走共享电源硬件复位，不能等同于此低功耗唤醒，也不能将蓝牙芯片 GPIO20 解释为 ESP GPIO20。
 
-Mode 4 and its wake sequence are not integrated. The current reset action cycles shared power; it is distinct from this wake procedure. BH GPIO20 must not be confused with ESP GPIO20.
+Mode 4 and its wake sequence are not integrated. The current reset action cycles shared power; it is distinct from this wake procedure. ble_chip GPIO20 must not be confused with ESP GPIO20.
 
 ### 模式 5：蓝牙语音与 HID / Mode 5: Bluetooth voice and HID
 
@@ -100,7 +100,7 @@ This mode delivers microphone audio and HID keys to a computer over USB. Mode-en
 ```text
 AT+INQUIRING\r\n
   INQUIRING START
-  AT+BT:363154329632BH1098_CY
+  AT+BT:363154329632ble_chip_CY
   INQ COMPLETE
 
 AT+CONNECT=363154329632\r\n
@@ -178,13 +178,13 @@ The mode 5 test page uses presets, including Alt hold/release and release-all. R
 
 ### 7.1 适用固件与共存 / Firmware and coexistence
 
-该协议适用于启用 `GPIO_EXT_ENABLE` 的 `BH1098_dongle` 固件。默认地址 `01`，BH GPIO 数量 32，GPIO0/1（UART0）及 GPIO7/8（UART1）保留，可额外配置保留掩码。不能据此认定 470 所装固件已启用。
+该协议适用于启用 `GPIO_EXT_ENABLE` 的 `ble_chip_dongle` 固件。默认地址 `01`，蓝牙芯片 GPIO 数量 32，GPIO0/1（UART0）及 GPIO7/8（UART1）保留，可额外配置保留掩码。不能据此认定 470 所装固件已启用。
 
-This protocol applies to BH1098_dongle firmware with `GPIO_EXT_ENABLE` enabled. Default address is `01`, with 32 BH GPIOs. GPIO0/1 and GPIO7/8 are reserved for UART0/1; additional reservations are configurable. Enablement on the fitted 470 module is unconfirmed.
+This protocol applies to ble_chip_dongle firmware with `GPIO_EXT_ENABLE` enabled. Default address is `01`, with 32 ble_chip GPIOs. GPIO0/1 and GPIO7/8 are reserved for UART0/1; additional reservations are configurable. Enablement on the fitted 470 module is unconfirmed.
 
-与 AT 共用 BH UART1：二进制从 `A5` 起按 LEN 接收，帧内 `00/0D/0A/A5/AT+` 都是数据；完整 AT 前缀后按文本收至 CR，名称可含 UTF-8 `A5` 字节。二进制请求必须放在 AT 行结束后，支持分包及 AT/二进制交替。PAYLOAD 上限 8 字节；超长帧按声明长度丢弃后回 LEN 错，不执行其中 AT 文本。残帧会持续等待声明长度收齐；残帧超时和重新同步规则尚未明确，不能保证主机超时重发后立即恢复。
+与 AT 共用蓝牙芯片 UART1：二进制从 `A5` 起按 LEN 接收，帧内 `00/0D/0A/A5/AT+` 都是数据；完整 AT 前缀后按文本收至 CR，名称可含 UTF-8 `A5` 字节。二进制请求必须放在 AT 行结束后，支持分包及 AT/二进制交替。PAYLOAD 上限 8 字节；超长帧按声明长度丢弃后回 LEN 错，不执行其中 AT 文本。残帧会持续等待声明长度收齐；残帧超时和重新同步规则尚未明确，不能保证主机超时重发后立即恢复。
 
-AT and binary traffic share BH UART1. Binary payload bytes are opaque; AT text runs from a complete prefix through CR, including UTF-8 bytes. Send binary requests after the AT line terminates. Fragmentation and alternating message types are supported. Payloads over eight bytes are discarded by declared length before a length error is returned. Incomplete frames keep waiting for the declared length. Stale-frame timeout and resynchronization are unspecified; retry alone is not guaranteed to recover.
+AT and binary traffic share ble_chip UART1. Binary payload bytes are opaque; AT text runs from a complete prefix through CR, including UTF-8 bytes. Send binary requests after the AT line terminates. Fragmentation and alternating message types are supported. Payloads over eight bytes are discarded by declared length before a length error is returned. Incomplete frames keep waiting for the declared length. Stale-frame timeout and resynchronization are unspecified; retry alone is not guaranteed to recover.
 
 ### 7.2 帧与状态 / Frames and status
 
@@ -224,9 +224,9 @@ Events are sent by a task; the ISR only marks pending state and signals it. Full
 
 ### 7.4 帧示例 / Frame examples
 
-以下均为十六进制字节，ADDR=`01`，示例脚为 **BH GPIO18**；操作前确认未连接受保护外设。二进制帧不追加 CR/LF。
+以下均为十六进制字节，ADDR=`01`，示例脚为 **蓝牙芯片 GPIO18**；操作前确认未连接受保护外设。二进制帧不追加 CR/LF。
 
-All values below are hexadecimal bytes using address `01` and **BH GPIO18**. Confirm the pin is safe to operate. Do not append CR/LF to binary frames.
+All values below are hexadecimal bytes using address `01` and **ble_chip GPIO18**. Confirm the pin is safe to operate. Do not append CR/LF to binary frames.
 
 ```text
 PING TX:          A5 01 01 00 00 C5 44
@@ -255,9 +255,9 @@ SimpleUart transports raw bytes, but the current upper layer has no GPIO framing
 
 ## 8. 自定义键值持久化 / Persistent custom key-value storage
 
-需要 **BH1098 蓝牙固件 1.08 及以上**。本接口以数字编号 X 作为键、用户数据 Y 作为值；不是主控 NVS，也不写入 eFuse。旧版蓝牙固件不支持本节的用户数据存储命令。
+需要 **蓝牙芯片固件 1.08 及以上**。本接口以数字编号 X 作为键、用户数据 Y 作为值；不是主控 NVS，也不写入 eFuse。旧版蓝牙固件不支持本节的用户数据存储命令。
 
-Requires **BH1098 Bluetooth firmware 1.08 or later**. Numeric index X is the key and user data Y is the value. This is module storage, separate from host NVS and eFuse. Earlier Bluetooth firmware does not support these user-data commands.
+Requires **ble_chip Bluetooth firmware 1.08 or later**. Numeric index X is the key and user data Y is the value. This is module storage, separate from host NVS and eFuse. Earlier Bluetooth firmware does not support these user-data commands.
 
 ```text
 AT+WDATA=X,Y\r\n

@@ -30,6 +30,14 @@ bool SdCardManager::CheckDmaBuffer(int slot, const void* buffer, size_t size) {
 }
 
 esp_err_t SdCardManager::DoTransaction(int slot, sdmmc_command_t* command) {
+    // 每次识别使用本次尝试的时钟，正常读写频率仍由 SDK 协商。
+    if (command->opcode == MMC_GO_IDLE_STATE) {
+        const esp_err_t clock_result = sdmmc_host_set_card_clk(slot, GetInstance().init_freq_khz_);
+        if (clock_result != ESP_OK) {
+            ESP_LOGE(TAG, "SD initialization clock configuration failed code=0x%x", static_cast<unsigned>(clock_result));
+            return clock_result;
+        }
+    }
     const esp_err_t result = sdmmc_host_do_transaction(slot, command);
     // 只记录数据读写错误，初始化探测中允许失败的命令不触发提示。
     if ((result != ESP_OK || command->error != ESP_OK) && command->datalen > 0 &&
@@ -50,10 +58,16 @@ bool SdCardManager::PrepareDmaBuffer(sdmmc_host_t& host) {
     host.check_buffer_alignment = CheckDmaBuffer;
     #endif
     size_t alignment = 0;
-    if (esp_cache_get_alignment(caps, &alignment) != ESP_OK) return false;
+    const esp_err_t alignment_error = esp_cache_get_alignment(caps, &alignment);
+    if (alignment_error != ESP_OK) {
+        last_init_error_ = alignment_error;
+        ESP_LOGE(TAG, "SD transfer buffer alignment failed code=0x%x", static_cast<unsigned>(alignment_error));
+        return false;
+    }
     if (alignment < 4) alignment = 4;
     dma_buffer_ = heap_caps_aligned_alloc(alignment, bytes, caps);
     if (dma_buffer_ == nullptr) {
+        last_init_error_ = ESP_ERR_NO_MEM;
         ESP_LOGE(TAG, "SD transfer buffer allocation failed: bytes=%u caps=0x%lx", static_cast<unsigned>(bytes), static_cast<unsigned long>(caps));
         return false;
     }
@@ -91,7 +105,7 @@ sdmmc_slot_config_t SdCardManager::MakeSlotConfig() {
     slot.d2 = SDMMC_D2_PIN;
     slot.d3 = SDMMC_D3_PIN;
     slot.width = 4;
-    slot.flags = 0;
+    slot.flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
 #else
     slot.d1 = GPIO_NUM_NC;
     slot.d2 = GPIO_NUM_NC;
@@ -135,8 +149,16 @@ bool SdCardManager::Mount() {
     ESP_LOGI(TAG, "mount SDMMC width=%d CLK=%d CMD=%d D0=%d", (int)slot.width, (int)SDMMC_CLK_PIN,
              (int)SDMMC_CMD_PIN, (int)SDMMC_D0_PIN);
     sdmmc_card_t* mounted_card = nullptr;
+    init_freq_khz_ = SDMMC_FREQ_PROBING;
     esp_err_t err = esp_vfs_fat_sdmmc_mount(kMountPoint, &host, &slot, &mount_cfg, &mounted_card);
+    if (err != ESP_OK && err != ESP_FAIL && err != ESP_ERR_NO_MEM) {
+        ESP_LOGW(TAG, "SD initialization at 400 kHz failed code=0x%x; retry at 100 kHz", static_cast<unsigned>(err));
+        init_freq_khz_ = 100;
+        err = esp_vfs_fat_sdmmc_mount(kMountPoint, &host, &slot, &mount_cfg, &mounted_card);
+    }
     if (err != ESP_OK) {
+        last_mount_failed_ = err == ESP_FAIL;
+        last_init_error_ = err;
         ESP_LOGW(TAG, "SD mount fail: %s", esp_err_to_name(err));
         card_ = nullptr;
         mounted_ = false;
@@ -146,6 +168,8 @@ bool SdCardManager::Mount() {
 
     card_ = mounted_card;
     raw_owned_ = false;
+    last_mount_failed_ = false;
+    last_init_error_ = ESP_OK;
     mounted_ = true;
     sdmmc_card_print_info(stdout, card_);
     static bool prepared = false;
@@ -156,7 +180,7 @@ bool SdCardManager::Mount() {
         ESP_LOGW(TAG, "app layout incomplete");
     }
     SdLogWriter_OnSdMounted();
-    ESP_LOGI(TAG, "SD ok at %s", kMountPoint);
+    ESP_LOGI(TAG, "SD ok at %s init_khz=%lu", kMountPoint, static_cast<unsigned long>(init_freq_khz_));
     return true;
 }
 
@@ -177,6 +201,8 @@ bool SdCardManager::Unmount() {
     card_ = nullptr;
     mounted_ = false;
     raw_owned_ = false;
+    last_mount_failed_ = false;
+    last_init_error_ = ESP_OK;
     ReleaseDmaBuffer();
     return true;
 }
@@ -197,37 +223,47 @@ sdmmc_card_t* SdCardManager::InitRawCardForMsc() {
 
     sdmmc_card_t* card = static_cast<sdmmc_card_t*>(calloc(1, sizeof(sdmmc_card_t)));
     if (card == nullptr) {
+        last_init_error_ = ESP_ERR_NO_MEM;
         ESP_LOGE(TAG, "calloc sdmmc_card_t failed");
         ReleaseDmaBuffer();
         return nullptr;
     }
 
-    esp_err_t ret = (*host.init)();
-    if (ret == ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "host already inited, force deinit then retry");
-        CallHostDeinit(&host);
+    esp_err_t ret = ESP_FAIL;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        init_freq_khz_ = attempt == 0 ? SDMMC_FREQ_PROBING : 100;
         ret = (*host.init)();
-    }
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SDMMC host init failed: %s", esp_err_to_name(ret));
-        free(card);
-        ReleaseDmaBuffer();
-        return nullptr;
-    }
+        if (ret == ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "host already inited, force deinit then retry");
+            CallHostDeinit(&host);
+            ret = (*host.init)();
+        }
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "SDMMC host init failed: %s", esp_err_to_name(ret));
+            break;
+        }
 
-    ret = sdmmc_host_init_slot(host.slot, &slot);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SDMMC slot init failed: %s", esp_err_to_name(ret));
-        CallHostDeinit(&host);
-        free(card);
-        ReleaseDmaBuffer();
-        return nullptr;
-    }
+        ret = sdmmc_host_init_slot(host.slot, &slot);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "SDMMC slot init failed: %s", esp_err_to_name(ret));
+            CallHostDeinit(&host);
+            break;
+        }
 
-    ret = sdmmc_card_init(&host, card);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "sdmmc_card_init failed: %s", esp_err_to_name(ret));
+        ret = sdmmc_card_init(&host, card);
+        if (ret == ESP_OK) {
+            break;
+        }
         CallHostDeinit(&host);
+        if (attempt == 0 && ret != ESP_ERR_NO_MEM) {
+            ESP_LOGW(TAG, "SD initialization at 400 kHz failed code=0x%x; retry at 100 kHz", static_cast<unsigned>(ret));
+        } else {
+            ESP_LOGE(TAG, "sdmmc_card_init failed: %s", esp_err_to_name(ret));
+            break;
+        }
+    }
+    if (ret != ESP_OK) {
+        last_init_error_ = ret;
         free(card);
         ReleaseDmaBuffer();
         return nullptr;
@@ -235,6 +271,7 @@ sdmmc_card_t* SdCardManager::InitRawCardForMsc() {
 
     ret = sdmmc_get_status(card);
     if (ret != ESP_OK) {
+        last_init_error_ = ret;
         ESP_LOGE(TAG, "sdmmc_get_status failed: %s", esp_err_to_name(ret));
         CallHostDeinit(&card->host);
         free(card);
@@ -242,17 +279,21 @@ sdmmc_card_t* SdCardManager::InitRawCardForMsc() {
         return nullptr;
     }
 
+    last_mount_failed_ = false;
+    last_init_error_ = ESP_OK;
     card_ = card;
     raw_owned_ = true;
     mounted_ = false;
     sd_access::SetMounted(false);
-    ESP_LOGI(TAG, "raw SDMMC card ready for MSC");
+    ESP_LOGI(TAG, "raw SDMMC card ready for MSC init_khz=%lu", static_cast<unsigned long>(init_freq_khz_));
     return card_;
 }
 
 void SdCardManager::ReleaseRawCard() {
     sd_access::Transition transition;
     if (!transition) return;
+    last_mount_failed_ = false;
+    last_init_error_ = ESP_OK;
     if (!raw_owned_ || card_ == nullptr) {
         if (!mounted_) {
             card_ = nullptr;
@@ -273,6 +314,8 @@ void SdCardManager::ReleaseRawCard() {
 
 void SdCardManager::NotifyExternalAppMount(sdmmc_card_t* card) {
     card_ = card;
+    last_mount_failed_ = false;
+    last_init_error_ = ESP_OK;
     mounted_ = (card != nullptr);
     if (!mounted_) sd_access::SetMounted(false);
     if (mounted_) SdLogWriter_OnSdMounted();

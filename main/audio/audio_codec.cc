@@ -14,11 +14,12 @@ AudioCodec::AudioCodec() {
 AudioCodec::~AudioCodec() {
 }
 
-void AudioCodec::OutputData(std::vector<int16_t>& data) {
+bool AudioCodec::OutputData(std::vector<int16_t>& data) {
     int written = Write(data.data(), data.size());
     if (written != static_cast<int>(data.size())) {
         ESP_LOGE(TAG, "Output short write: expected=%u actual=%d", static_cast<unsigned>(data.size()), written);
     }
+    return written == static_cast<int>(data.size());
 }
 
 bool AudioCodec::InputData(std::vector<int16_t>& data) {

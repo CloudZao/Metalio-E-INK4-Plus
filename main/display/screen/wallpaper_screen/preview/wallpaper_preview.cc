@@ -158,7 +158,7 @@ void LoadPreviewTask(void* arg) {
         } else {
             msg->ok = true;
             msg->img = img;
-            ESP_LOGI(TAG, "preview decoded %ux%u from %s", img->width, img->height, work->path);
+            ESP_LOGI(TAG, "preview decoded index=%d size=%ux%u", work->index, img->width, img->height);
         }
         delete work;
     }
@@ -196,25 +196,19 @@ void ScheduleLoadPreview(int index) {
                                         &Wallpaper_State().workers.load_task, 0,
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         const size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-        const size_t largest_int =
-            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
         const size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-        const size_t largest_psram =
-            heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
         ESP_LOGW(TAG,
                  "preview task create failed: need stack=%u in SPIRAM; "
-                 "int free=%u largest=%u; psram free=%u largest=%u; path=%s",
+                 "int free=%u; psram free=%u",
                  static_cast<unsigned>(kPreviewStack),
                  static_cast<unsigned>(free_int),
-                 static_cast<unsigned>(largest_int),
-                 static_cast<unsigned>(free_psram),
-                 static_cast<unsigned>(largest_psram), work->path);
+                 static_cast<unsigned>(free_psram));
         delete work;
         Wallpaper_State().workers.load_busy.store(false);
         Wallpaper_State().workers.load_task = nullptr;
         ShowPreviewDecodeFailure(reader::ImageDecodeError::kNoMemory);
     } else {
-        ESP_LOGI(TAG, "preview task started index=%d path=%s", index, work->path);
+        ESP_LOGI(TAG, "preview task started index=%d", index);
     }
 }
 

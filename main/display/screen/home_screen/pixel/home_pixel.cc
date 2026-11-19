@@ -1,4 +1,5 @@
 #include "home_pixel.h"
+#include "sd_access.h"
 #include "app_store/app_store_icons.h"
 #include "book_screen/book_screen.h"
 #include "book_screen/book_text_util.h"
@@ -16,10 +17,15 @@
 #include "standby_screen/standby_screen.h"
 
 #include <algorithm>
+#include <atomic>
+#include <new>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 namespace {
 constexpr int kDesignW = 834; // 参考图宽度
@@ -125,10 +131,33 @@ const char* Weekday(int day) {
     return day >= 0 && day < 7 ? names[day] : "";
 }
 
+static std::atomic<bool> s_progress_loading{false};
+
+static void LoadLatestProgress(void* arg) {
+    auto* path = static_cast<std::string*>(arg);
+    {
+        sd_access::Transaction transaction;
+        if (transaction) {
+            reader::book_progress_cache::Upsert(path->c_str(), reader::BookSession::PeekProgress(path->c_str()));
+        }
+    }
+    delete path;
+    s_progress_loading.store(false);
+    vTaskDelete(nullptr);
+}
+
 void RefreshRecent() {
     const std::string path = reader::book_home_snapshot::LoadLatestAbsPath();
     reader::BookSession::ProgressPeek peek;
     const bool has_progress = !path.empty() && reader::book_progress_cache::TryGet(path.c_str(), peek);
+    if (!path.empty() && !has_progress && !s_progress_loading.exchange(true)) {
+        auto* work = new (std::nothrow) std::string(path);
+        if (!work || xTaskCreate(LoadLatestProgress, "pixel_progress", 6144, work, 4, nullptr) != pdPASS) {
+            delete work;
+            s_progress_loading.store(false);
+            ESP_LOGE("HomePixel", "recent progress task creation failed");
+        }
+    }
     const std::string filename = path.empty()
         ? Lang::Strings::BOOK_NO_RECENT : path.substr(path.find_last_of('/') + 1);
     if (filename != s.recent_filename) {

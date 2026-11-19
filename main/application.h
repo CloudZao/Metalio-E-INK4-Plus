@@ -108,6 +108,7 @@ public:
         FactoryTest = 2, // 录音测试
         AgingTest = 4, // 老化测试
         WorkBuddy = 8, // WorkBuddy 独占录音
+        AppPlayback = 16, // ELF 本地播放，由宿主工作任务持有
     };
     /** @brief 联网应用是否仍持有或正在归还音频资源；供待机任务等待硬件收尾 */
     bool HasNetworkAudioWork() const {
@@ -121,8 +122,29 @@ public:
     void ReleaseAudioService(AudioClient client);
     /** @brief 非阻塞请求归还音频占用；队列暂满时保留请求并由调度节拍重试 */
     void RequestAudioServiceRelease(AudioClient client);
-    // 关闭按需拉起的音频任务；百问会话路径走 StopXiaozhiVoice。
-    void StopAudioServiceIfRunning();
+
+    /** @brief 申请本地播放独占权，仅供内部 RAM 栈任务调用；其他音频调用方优先 */
+    bool AcquireLocalPlayback(void* owner);
+
+    /** @brief 申请录音独占权，固定 16kHz，复用本地音频所有权管理 */
+    bool AcquireLocalRecording(void* owner);
+
+    /** @brief 读取一帧麦克风 PCM，剔除回采声道；失去所有权时返回 false */
+    bool ReadLocalRecording(void* owner, std::vector<int16_t>& pcm);
+
+    /** @brief 在仍持有独占权时写入单声道 PCM；系统音频申请后返回 false */
+    bool WriteLocalPlayback(void* owner, std::vector<int16_t>& pcm);
+
+    /** @brief 释放本地播放独占权；不会释放其他调用方已经接管的硬件 */
+    void ReleaseLocalPlayback(void* owner);
+
+    /** @brief 查询本地播放或录音是否仍占有音频硬件，供待机收尾等待 */
+    bool HasLocalPlaybackWork() const { return local_playback_owner_.load() != nullptr; }
+    /**
+     * @brief 停止按需音频任务并释放硬件，百问会话路径走 StopXiaozhiVoice
+     * @param force 重启前忽略老化音频占用，并清理未完全启动的硬件
+     */
+    void StopAudioServiceIfRunning(bool force = false);
 
     // 待机浅睡唤醒后：恢复激活 UI 并继续 CheckVersion/Activate。
     void ResumeActivationAfterStandby();
@@ -172,6 +194,7 @@ private:
     bool audio_initialized_ = false;
     std::recursive_mutex audio_service_mutex_; // 串行化服务启动、占用和释放
     std::atomic<uint32_t> audio_clients_{0}; // 当前音频调用方位掩码，联网应用收尾前保持置位
+    std::atomic<void*> local_playback_owner_{nullptr}; // 受音频服务锁保护的本地播放归属
     std::atomic<bool> audio_running_{false};
     bool voice_models_ready_ = false;
     bool protocol_ready_ = false;

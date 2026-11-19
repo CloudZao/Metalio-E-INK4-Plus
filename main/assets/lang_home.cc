@@ -91,7 +91,8 @@
     X(STORE_NETWORK_ERROR, "无法连接应用商店，请检查网络", "Cannot connect to App Store. Check the network.") \
     X(STORE_VERIFY_ERROR, "应用文件校验失败，请重新下载", "App file verification failed. Download it again.") \
     X(STORE_MEMORY_ERROR, "可用内存不足，请关闭其他功能后重试", "Not enough memory. Close other features and try again.") \
-    X(STORE_RUN_ERROR, "应用加载失败，请检查应用与固件的兼容性", "App could not load. Check app and firmware compatibility.") \
+    X(STORE_INCOMPATIBLE, "应用与当前固件不兼容，启动失败。请升级固件后重试。", "App is incompatible with this firmware and cannot start. Update firmware and try again.") \
+    X(STORE_RUN_ERROR, "应用启动失败，请检查应用与固件的兼容性", "App failed to start. Check app and firmware compatibility.") \
     X(STORE_INVALID, "应用目录无效或接口版本不兼容", "Invalid app catalog or incompatible API version.") \
     X(STORE_LIMIT, "最多支持 32 个应用，请先删除不需要的应用", "Up to 32 apps are supported. Uninstall unused apps first.") \
     X(STORE_SERVER_ERROR, "应用商店地址无效，请检查服务配置", "Invalid store address. Check service settings.") \
@@ -168,7 +169,9 @@
     X(BOOK_TEXT_RIGHT_TO_LEFT, "从右往左", "Right to left") \
     X(BOOK_TURN_SLIDE, "左右滑动", "Slide") \
     X(BOOK_TURN_PUSH, "推白翻页", "Wipe") \
-    X(BOOK_TURN_TITLE, "翻页方式", "Page turn") \
+    X(BOOK_TURN_TITLE, "翻页设置", "Page turn settings") \
+    X(BOOK_SHAKE_TURN, "晃动翻页", "Shake to turn") \
+    X(BOOK_SHAKE_LEVEL, "灵敏度", "Sensitivity") \
     X(BOOK_AUTO_TURN, "定时翻页", "Auto turn") \
     X(BOOK_PRESET_SMALL, "小", "Small") \
     X(BOOK_PRESET_LARGE, "大", "Large") \
@@ -508,6 +511,8 @@
     X(SETTINGS_TEST_SIGNAL_CELL_CSQ_FMT, "4G CSQ %2d", "4G CSQ %2d") \
     X(SETTINGS_TEST_SIGNAL_CELL_CSQ_UNKNOWN, "4G CSQ 未知", "4G CSQ unknown") \
     X(SETTINGS_TEST_SIGNAL_CELL_UNAVAIL, "4G 不可用", "4G unavailable") \
+    X(SETTINGS_TEST_SIGNAL_ICCID_TITLE, "ICCID：", "ICCID:") \
+    X(SETTINGS_TEST_SIGNAL_ICCID_UNKNOWN, "--", "--") \
     X(SETTINGS_TEST_SIGNAL_READING, "读取中…", "Reading…") \
     X(SETTINGS_TEST_SIGNAL_TITLE, "网络信号", "Signal") \
     X(SETTINGS_TEST_SIGNAL_WIFI_DISCONNECTED, "WiFi 未连接", "Wi-Fi disconnected") \
@@ -570,13 +575,21 @@
     X(SETTINGS_CHARGING_FAILED, "设置失败，请重试", "Could not apply setting. Try again.") \
     X(SETTINGS_TAB_POWER, "功耗", "Power")                                                                     \
     X(SETTINGS_SCREEN_BLACK_DEPTH_TITLE, "黑色深度", "Black depth") \
+    X(SETTINGS_TEST_VCOM_QUERY, "查询", "Query") \
+    X(SETTINGS_TEST_BT_VERSION, "蓝牙版本", "BT version") \
+    X(SETTINGS_TEST_SD_CAP_FMT, "剩余 %.1fGB / 总计 %.1fGB", "Free %.1fGB / Total %.1fGB") \
+    X(SETTINGS_TEST_POWER_OFF, "关机", "Power off") \
+    X(SETTINGS_SCREEN_BLACK_DEPTH_DEFAULT, "默认", "Default") \
+    X(SETTINGS_SCREEN_BLACK_DEPTH_MEDIUM, "中", "Medium") \
+    X(SETTINGS_SCREEN_BLACK_DEPTH_STRONG, "强", "Strong") \
+    X(SETTINGS_SCREEN_BLACK_DEPTH_HINT, "提高黑色深度可能影响屏幕寿命，并增加底色变化风险，建议优先使用默认档。", "Increasing black depth may affect display lifespan and cause background discoloration. Default is recommended.") \
     X(SETTINGS_VCOM_UNKNOWN, "未知", "Unknown") \
     X(SETTINGS_VCOM_WRITE_OK, "VCOM 写入成功", "VCOM saved") \
     X(SETTINGS_VCOM_READ_OK, "VCOM 读取成功", "VCOM read successfully") \
     X(SETTINGS_VCOM_WRITE_FAILED, "VCOM 写入失败，请检查蓝牙芯片", "VCOM write failed; check the Bluetooth chip") \
     X(SETTINGS_VCOM_READ_FAILED, "VCOM 读取失败，请检查蓝牙芯片", "VCOM read failed; check the Bluetooth chip") \
     X(SETTINGS_VCOM_INVALID, "值异常：VCOM 绝对值须为 1.0～3.0V，步进 10mv", "Abnormal value: VCOM magnitude must be 1.0–3.0V, in 10mv steps") \
-    X(SETTINGS_TEST_MARGIN, "边距测试", "Margin test") \
+    X(SETTINGS_TEST_MARGIN, "UI调节", "UI adjustment") \
     X(SETTINGS_SCREEN_MARGIN_TITLE, "UI 偏移（-20~20px）：即时生效并保存。", "UI offset (-20~20px): Applied and saved immediately.") \
     X(SETTINGS_SCREEN_MARGIN_SET_OK, "设置成功", "Settings saved") \
     X(SETTINGS_SCREEN_MARGIN_RESET_OK, "恢复成功", "Defaults restored") \
@@ -901,6 +914,26 @@
     X(SETTINGS_TEST_BATTERY_MISMATCH_GAUGE, "表计在充/芯片否", "Gauge chg / chip no")                          \
     X(SETTINGS_TEST_BATTERY_MISMATCH_NO_CHG, "有输入未在充", "Input, not charging")                            \
     X(SETTINGS_TEST_BATTERY_MISMATCH_NO_IN, "无输入却在充?", "No input but charging?")                         \
+    X(SETTINGS_TEST_AGING_NO_WALLPAPER, "暂无壁纸", "No wallpaper") \
+    X(SETTINGS_TEST_AGING_SD_NOT_READY, "SD 卡尚未挂载", "SD card not mounted.") \
+    X(SETTINGS_TEST_AGING_SD_INIT_TIMEOUT, "SD 卡初始化超时，请检查插卡及接触", "SD init timed out. Check card and contacts.") \
+    X(SETTINGS_TEST_AGING_SD_MOUNT_FAILED, "SD 卡挂载失败，请检查文件系统", "SD mount failed. Check the file system.") \
+    X(SETTINGS_TEST_AGING_SD_INIT_MEMORY, "SD 卡初始化内存不足，请重启设备", "Not enough memory to initialize SD. Restart.") \
+    X(SETTINGS_TEST_AGING_SD_INIT_FAILED, "SD 卡初始化失败，请检查卡片", "SD initialization failed. Check the card.") \
+    X(SETTINGS_TEST_AGING_SD_USB, "SD 卡正由电脑占用，请关闭虚拟 U 盘", "SD in use by PC. Turn off USB drive mode.") \
+    X(SETTINGS_TEST_AGING_SD_BUSY, "SD 卡访问暂不可用，稍后重试", "SD access unavailable. Retrying.") \
+    X(SETTINGS_TEST_AGING_SD_DIR_MISSING, "壁纸文件夹不存在，请检查 SD 卡", "Wallpaper folder missing. Check SD card.") \
+    X(SETTINGS_TEST_AGING_SD_DIR_OPEN, "壁纸文件夹打开失败，请检查 SD 卡", "Cannot open wallpaper folder. Check SD card.") \
+    X(SETTINGS_TEST_AGING_SD_DIR_READ, "壁纸文件夹读取失败，请检查 SD 卡", "Cannot read wallpaper folder. Check SD card.") \
+    X(SETTINGS_TEST_AGING_SD_FILE_STAT, "壁纸文件信息读取失败，请检查 SD 卡", "Cannot read file info. Check SD card.") \
+    X(SETTINGS_TEST_AGING_SD_FILE_READ, "壁纸文件读取失败，请检查 SD 卡", "Cannot read wallpaper file. Check SD card.") \
+    X(SETTINGS_TEST_AGING_SD_IMAGE_INVALID, "壁纸损坏或不完整，请更换图片", "Image damaged or incomplete. Replace wallpaper.") \
+    X(SETTINGS_TEST_AGING_SD_IMAGE_UNSUPPORTED, "壁纸格式或尺寸不支持，请更换图片", "Format or size unsupported. Replace wallpaper.") \
+    X(SETTINGS_TEST_AGING_SD_DECODE, "壁纸解码失败，请更换图片后重试", "Cannot decode wallpaper. Replace image, retry.") \
+    X(SETTINGS_TEST_AGING_SD_MEMORY, "壁纸解码内存不足，稍后重试", "Not enough memory to decode. Retrying.") \
+    X(SETTINGS_TEST_AGING_SD_TASK, "壁纸读取任务创建失败，稍后重试", "Cannot start wallpaper read task. Retrying.") \
+    X(SETTINGS_TEST_AGING_RESTART_COUNT_FMT, "重启次数：%d", "Restarts: %d") \
+    X(SETTINGS_TEST_AGING_SAVE_FAILED, "老化状态保存失败，正在重试", "Cannot save aging state. Retrying.") \
     X(SETTINGS_TEST_AGING_RUNNING, "老化测试中（震动循环）", "Aging in progress")                              \
     X(SETTINGS_TEST_AGING_TICK_FMT, "运行 %u s  震=%d", "Running %u s  vibe=%d")                               \
     X(STANDBY, "待命", "Standby")                                                                              \

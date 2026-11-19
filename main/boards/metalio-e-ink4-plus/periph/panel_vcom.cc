@@ -188,6 +188,10 @@ static bool Enqueue(const Request& request) {
     return false;
 }
 
+bool PanelVcomRequestRead() {
+    return Enqueue(Request{});
+}
+
 static void Reply(uint32_t id, const char* code, const char* stage) {
     const auto state = PanelVcomGetState();
     uint8_t mac[6]{};
@@ -257,17 +261,22 @@ static void HandleLine(const char* line) {
     else if (!Enqueue(request)) Reply(request.id, "BUSY", "device");
 }
 
+static void RecordResult(const char* error) {
+    if (error && !PanelVcomGetState().vcom_mv && !EpdSetBlackDepth(EpdGetBlackDepth())) {
+        ESP_LOGE(TAG, "black depth fallback unavailable");
+    }
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_state.ok = !error;
+    snprintf(s_state.code, sizeof(s_state.code), "%s", error ? error : "OK");
+    ++s_state.revision;
+}
+
 static void Worker(void*) {
     // 等待启动复位与模式初始化完成后读取；此时不依赖任何页面。
     Request boot{};
     const char* error = Execute(boot);
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        s_state.ok = !error;
-        snprintf(s_state.code, sizeof(s_state.code), "%s", error ? error : "OK");
-        ++s_state.revision;
-    }
-    if (error) ESP_LOGW(TAG, "boot read unavailable code=%s; board default retained", error);
+    RecordResult(error);
+    if (error) ESP_LOGW(TAG, "boot read unavailable code=%s; black depth fallback selected", error);
     s_busy.store(false);
     char input[384]{};
     size_t length = 0;
@@ -276,12 +285,7 @@ static void Worker(void*) {
         Request request{};
         if (xQueueReceive(s_queue, &request, 0) == pdTRUE) {
             error = Execute(request);
-            {
-                std::lock_guard<std::mutex> lock(s_state_mutex);
-                s_state.ok = !error;
-                snprintf(s_state.code, sizeof(s_state.code), "%s", error ? error : "OK");
-                ++s_state.revision;
-            }
+            RecordResult(error);
             if (error) ESP_LOGE(TAG, "operation=%s stage=%s code=%s",
                 request.write ? "write" : "read", s_stage, error);
             else ESP_LOGI(TAG, "operation=%s complete", request.write ? "write" : "read");
@@ -305,7 +309,11 @@ static void Worker(void*) {
 
 void PanelVcomInit() {
     s_queue = xQueueCreate(1, sizeof(Request));
-    if (!s_queue) { ESP_LOGE(TAG, "request queue allocation failed"); return; }
+    if (!s_queue) {
+        ESP_LOGE(TAG, "request queue allocation failed");
+        RecordResult("SERVICE_UNAVAILABLE");
+        return;
+    }
     usb_serial_jtag_driver_config_t config = {.tx_buffer_size = 1024, .rx_buffer_size = 1024};
     const esp_err_t err = usb_serial_jtag_driver_install(&config);
     s_usb = err == ESP_OK;
@@ -318,5 +326,6 @@ void PanelVcomInit() {
         if (s_usb) usb_serial_jtag_driver_uninstall();
         s_usb = false;
         ESP_LOGE(TAG, "service task creation failed");
+        RecordResult("SERVICE_UNAVAILABLE");
     }
 }

@@ -166,15 +166,12 @@ bool StartThumbTask() {
         return true;
     }
     const size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    const size_t largest_int = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     const size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    const size_t largest_psram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
     ESP_LOGW(TAG,
              "thumb task create failed: need stack=%u in SPIRAM; "
-             "int free=%u largest=%u; psram free=%u largest=%u",
+             "int free=%u; psram free=%u",
              static_cast<unsigned>(kThumbStack), static_cast<unsigned>(free_int),
-             static_cast<unsigned>(largest_int), static_cast<unsigned>(free_psram),
-             static_cast<unsigned>(largest_psram));
+             static_cast<unsigned>(free_psram));
     return false;
 }
 

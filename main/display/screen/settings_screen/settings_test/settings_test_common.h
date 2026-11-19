@@ -1,22 +1,21 @@
 #pragma once
 
-#include "dual_network_board.h"
-#include "lvgl.h"
-#include "nt26_board.h"
-
 #include <cstdint>
 #include <string>
 #include <vector>
-
 #include <esp_event.h>
 #include <esp_netif.h>
 #include <esp_wifi.h>
+#include <lvgl.h>
+#include "dual_network_board.h"
+#include "nt26_board.h"
+#include "ui_scale.h"
 
 // 设置 → 测试 Tab 内部共享类型与状态（仅 settings_test/ 内使用）。
 
 constexpr const char* kSettingsTestIconPass = "A:ic_app_test_pass.spng";
 constexpr const char* kSettingsTestIconFail = "A:ic_app_test_fail.spng";
-constexpr lv_coord_t kSettingsTestRowH = 56;
+constexpr lv_coord_t kSettingsTestRowH = UiSy(40);
 constexpr lv_coord_t kSettingsTestIconSz = 28;
 constexpr lv_coord_t kSettingsTestTitleW = 152;  // 容纳 4G·内置等单行名称
 constexpr int kSettingsTestSimExternal = 0;

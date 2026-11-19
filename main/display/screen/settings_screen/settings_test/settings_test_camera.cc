@@ -1,3 +1,12 @@
+#include <algorithm>
+#include <atomic>
+#include <vector>
+#include <cstdio>
+#include <memory>
+#include <new>
+#include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "epd_content_policy.h"
 #include "settings_test_camera.h"
 #include "settings_test_common.h"
@@ -11,16 +20,6 @@
 #include "haptic_feedback.h"
 #include "reader_types.h"
 #include "ui_scale.h"
-
-#include <algorithm>
-#include <atomic>
-#include <vector>
-#include <cstdio>
-#include <memory>
-#include <new>
-#include <esp_log.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 
 namespace {
 constexpr const char* kTag = "SettingsTestCam";
@@ -256,7 +255,6 @@ void Poll(lv_timer_t*) {
 void SettingsTestCamera_BuildRow(lv_obj_t* parent) {
     auto& row = SettingsTest_Ui().camera;
     row = SettingsTest_CreateRow(parent, Lang::Strings::SETTINGS_TEST_CAMERA, OnCaptureClicked);
-    lv_obj_set_height(row.row, UiSy(56));
     Button(row.row, Lang::Strings::SETTINGS_TEST_CAMERA_SHOT, OnCaptureClicked);
 }
 

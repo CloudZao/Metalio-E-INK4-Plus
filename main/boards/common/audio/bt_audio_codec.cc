@@ -60,7 +60,8 @@ void BTAudioCodecDuplex::Start() {
     if (hardware_ready_.load()) return;
     Settings settings("audio", false);
     output_volume_ = settings.GetInt("output_volume", output_volume_);
-    if (output_volume_ <= 0) output_volume_ = 10;
+    if (output_volume_ < 0) output_volume_ = 0;
+    if (output_volume_ > 100) output_volume_ = 100;
     if (rx_handle_ || tx_handle_) ReleaseChannelsLocked();
     if (rx_handle_ || tx_handle_) return;
     i2s_chan_config_t chan_cfg = {
@@ -82,7 +83,7 @@ void BTAudioCodecDuplex::Start() {
         return;
     }
 
-    // 对齐 397：Slave + 立体声 32bit；勿再设 bclk_div（由主机 BH 提供 BCLK）
+    // 对齐 397：Slave + 立体声 32bit；勿再设 bclk_div（由主机蓝牙芯片提供 BCLK）
     i2s_std_config_t std_cfg = {};
     std_cfg.clk_cfg.sample_rate_hz = static_cast<uint32_t>(output_sample_rate_);
     std_cfg.clk_cfg.clk_src = I2S_CLK_SRC_DEFAULT;

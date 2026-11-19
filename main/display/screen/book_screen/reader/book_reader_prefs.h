@@ -173,6 +173,14 @@ int BookReaderPrefsTextDirection();
 /** @brief 设置并保存竖排列方向 */
 void BookReaderPrefsSetTextDirection(int direction);
 
+/** @brief 读取晃动翻页开关，默认关闭。 */
+int BookReaderPrefsShakeTurn();
+/** @brief 设置并保存晃动翻页开关。 */
+void BookReaderPrefsSetShakeTurn(int value);
+/** @brief 读取晃动翻页灵敏度，1–5 级，默认 3，越大越灵敏。 */
+int BookReaderPrefsShakeLevel();
+/** @brief 设置并保存晃动翻页灵敏度。 */
+void BookReaderPrefsSetShakeLevel(int value);
 /** @brief 获取自动翻页间隔秒数，范围 5–45 秒；启用状态仅在当前会话生效。 */
 int BookReaderPrefsAutoTurnSeconds();
 /** @brief 设置并保存自动翻页间隔秒数。 */

@@ -120,14 +120,13 @@ static std::string s_requested_dir;
 static int s_requested_page = -1;
 static int s_requested_size = 0;
 static uint32_t s_directory_revision = 0;
-static bool s_directory_screen_change = false; // 新目录名称页就绪后执行推白
 static bool ShelfDirectoryFilter(const char* name, bool directory) {
     return directory || reader::DetectFormatByPath(name) != reader::BookFormat::kUnknown;
 }
 
 void CancelShelfDirectory() {
     CancelShelfDelete();
-    s_directory_screen_change = false;
+    Book_State().shelf.screen_change_pending.store(false);
     s_shelf_directory.Cancel();
     reader::ClearListThumbnailCache();
     if (s_shelf_directory_timer) lv_timer_del(s_shelf_directory_timer);
@@ -179,10 +178,6 @@ static void ShelfDirectoryTick(lv_timer_t*) {
         st.shelf.directory_loading = false;
         st.shelf.directory_failed = !result.ok;
         st.shelf.loaded_page = result.page;
-        if (result.ok && s_directory_screen_change) {
-            EpdRequestScreenChange();
-            s_directory_screen_change = false;
-        }
         RenderBookshelfPage();
         if (!result.ok) { CancelShelfDirectory(); return; }
     }
@@ -210,7 +205,7 @@ bool EnsureShelfDirectoryPage() {
     if (s_requested_dir != st.shelf.shelf_dir || s_requested_page != st.shelf.list_page ||
         s_requested_size != st.shelf.list_page_size) {
         if (s_requested_dir != st.shelf.shelf_dir) {
-            s_directory_screen_change = !s_requested_dir.empty();
+            if (!s_requested_dir.empty()) st.shelf.screen_change_pending.store(true);
             st.shelf.shelf_selected.clear();
             st.shelf.shelf_multi = false;
         }
@@ -231,7 +226,15 @@ bool EnsureShelfDirectoryPage() {
             ESP_LOGE(TAG, "directory page timer creation failed");
         }
     }
-    return !st.shelf.directory_loading && st.shelf.loaded_page == st.shelf.list_page;
+    const bool ready = !st.shelf.directory_loading && st.shelf.loaded_page == st.shelf.list_page;
+    // 等待目录时仍保留旧控件，只有目标页就绪后才能消费翻页重刷请求。
+    if (ready && !st.shelf.directory_failed && st.shelf.list_scr == lv_screen_active() &&
+        st.shelf.screen_change_pending.exchange(false)) {
+        EpdCancelPageTurn();
+        EpdRequestScreenChange();
+        lv_obj_invalidate(st.shelf.list_scr);
+    }
+    return ready;
 }
 
 void ReloadShelfDirListing() {

@@ -52,6 +52,7 @@ struct BookUiState {
         int selected = -1;
         int list_page = 0;
         int loaded_page = -1; // 当前页数据所属页码
+        std::atomic<bool> screen_change_pending{false}; // 目标目录页就绪后再执行翻页重刷
         bool directory_loading_shown = false; // 同一次等待只绘制一次提示
         int64_t directory_requested_us = 0; // 翻页加载提示的延迟起点
         bool directory_loading = false; // 当前目录页读取中

@@ -1,15 +1,9 @@
-#include "ttf_runtime.h"
-#include "ttf_face.h"
-#include "sd_access.h"
-#include FT_ADVANCES_H
-
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <new>
-
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -18,6 +12,10 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include "ttf_runtime.h"
+#include "ttf_face.h"
+#include "sd_access.h"
+#include FT_ADVANCES_H
 
 namespace {
 constexpr const char* TAG = "ttf_runtime";
@@ -307,7 +305,9 @@ bool Execute(TtfRuntime& font, Request& request) {
         font.library = nullptr;
         return true;
     }
-    if (sd_access::IsQuiescing()) return false;
+    // 已打开字体的度量查询须完成开书收尾，不能因待机而退化为缺字宽度。
+    if (sd_access::IsQuiescing() && request.operation != Operation::kMetrics &&
+        request.operation != Operation::kAdvance) return false;
     if (request.operation == Operation::kOpen) {
         FT_Error error = FT_Init_FreeType(&font.library);
         if (error != 0) {

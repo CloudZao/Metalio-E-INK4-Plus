@@ -706,7 +706,8 @@ static bool DeleteStateFiles(const std::string& directory, bool pending_only) {
         if (!entry) { if (errno) return false; break; }
         const std::string name = entry->d_name;
         if (name == "." || name == "..") continue;
-        if (pending_only && (!name.starts_with("data-") || !name.ends_with(".bin.part"))) continue;
+        if (pending_only && name != "recording.wav.part" &&
+            (!name.starts_with("data-") || !name.ends_with(".bin.part"))) continue;
         const auto path = directory + "/" + name;
         struct stat st {};
         if (stat(path.c_str(), &st) != 0) return false;
@@ -1065,5 +1066,20 @@ size_t AssetSize(const Item& item) {
     if (!Assets(file, item.size, offset, bytes)) bytes = 0;
     fclose(file);
     return bytes;
+}
+bool LocateAsset(const Item& item, std::string& path, size_t& offset, size_t& length) {
+    std::lock_guard<std::mutex> lock(s_storage);
+    sd_access::Transaction transaction;
+    if (!transaction) return false;
+    path = ImagePath(item);
+    FILE* file = fopen(path.c_str(), "rb");
+    if (!file) {
+        ESP_LOGE(TAG, "operation=asset_locate stage=open result=failed errno=%d", errno);
+        return false;
+    }
+    const bool valid = Assets(file, item.size, offset, length);
+    fclose(file);
+    if (!valid) ESP_LOGE(TAG, "operation=asset_locate stage=section result=invalid");
+    return valid;
 }
 }

@@ -36,6 +36,7 @@
 #include "ota_upgrade_screen/ota_upgrade_screen.h"
 #include "power_policy.h"
 #include "screen_common.h"
+#include "settings_screen/settings_test/settings_test_screens.h"
 #include "sd_access.h"
 #include "standby_screen/standby_screen.h"
 #include "standby_screen/standby_wallpaper.h"
@@ -473,8 +474,9 @@ bool LvAdapterEpdiy::Init() {
     reader::book_home_snapshot::HydrateFromNvs();
     ESP_LOGI(TAG, "SetupUI: initialize screen %dx%d offset=%d,%d", width_, height_,
              DisplayUiOffsetX(), DisplayUiOffsetY());
-    boot_resume_pending_ = BookScreen::LoadBootResume();
-    if (boot_resume_pending_) {
+    aging_resume_pending_ = SettingsTestAgingScreen::LoadBootState();
+    boot_resume_pending_ = !aging_resume_pending_ && BookScreen::LoadBootResume();
+    if (aging_resume_pending_ || boot_resume_pending_) {
         FreezeFlush(true);
         lv_screen_load(lv_obj_create(nullptr));
     } else {
@@ -699,7 +701,12 @@ void LvAdapterEpdiy::Tick() {
     if (Lock(50)) {
         // 只消费本轮已在锁外等待过的通知；抢锁失败或稍后到达的通知留给下一轮。
         if (finish_boot && system_ready_pending_.exchange(false, std::memory_order_acq_rel)) {
-            if (boot_resume_pending_) {
+            if (aging_resume_pending_) {
+                aging_resume_pending_ = false;
+                ScreenLoadReplace(SettingsTestAgingScreen::CreateBootResume());
+                FreezeFlush(false);
+                RequestFullOnNextCommit();
+            } else if (boot_resume_pending_) {
                 boot_resume_pending_ = false;
                 ScreenLoadReplace(BookScreen::CreateBootResume());
                 FreezeFlush(false);
@@ -707,6 +714,7 @@ void LvAdapterEpdiy::Tick() {
             }
             SetStatus("");
         }
+        StandbyScreen::PollResume();
         const int64_t round_start = esp_timer_get_time();
         if (!powering_off_) {
             VkKey_DrainTouch();

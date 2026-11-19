@@ -1335,9 +1335,7 @@ int esp_elf_request(esp_elf_t *elf, int opt, int argc, char *argv[])
         esp_elf_run_lifecycle_array(elf->init_array, elf->init_count, elf->init_reverse);
     }
 
-    elf->entry(argc, argv);
-
-    return 0;
+    return elf->entry(argc, argv);
 }
 
 /**

@@ -1,6 +1,8 @@
 #pragma once
 
 namespace Lang { namespace Strings {
+extern const char* SETTINGS_TEST_BT_VERSION;
+extern const char* SETTINGS_TEST_SD_CAP_FMT;
 extern const char* YUNXIN_BINDING_OPEN_AI;
 extern const char* YUNXIN_BINDING_CHECKING;
 extern const char* YUNXIN_BINDING_SCAN;
@@ -37,6 +39,10 @@ extern const char* SETTINGS_SCREEN_REFRESH_CLEAR;
 extern const char* SETTINGS_SCREEN_REFRESH_CLEAR_HINT;
 extern const char* SETTINGS_SCREEN_REFRESH_BALANCED_HINT;
 extern const char* SETTINGS_SCREEN_BLACK_DEPTH_TITLE;
+extern const char* SETTINGS_SCREEN_BLACK_DEPTH_DEFAULT;
+extern const char* SETTINGS_SCREEN_BLACK_DEPTH_MEDIUM;
+extern const char* SETTINGS_SCREEN_BLACK_DEPTH_STRONG;
+extern const char* SETTINGS_SCREEN_BLACK_DEPTH_HINT;
 extern const char* SETTINGS_VCOM_UNKNOWN;
 extern const char* SETTINGS_VCOM_INVALID;
 extern const char* SETTINGS_VCOM_WRITE_OK;
@@ -99,4 +105,26 @@ extern const char* AUDIO_MODULE_INIT_FAILED;
 extern const char* AUDIO_MODULE_NOT_READY;
 extern const char* AUDIO_SERVICE_START_FAILED;
 extern const char* ASSISTANT_AI_PREFIX;
+extern const char* SETTINGS_TEST_AGING_NO_WALLPAPER;
+extern const char* SETTINGS_TEST_AGING_SD_NOT_READY;
+extern const char* SETTINGS_TEST_AGING_SD_INIT_TIMEOUT;
+extern const char* SETTINGS_TEST_AGING_SD_MOUNT_FAILED;
+extern const char* SETTINGS_TEST_AGING_SD_INIT_MEMORY;
+extern const char* SETTINGS_TEST_AGING_SD_INIT_FAILED;
+extern const char* SETTINGS_TEST_AGING_SD_USB;
+extern const char* SETTINGS_TEST_AGING_SD_BUSY;
+extern const char* SETTINGS_TEST_AGING_SD_DIR_MISSING;
+extern const char* SETTINGS_TEST_AGING_SD_DIR_OPEN;
+extern const char* SETTINGS_TEST_AGING_SD_DIR_READ;
+extern const char* SETTINGS_TEST_AGING_SD_FILE_STAT;
+extern const char* SETTINGS_TEST_AGING_SD_FILE_READ;
+extern const char* SETTINGS_TEST_AGING_SD_IMAGE_INVALID;
+extern const char* SETTINGS_TEST_AGING_SD_IMAGE_UNSUPPORTED;
+extern const char* SETTINGS_TEST_AGING_SD_DECODE;
+extern const char* SETTINGS_TEST_AGING_SD_MEMORY;
+extern const char* SETTINGS_TEST_AGING_SD_TASK;
+extern const char* SETTINGS_TEST_AGING_RESTART_COUNT_FMT;
+extern const char* SETTINGS_TEST_AGING_SAVE_FAILED;
+extern const char* SETTINGS_TEST_VCOM_QUERY;
+extern const char* SETTINGS_TEST_POWER_OFF;
 } }
