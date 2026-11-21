@@ -89,7 +89,7 @@ Before every attempt, `power_hw_light_sleep_once()` checks that SD admission is 
 6. **Remove display peripheral power.** Forces frontlight outputs low again. In cellular mode, stops the modem and its UART/UHCI/network tasks. `sleep_cut_rails()` removes P5 camera/display power and preserves P14 shared power.
 7. **Latch the bus and sleep.** Holds display-bus sleep levels, records the RTC phase, and calls `esp_light_sleep_start()` through `s31_sleep::LightSleep()`.
 
-Each slice is at most 60 seconds and is shortened near the automatic power-off deadline. Automatic power-off occurs after 30 minutes of accumulated standby time.
+Each slice is at most 60 seconds and is shortened near the automatic power-off deadline. Automatic power-off occurs after the selected accumulated standby duration, which defaults to 30 minutes.
 
 
 ## Standby pin and level configuration
@@ -199,14 +199,14 @@ The standby worker finishes an exit request through the same restoration path ev
 
 `LocalPlayback` holds PA without requiring networking; local playback separately holds `StandbyInhibit` and releases both on pause or stop. `PeripheralReset` suppresses PA. While `UiKeepNet` is held, the policy leaves PA unchanged. `ForegroundNetwork` is a soft hold: it does not refresh user inactivity, affect PA, or prevent automatic standby. Active recording, OTA/downloads, and hard states such as Connecting/Listening/Speaking/Upgrading block automatic standby. `UsbVirtualDisk` and `StandbyInhibit` only block inactivity standby; they do not independently force networking or PA. Releasing hard, USB, or inhibit needs refreshes inactivity to avoid immediate standby.
 
-Settings → Power shows inactivity standby fixed at 5 minutes and automatic power-off fixed at 30 minutes of accumulated standby time, without selectors. Previously saved timeout values are ignored. Idle CPU frequency and network grace remain selectable and are persisted asynchronously by internal-RAM-stack tasks in NVS namespace `power`.
+Settings → Power keeps inactivity standby fixed at 5 minutes. Automatic power-off offers 30 minutes, 1 hour, 3 hours, or 24 hours of accumulated standby time, with two options per row and a default of 30 minutes. Idle CPU frequency, network grace, and automatic power-off duration are saved asynchronously by internal-RAM-stack tasks in NVS namespace `power`.
 
 | Setting | NVS key | Choices | Default |
 |---|---|---|---|
 | Idle CPU frequency | `idle_mhz` | 160 / 240 / 320 MHz | 320 MHz |
 | Inactivity to standby | Not stored | Fixed at 300 seconds; no selector | 300 seconds |
 | Network grace | `net_grace_s` | 0 / 30 / 60 / 120 seconds; 0 means never disconnect for inactivity | 30 seconds |
-| Accumulated standby to power-off | Not stored | Fixed at 1800 seconds; no selector | 1800 seconds |
+| Accumulated standby to power-off | `standby_off_s` | 1800 / 3600 / 10800 / 86400 seconds | 1800 seconds |
 
 - The default idle frequency is 320 MHz, not an automatic low-frequency setting. Only `AppIdle` uses it; other modes request `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ`. Fixed-frequency control requires `CONFIG_PM_ENABLE`. This layer disables SDK automatic light sleep and lets the standby task invoke sleep explicitly. `PowerHwCpuFreqHold` can retain operating frequency during critical work.
 - Ordinary Idle network grace and standby timing run in parallel from the last user activity. Provisioning/activation has separate evaluation and considers grace after its inactivity threshold. Soft network holds keep networking available without overriding automatic standby.

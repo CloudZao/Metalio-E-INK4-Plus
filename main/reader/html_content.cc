@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "vertical_text.h"
+
 namespace reader {
 namespace {
 
@@ -183,7 +185,18 @@ bool HtmlBlockParser::Emit(bool more) {
     if (text_.empty() && !continuation_) return true;
     ContentBlock block;
     block.chapter_title = in_heading_;
-    block.text.swap(text_); block.continuation = continuation_; block.continues = more;
+    size_t split = text_.size();
+    if (more) {
+        while (split > 0 && (ReaderEnglishLetter(static_cast<unsigned char>(text_[split - 1])) || text_[split - 1] == '\'')) --split;
+        if (split == 0) split = text_.size();
+    }
+    if (split == text_.size()) {
+        block.text.swap(text_);
+    } else {
+        block.text = text_.substr(0, split);
+        text_.erase(0, split);
+    }
+    block.continuation = continuation_; block.continues = more;
     const uint32_t length = block.text.size();
     if (!sink_(std::move(block))) return false;
     if (more) source_offset_ += length;

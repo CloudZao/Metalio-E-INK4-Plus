@@ -1,0 +1,25 @@
+﻿Metalio Plus 固件创作 Skill 群 V0.4
+
+适用：4.7英寸Plus / ESP32-S31，Windows原生Codex。同一应用BIN支持独立运行，以及遵循公开指南1.1和Plus设备绑定的集成环境；不要求WSL、Linux、Docker或虚拟机。默认USB可调试，没有串口也能继续生成并标记待真机验收。
+
+安装：将metalio-plus-firmware整个目录作为一个Skill导入当前Codex支持的Skill位置，例如工作项目的.agents/skills/metalio-plus-firmware。具体安装入口以本机Codex版本为准（官方说明 https://learn.chatgpt.com/docs/build-skills）。只有根SKILL.md注册为入口，内部MODULE.md按需读取，不同时安装其他测试版本。保留旧版备份，不能叠加复制导致残留旧文件。只安装/加载Skill时不下载工具、不安装Python、不要求02材料包；入口与包内文件可读即可完成Skill安装。开始具体应用开发时才按任务阶段准备环境。
+
+本包0.4.0，修订windows-codex-demand-acquisition。用scripts/Read-PackageInfo.ps1看身份，Python就绪后用scripts/check_package.py核验；不能将包完整性说成功能验收。
+
+如果同时提供整个设备目录及02_测试预置_原始材料，安装前记录本次解压的设备根。在可写独立WORK中保存本轮材料上下文：
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<Skill>/skills/toolchain-ops/scripts/Resolve-Materials.ps1" -DeviceRoot "<本次设备根>" -SaveContext "<WORK>/material-context.json"
+这一步只绑定来源，不安装也不下载。以后Start-Toolchain传同一个-ContextFile。安装到宿主位置后不再凭父目录搜索材料；材料搬家显式重绑。只有这个Skill文件夹也能用：实际开发先核验并复用已知环境；需要资源才规划当前阶段的选集，默认Auto优先本轮02及缓存，缺项按固定来源、有界重试和可信镜像获取。有部分02也可利用；完全无02不影响安装。严格本地测试需显式Local或Offline。完整官方整机与调试扩展按需取用，不默认下载。
+
+具体资源规划与错误反馈见metalio-plus-firmware/skills/toolchain-ops/references/acquisition.md。首次从零构建的保守基础集合仍约1.27GB（105件）；阶段按需获取不会缩小固定编译器。下载失败报告具体资源、网站、实际原因和可行操作，已校验缓存保留，不将未知网络原因归咎于设备。环境与取料日志写独立WORK。
+
+开始使用可说：“请安装这个Skill，然后为我的Plus制作……；生成可独立和固件口袋运行的固件。”代理会补齐需求、展示必要UI、按需组合能力、构建并验证。只生成文件可明确“不操作设备”；需要串口调试则说明设备与授权范围，屏幕/实体操作可能需要用户反馈。
+
+包含：产品规范、Noto原生字体、拼音输入核心与新词频、设备HAL、双模式桥接、公共Wi-Fi/配网接线、存储/异步任务/声画小例、Windows运维与构建、交付校验和许可资料。示例不限制应用种类，也不等于完整天气或记事本成品。生成器可准备--wifi/--pinyin；业务UI及真实行为仍由Agent实现。
+
+不包含：大型SDK/编译器、完整官方整机、00基线、旧版经验或作者路径依赖。02原始材料独立维护。所有项目、日志、BIN、经验写WORK，已安装Skill保持不变。
+
+最终给用户中文BIN名称、使用/返回说明、验证范围、来源/配置/ELF/BIN摘要和必要许可文档。编译/结构/主机/真机各有证据；V0.4的增量性能需后续同条件测试，不能因代码增多预先宣称一次成功率。
+
+本固件供学习参考，许可清单由AI辅助整理、可能遗漏；商用或分发前请主动复核设备“帮助→开源许可”及《第三方许可与知识产权说明.md》。EPDiy静态链接的源码与再链接义务不能用提示语替代；Skill自研部分不自动授权整体开源。
+
+兼容性按协议、能力和Plus硬件布局判断，不以固件口袋产品版本号作为白名单。Plus.16是用户已确认遵循指南1.1的参考宿主；本轮不重复审核其源码，也不承诺旧私有协议。

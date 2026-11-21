@@ -1,0 +1,118 @@
+{
+  "device": "ESP32-S31/Metalio-Plus",
+  "source_files": [
+    {
+      "file": "pocket_wifi_connection_model.h",
+      "source_project": "Plus天气与记事本适配项目/天气查询",
+      "source_file": "工程/main/pocket/pocket_wifi_connection_model.h",
+      "original_sha256": "41844cd9c4ef407c6d61f0b1857a77d8aac0815777830c0b4989b50e30103d56",
+      "origin": "User-owned previously accepted Plus application; extracted with user authorization; not an upstream public mirror",
+      "license": "Project-owned source; no new open-source license granted by this package",
+      "status": "V0.3 host checks passed; target/hardware evidence recorded separately",
+      "v02_sha256": "af1892333ab888e3fc8bc8dc8af0fa36ecbb58a3c792ba3e0c325a6ada82dd91",
+      "v02_changes": "Explicit request-generation/admission gate and exact uninitialized-stop proof; host tests include unknown-error rejection.",
+      "v03_sha256": "4f4a3c82922242428eff628d360e4bdc9747c6546e2511000bffbcffd68638a7"
+    },
+    {
+      "file": "pocket_wifi_connection.cc",
+      "source_project": "Plus天气与记事本适配项目/天气查询",
+      "source_file": "工程/main/pocket/pocket_wifi_connection.cc",
+      "original_sha256": "a93214753097f222074cf20fa6877aad1b3278d7ee27760f2c24ebb1f0cf9f5f",
+      "origin": "User-owned previously accepted Plus application; extracted with user authorization; not an upstream public mirror",
+      "license": "Project-owned source; no new open-source license granted by this package",
+      "status": "V0.3 host checks passed; target/hardware evidence recorded separately",
+      "v02_sha256": "a6b68a4ffed86a61a7536edf315fe1ab1e35122ce9cab409d734813bf5d91743",
+      "v02_changes": "Cooperative suspend/resume; observed STA stop/netif-down/event-loop barrier replaces fixed150ms drain. Exact NOT_INIT plus actual-down permits exit after early initialization failure; unknown errors fail closed. New device behavior pending.",
+      "v03_sha256": "71219a509c71b68be1f00e1c439e808cd375fcdd15354d97f09e4458a2463cd0"
+    },
+    {
+      "file": "pocket_wifi_connection.h",
+      "source_project": "Plus天气与记事本适配项目/天气查询",
+      "source_file": "工程/main/pocket/pocket_wifi_connection.h",
+      "original_sha256": "9907ca23cdfdc484a031c30b5e735315beb434a9731ee809cf0a3842c7e99b0a",
+      "origin": "User-owned previously accepted Plus application; extracted with user authorization; not an upstream public mirror",
+      "license": "Project-owned source; no new open-source license granted by this package",
+      "status": "V0.3 host checks passed; target/hardware evidence recorded separately",
+      "v02_sha256": "f30a419c7deaa6d11f8e6734a090e1a58c66f513797297f359285e41b7cb82b5",
+      "v02_changes": "Added cooperative radio suspend/resume; target and device scope separately recorded",
+      "v03_sha256": "827f4cee9ef917873df7fcd681497ab44cf18612c3ed6bd544a97fcb62303619"
+    },
+    {
+      "file": "pocket_wifi.cc",
+      "source_project": "Plus天气与记事本适配项目/天气查询",
+      "source_file": "工程/main/pocket/pocket_wifi.cc",
+      "original_sha256": "6d43836981beae7ef3e4c6ea31e16886a9a3b940231e9538890318f03117fec0",
+      "origin": "User-owned previously accepted Plus application; extracted with user authorization; not an upstream public mirror",
+      "license": "Project-owned source; no new open-source license granted by this package",
+      "status": "V0.3 host checks passed; target/hardware evidence recorded separately",
+      "v02_sha256": "6d43836981beae7ef3e4c6ea31e16886a9a3b940231e9538890318f03117fec0",
+      "v02_changes": "Byte-content preserved except source newline normalization if any",
+      "v03_sha256": "c3d5409fd2284878761f602816dd4c77e0f12dd9d4f489829a3f911722065119"
+    },
+    {
+      "file": "pocket_wifi.h",
+      "source_project": "Plus天气与记事本适配项目/天气查询",
+      "source_file": "工程/main/pocket/pocket_wifi.h",
+      "original_sha256": "6cec41b792d66392cb02644197a834d1a3fe239efa6a1d150ccdad5ce50c4453",
+      "origin": "User-owned previously accepted Plus application; extracted with user authorization; not an upstream public mirror",
+      "license": "Project-owned source; no new open-source license granted by this package",
+      "status": "V0.3 host checks passed; target/hardware evidence recorded separately",
+      "v02_sha256": "6cec41b792d66392cb02644197a834d1a3fe239efa6a1d150ccdad5ce50c4453",
+      "v02_changes": "Byte-content preserved except source newline normalization if any",
+      "v03_sha256": "4066eec9ac9032fab1860107eeaafbb7686a5a67f390348258b11cf7940a8715"
+    }
+  ],
+  "helper_reimplementation_sources": [
+    {
+      "source_path_for_provenance_only": "Plus录音机固件项目/工程/main/recorder/recorder_wav.h",
+      "source_sha256": "bd39329db58fca7202b4964345fdf60ca00d0bb9462d49a938e9f3e8a352c7f8",
+      "scope": "PCM shift/clamp and squared gain only; no WAV application policy copied"
+    },
+    {
+      "source_path_for_provenance_only": "电子宠物/森林里的朋友Plus固件项目/工程/main/friends/friends_view.cc",
+      "source_sha256": "de6b8f7f8b551a20f086b9e7a7ffc11177335305b64db60202b40a150f783a16",
+      "scope": "Gray4 alpha composition then black contour; helper generalized, no assets copied"
+    },
+    {
+      "source_path_for_provenance_only": "固件口袋Plus适配项目/工程/main/pocket/pocket_wifi.cc",
+      "source_sha256": "f36b197fc3227a42e5830741f1f95b7b6063aff062ec4514a7cc796ab1f886a0",
+      "scope": "Historical V0.2 schema provenance only; V0.3 shared wire format replaced by public-guide-1.1 wifi_current"
+    }
+  ],
+  "test_source": {
+    "file": "tests/test_application_wifi.cpp",
+    "source_project": "Plus天气与记事本适配项目/天气查询/tests/test_application_wifi.cpp",
+    "original_sha256": "52ea15cf3b683519d7bec67af83962a8f837128efc8bca400b765ddef67e9783"
+  },
+  "license": "User-authorized project custom source extraction and new project code. No blanket open-source grant. See source-license.md.",
+  "historical_origin_binding": {
+    "binding": "local-plus-pocket107",
+    "host": "1.0.7-plus.13",
+    "note": "Historical provenance only; not V0.3 runtime contract or host gate"
+  },
+  "binding": "public-guide-1.1 / metalio16m-plus-pocket2",
+  "historical_native_host_checks_v02": {
+    "runner": "scripts/run_host_tests.py",
+    "latest_result": "PASS native Windows MSVC C++17, 2026-11-01; real RecordStore + WiFi private/public + portable service tests",
+    "not_hardware_acceptance": true
+  },
+  "native_host_checks": {
+    "date": "2026-11-02",
+    "runner": "scripts/run_host_tests.py and scripts/run_wifi_production_tests.py",
+    "storage": "PASS real RecordStore/private/public tests",
+    "production_wifi": "PASS 25 scenarios using actual production.cc and SDK mocks",
+    "old_defect_reproduction": "PASS 2 V0.2 production-code defects reproduced",
+    "not_hardware_acceptance": true
+  },
+  "v03_basis": {
+    "guide": "../../pocket-integration/references/public-guide-1.1.md",
+    "repair_report": "深圳天气1.0.1修复说明",
+    "repair_report_sha256": "c6529c877280fa6f3c33d1f6695969c1500517aa763ffde84228e65e9755370e",
+    "changes": [
+      "Strict standard shared wifi_current with raw SSID/password bytes",
+      "Accept ESP_ERR_WIFI_CONN only with observed stop proof",
+      "Request/SSID/BSSID attribution, preserve authentication reason before cleanup",
+      "New IP proof and event fences retained; unknown stop failures rejected"
+    ]
+  }
+}

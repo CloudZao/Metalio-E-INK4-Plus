@@ -1,0 +1,6 @@
+description: Development Skill dependency declarations required by the upstream Plus CMake files
+version: "1.0.0"
+dependencies:
+  idf: "==6.1.0"
+  78/uart-uhci: "==0.4.1"
+  espressif/iot_eth: "==0.1.0"

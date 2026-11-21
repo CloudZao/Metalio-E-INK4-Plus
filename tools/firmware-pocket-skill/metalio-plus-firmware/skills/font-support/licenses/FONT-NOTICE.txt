@@ -1,0 +1,20 @@
+Plus Mono Sans
+
+Bitmap font data derived from Noto Sans SC.
+Original copyright: Copyright 2014-2021 Adobe (http://www.adobe.com/),
+with Reserved Font Name 'Source'.
+The original and derivative font data are licensed under SIL Open Font License 1.1.
+The complete license is in OFL.txt. Keep it and this notice with redistributed font data.
+
+Pinned source:
+https://raw.githubusercontent.com/google/fonts/2894aab31764f10f29c421bdfd2340d3b382d384/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf
+Source SHA256:
+a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da
+
+Adaptation: native pixel sizes; original glyph metrics; selected wght values;
+coverage threshold 112; 1bpp black/white encoding; no per-glyph or runtime resizing.
+This is an engineering adaptation for Metalio E-INK4 Plus, not a claim to original Noto glyph designs.
+No endorsement by the original font authors is implied.
+
+The C++ runtime and Python tools have their separate MIT license.
+Converting the font into C++ byte arrays does not change the font data's OFL license.

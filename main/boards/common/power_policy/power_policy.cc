@@ -24,6 +24,7 @@ static const char* TAG = "PowerPolicy";
 constexpr const char* kPowerNvsNs = "power";
 constexpr const char* kIdleMhzNvsKey = "idle_mhz";
 constexpr const char* kNetGraceNvsKey = "net_grace_s";
+constexpr const char* kStandbyOffNvsKey = "standby_off_s";
 constexpr int kIdleMhzDefault = 320;
 
 namespace pwr {
@@ -45,6 +46,7 @@ bool touch_asleep = false;
 int idle_cpu_mhz = kIdleMhzDefault;
 int queued_cpu_mhz = 0;
 int net_grace_sec = kNetGraceSecDefault;
+int standby_to_shutdown_sec = kStandbyToShutdownSecDefault;
 int64_t last_user_activity_us = 0;
 int64_t standby_elapsed_us = 0;
 int64_t standby_awake_mark_us = 0;
@@ -61,7 +63,8 @@ namespace {
 
 std::atomic<int> s_cpu_mhz_pending{0};
 std::atomic<int> s_net_grace_pending{-1};
-std::atomic<bool> s_net_grace_writer_running{false};
+std::atomic<int> s_standby_off_pending{-1};
+std::atomic<bool> s_timeout_writer_running{false};
 bool s_hw_flushing = false; // 策略锁保护的硬件串行执行标记
 std::atomic<bool> s_cpu_freq_async_queued{false};
 std::atomic<bool> s_foreground_flush_queued{false}; // 合并前台保网变化，避免 UI 等待网络硬件
@@ -323,12 +326,22 @@ int NormalizeNetGraceSec(int sec)
     return pwr::kNetGraceSecDefault;
 }
 
+int NormalizeStandbyOffSec(int sec)
+{
+    if (sec == 30 * 60 || sec == 60 * 60 || sec == 3 * 60 * 60 || sec == 24 * 60 * 60) {
+        return sec;
+    }
+    return pwr::kStandbyToShutdownSecDefault;
+}
+
 void LoadPowerPrefsFromNvs()
 {
     Settings settings(kPowerNvsNs, false);
     pwr::idle_cpu_mhz = NormalizeIdleMhz(settings.GetInt(kIdleMhzNvsKey, kIdleMhzDefault));
     pwr::net_grace_sec =
         NormalizeNetGraceSec(settings.GetInt(kNetGraceNvsKey, pwr::kNetGraceSecDefault));
+    pwr::standby_to_shutdown_sec =
+        NormalizeStandbyOffSec(settings.GetInt(kStandbyOffNvsKey, pwr::kStandbyToShutdownSecDefault));
     ESP_LOGI(TAG, "power config idle_mhz=%d idle_stb_s=%d net_grace_s=%d stb_off_s=%d", pwr::idle_cpu_mhz,
              pwr::idle_to_standby_sec, pwr::net_grace_sec, pwr::standby_to_shutdown_sec);
 }
@@ -343,25 +356,39 @@ void PersistIdleMhzTask(void* arg)
     vTaskDelete(nullptr);
 }
 
-void PersistNetGraceTask(void* /*arg*/)
+void PersistPowerTimeoutTask(void* /*arg*/)
 {
     for (;;) {
         const int sec = s_net_grace_pending.exchange(-1);
-        if (sec >= 0) {
+        const int standby_sec = s_standby_off_pending.exchange(-1);
+        if (sec >= 0 || standby_sec >= 0) {
             // 提交并关闭 NVS 后再处理更新，避免旧值覆盖新值。
             {
                 Settings settings(kPowerNvsNs, true);
-                settings.SetInt(kNetGraceNvsKey, sec);
+                if (sec >= 0) settings.SetInt(kNetGraceNvsKey, sec);
+                if (standby_sec >= 0) settings.SetInt(kStandbyOffNvsKey, standby_sec);
             }
-            ESP_LOGI(TAG, "nvs save net_grace_s=%d", sec);
+            if (sec >= 0) ESP_LOGI(TAG, "nvs save net_grace_s=%d", sec);
+            if (standby_sec >= 0) ESP_LOGI(TAG, "nvs save standby_off_s=%d", standby_sec);
             continue;
         }
-        s_net_grace_writer_running.store(false);
-        if (s_net_grace_pending.load() < 0 || s_net_grace_writer_running.exchange(true)) {
+        s_timeout_writer_running.store(false);
+        if ((s_net_grace_pending.load() < 0 && s_standby_off_pending.load() < 0) || s_timeout_writer_running.exchange(true)) {
             break;
         }
     }
     vTaskDelete(nullptr);
+}
+
+void StartPowerTimeoutWriter()
+{
+    if ((s_net_grace_pending.load() >= 0 || s_standby_off_pending.load() >= 0) &&
+        !s_timeout_writer_running.exchange(true)) {
+        if (xTaskCreate(PersistPowerTimeoutTask, "power_time_nvs", 4096, nullptr, 5, nullptr) != pdPASS) {
+            s_timeout_writer_running.store(false);
+            ESP_LOGE(TAG, "xTaskCreate(power_time_nvs) failed");
+        }
+    }
 }
 
 void CpuFreqAsyncCb(void* /*arg*/)
@@ -947,11 +974,26 @@ void PowerPolicy::SetNetGraceSec(int sec)
         xSemaphoreGive(pwr::mu);
         pwr::FlushCpuFreqOutsideLock();
     }
-    if (s_net_grace_pending.load() >= 0 && !s_net_grace_writer_running.exchange(true)) {
-        if (xTaskCreate(PersistNetGraceTask, "net_grace_nvs", 4096,
-                        nullptr, 5, nullptr) != pdPASS) {
-            s_net_grace_writer_running.store(false);
-            ESP_LOGE(TAG, "xTaskCreate(net_grace_nvs) failed");
-        }
+    StartPowerTimeoutWriter();
+}
+
+int PowerPolicy::GetStandbyToShutdownSec() const
+{
+    if (pwr::mu == nullptr) return pwr::standby_to_shutdown_sec;
+    xSemaphoreTake(pwr::mu, portMAX_DELAY);
+    const int sec = pwr::standby_to_shutdown_sec;
+    xSemaphoreGive(pwr::mu);
+    return sec;
+}
+
+void PowerPolicy::SetStandbyToShutdownSec(int sec)
+{
+    sec = NormalizeStandbyOffSec(sec);
+    if (pwr::mu != nullptr) xSemaphoreTake(pwr::mu, portMAX_DELAY);
+    if (pwr::standby_to_shutdown_sec != sec) {
+        pwr::standby_to_shutdown_sec = sec;
+        s_standby_off_pending.store(sec);
     }
+    if (pwr::mu != nullptr) xSemaphoreGive(pwr::mu);
+    StartPowerTimeoutWriter();
 }

@@ -38,6 +38,7 @@ inline lv_coord_t PageTextColumnWidth(const Page& page, const lv_font_t* font, l
     int width = 0;
     for (const auto& item : page.items) {
         if (item.kind != ContentKind::kText) return max_width;
+        if (item.centered) return max_width;
         if (item.text.empty()) continue;
         if (item.justify && !item.chapter_title) return max_width;
         const int indent = item.para_indent && !item.chapter_title ? ParaIndentPadPx(font, style.indent_chars) : 0;
@@ -179,6 +180,7 @@ inline lv_obj_t* CreatePageTextLabel(lv_obj_t* col, const PageItem& item, lv_coo
     lv_label_set_text(label, item.text.c_str());
     lv_obj_set_style_text_font(label, book_font, 0);
     lv_obj_set_style_text_color(label, lv_color_black(), 0);
+    if (item.centered) lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_pad_bottom(label, underline_extra, 0);
     lv_obj_set_width(label, text_w);
     if (item.para_indent) {

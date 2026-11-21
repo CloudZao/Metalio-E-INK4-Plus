@@ -47,7 +47,8 @@ extern int idle_cpu_mhz;                     // AppIdle 目标 CPU MHz
 extern int queued_cpu_mhz;                   // 最近投递/应用的目标 MHz；0=未知
 inline constexpr int idle_to_standby_sec = 5 * 60; // 无操作进入待机的固定秒数
 extern int net_grace_sec;                    // 断网前暂留（秒）；0=永不因空闲断网
-inline constexpr int standby_to_shutdown_sec = 30 * 60; // 待机累计关机的固定秒数
+inline constexpr int kStandbyToShutdownSecDefault = 30 * 60; // 默认待机累计关机时长，单位秒
+extern int standby_to_shutdown_sec; // 待机累计关机时长，单位秒
 extern int64_t last_user_activity_us;        // 最近用户活动时间戳
 extern int64_t standby_elapsed_us;           // 已闭合的待机时长（清醒段+已完成浅睡段）
 extern int64_t standby_awake_mark_us;        // 当前清醒段起点；0=不在清醒段

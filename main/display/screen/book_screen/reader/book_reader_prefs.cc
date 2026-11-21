@@ -68,6 +68,7 @@ static int s_shake_turn = 0;
 static int s_shake_level = 3;
 static int s_auto_turn_seconds = 10;
 static int s_writing_mode = kBookReaderWritingHorizontal;
+static int s_inline_images = 1;
 static int s_text_direction = kBookReaderTextLeftToRight;
 static int s_page_turn = kBookReaderPageTurnSlide;
 static int s_shelf_view = kDefaultShelfView;
@@ -170,6 +171,7 @@ static void LoadFromNvs() {
     }
     s_auto_turn_seconds = std::max(5, std::min<int>(45, settings.GetInt("auto_turn_s", 10)));
     s_writing_mode = settings.GetInt("writing_mode", 0) == 1 ? 1 : 0;
+    s_inline_images = settings.GetInt("inline_images", 1) != 0;
     s_text_direction = settings.GetInt(kNvsTextDirectionKey, kBookReaderTextLeftToRight) ==
         kBookReaderTextRightToLeft ? kBookReaderTextRightToLeft : kBookReaderTextLeftToRight;
     s_background = settings.GetInt("background", 0);
@@ -211,6 +213,7 @@ enum class BookPrefsPersistKind : uint8_t {
     kTextValues = 15,
     kShakeTurn,
     kShakeLevel,
+    kInlineImages,
     kCount,
 };
 
@@ -275,6 +278,9 @@ static void PersistOne(BookPrefsPersistArg* p) {
                 break;
             case BookPrefsPersistKind::kWritingMode:
                 settings.SetInt("writing_mode", p->ival);
+                break;
+            case BookPrefsPersistKind::kInlineImages:
+                settings.SetInt("inline_images", p->ival);
                 break;
             case BookPrefsPersistKind::kTextDirection:
                 settings.SetInt(kNvsTextDirectionKey, p->ival);
@@ -710,6 +716,22 @@ void BookReaderPrefsSetTextDirection(int direction) {
     StartPersist(arg);
 }
 
+int BookReaderPrefsInlineImages() {
+    BookReaderPrefsEnsureLoaded();
+    return s_inline_images;
+}
+
+void BookReaderPrefsSetInlineImages(int value) {
+    BookReaderPrefsEnsureLoaded();
+    value = value != 0;
+    if (s_inline_images == value) return;
+    s_inline_images = value;
+    auto* arg = NewPersistArg(BookPrefsPersistKind::kInlineImages);
+    if (!arg) return;
+    arg->ival = value;
+    StartPersist(arg);
+}
+
 int BookReaderPrefsShakeTurn() {
     BookReaderPrefsEnsureLoaded();
     return s_shake_turn;
@@ -781,6 +803,7 @@ bool BookReaderPrefsSetTextValue(BookTextOption option, int value) {
 reader::TextStyle BookReaderPrefsTextStyle() {
     BookReaderPrefsEnsureLoaded();
     reader::TextStyle style;
+    style.inline_images = s_inline_images != 0;
     style.line_gap = s_text_values[2];
     style.letter_gap = s_text_values[1];
     style.indent_chars = s_text_values[4];
@@ -802,6 +825,7 @@ void BookReaderPrefsResetReading() {
     BookReaderPrefsSetOrient(kBookReaderOrientPortrait);
     BookReaderPrefsSetBackground(0);
     BookReaderPrefsSetWritingMode(kBookReaderWritingHorizontal);
+    BookReaderPrefsSetInlineImages(1);
     BookReaderPrefsSetTextDirection(kBookReaderTextLeftToRight);
     BookReaderPrefsSetPageTurn(kBookReaderPageTurnSlide);
     BookReaderPrefsSetShakeTurn(0);

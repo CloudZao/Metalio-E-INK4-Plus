@@ -349,7 +349,7 @@ bool RasterPageTextToL8(const Page& page, const lv_font_t* font, int spacing_per
         }
         const int available = page_w - (item.para_indent && !item.chapter_title ? indent_px : 0);
         const auto spacing = MakeTextLineSpacing(font, item.text, available, item.justify && !item.chapter_title, false, style.letter_gap);
-        if (item.chapter_title) {
+        if (item.chapter_title || item.centered) {
             const lv_coord_t tw = spacing.width;
             text_x = tw < page_w ? static_cast<lv_coord_t>((page_w - tw) / 2) : 0;
         } else if (item.para_indent) {

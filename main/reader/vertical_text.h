@@ -3,8 +3,44 @@
 #include <cstddef>
 #include <cstdint>
 #include <algorithm>
+#include <string_view>
 
 namespace reader {
+
+static inline bool ReaderEnglishLetter(uint32_t cp) {
+    return (cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z');
+}
+
+struct ReaderEnglishBreak {
+    size_t prefix = 0; // 当前行保留的源字节数，不含显示用连字符
+    bool move_word = false; // 当前行已有内容，整个单词移至下一行
+    bool hyphen = false; // 分词处追加显示用连字符
+};
+
+// ponytail: 按剩余字母数量拆词，不引入音节词典；单词超过整行时允许分段。
+template <typename GlyphWidth>
+static ReaderEnglishBreak ReaderPlanEnglishBreak(std::string_view word, int available,
+                                                size_t source_capacity, bool empty_line,
+                                                const GlyphWidth& glyph_width) {
+    const int hyphen_width = glyph_width('-');
+    size_t prefix = 0, prefix_letters = 0, letters = 0, plain_prefix = 0;
+    int width = 0;
+    for (size_t i = 0; i < word.size(); ++i) {
+        width += glyph_width(static_cast<unsigned char>(word[i]));
+        if (ReaderEnglishLetter(static_cast<unsigned char>(word[i]))) ++letters;
+        if (width <= available && i + 1 <= source_capacity) plain_prefix = i + 1;
+        if (width + hyphen_width <= available && i + 2 <= source_capacity &&
+            ReaderEnglishLetter(static_cast<unsigned char>(word[i])) &&
+            i + 1 < word.size() && ReaderEnglishLetter(static_cast<unsigned char>(word[i + 1]))) {
+            prefix = i + 1;
+            prefix_letters = letters;
+        }
+    }
+    if (plain_prefix == word.size()) return {word.size(), false, false};
+    if (!empty_line && (prefix == 0 || letters - prefix_letters > 5)) return {0, true, false};
+    if (prefix != 0) return {prefix, false, true};
+    return {std::max<size_t>(1, plain_prefix), false, false};
+}
 
 inline int VerticalAdvance(uint32_t cp, int cell, int glyph_advance = 0) {
     switch (cp) {
@@ -94,8 +130,10 @@ struct VerticalBreakState {
     size_t text_size = 0; // 合法断点前的 UTF-8 字节数
     bool valid = false; // 当前行或列存在合法断点
 
-    void Observe(uint32_t cp, uint32_t source_offset, size_t bytes) {
-        if (previous && VerticalCanBreak(previous, cp)) {
+    void Observe(uint32_t cp, uint32_t source_offset, size_t bytes, bool english_words = false) {
+        if (previous && VerticalCanBreak(previous, cp) &&
+            !(english_words && ((ReaderEnglishLetter(previous) && (ReaderEnglishLetter(cp) || cp == '\'')) ||
+                (previous == '\'' && ReaderEnglishLetter(cp))))) {
             offset = source_offset;
             text_size = bytes;
             valid = true;

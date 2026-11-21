@@ -14,7 +14,6 @@
 #include "board.h"
 #include "config.h"
 #include "epd_board_metalio_eink4_plus.h"
-#include "power_hw.h"
 #include "power_policy.h"
 #include "simple_uart.hpp"
 
@@ -162,12 +161,11 @@ void ModeWorker(void*) {
             const char* stage = "reset";
             bool reset_ok = true;
             if (boot_reset) {
-                reset_ok = power_hw_bt_power_reset() == ESP_OK;
+                // 开机不复位 P14；UART 已在 Init 中启动
+                ESP_LOGI(TAG, "boot P14 BT reset skipped");
                 epoch = s_power_epoch.load();
-                if (reset_ok) {
-                    boot_reset = false;
-                    NotifyBootResetDone();
-                }
+                boot_reset = false;
+                NotifyBootResetDone();
             }
             if (reset_ok) {
                 if (!PowerUnchanged(epoch)) {
@@ -221,6 +219,7 @@ void MetalioAudio_RequestModeInit() {
 void MetalioAudio_Init(void (*on_boot_reset_done)()) {
     s_boot_reset_done = on_boot_reset_done;
     epd_board_metalio_eink4_plus_pa_set(false);
+    // 开机不复位 P14；UART 仍尽早 begin，避免版本查询等依赖串口的路径被 ModeReady 卡住。
     auto& uart = SimpleUart::getInstance();
     if (!uart.begin(BT_AUDIO_TX_PIN, BT_AUDIO_RX_PIN, 115200, UART_NUM_1)) {
         s_completed_epoch.store(s_power_epoch.load());

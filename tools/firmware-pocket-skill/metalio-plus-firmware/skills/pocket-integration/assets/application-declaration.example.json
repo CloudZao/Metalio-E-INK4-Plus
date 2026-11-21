@@ -1,0 +1,11 @@
+{
+  "app_id": "your_app",
+  "version": "0.1.0",
+  "name": "按用户需求命名",
+  "description": "按实际功能填写",
+  "storage_mode": "NONE",
+  "state_schema": 0,
+  "exit_method": "UI",
+  "exit_hint": "点击顶部返回口袋，确认并保存后退出",
+  "tf_required_standalone": false
+}

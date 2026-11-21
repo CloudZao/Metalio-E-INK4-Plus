@@ -1,0 +1,527 @@
+{
+  "schema": 1,
+  "name": "metalio-plus-win64-r2",
+  "python": "3.13.17",
+  "idf_version": "6.1.0",
+  "idf_commit": "fff9895c82d744c7237be8847347bdd1b07c6643",
+  "target": "esp32s31",
+  "sdk_source_archive_count": 29,
+  "tools": [
+    "riscv32-esp-elf",
+    "riscv32-esp-elf-gdb",
+    "openocd-esp32",
+    "esp-rom-elfs",
+    "esp-clangd",
+    "cmake",
+    "ninja",
+    "idf-exe",
+    "ccache"
+  ],
+  "git_filename": "MinGit-2.56.0.4-64-bit.zip",
+  "git_sha256": "e3bf78351fe777fba47ddee5950082f8a98bb0f02604fdc7ba3ee2cb68ffa877",
+  "python_installer_filename": "python-3.13.17-amd64.exe",
+  "python_installer_sha256": "5da012101ba2e17113a9a1cd901e9ce1441086f2b7ecb5de06ec94163899a190",
+  "python_packages": [
+    {
+      "name": "annotated-types",
+      "version": "0.8.0",
+      "filename": "annotated_types-0.8.0-py3-none-any.whl",
+      "sha256": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0",
+      "kind": "wheel"
+    },
+    {
+      "name": "boolean.py",
+      "version": "5.0",
+      "filename": "boolean_py-5.0-py3-none-any.whl",
+      "sha256": "ef28a70bd43115208441b53a045d1549e2f0ec6e3d08a9d142cbc41c1938e8d9",
+      "kind": "wheel"
+    },
+    {
+      "name": "certifi",
+      "version": "2026.10.23",
+      "filename": "certifi-2026.10.23-py3-none-any.whl",
+      "sha256": "e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1",
+      "kind": "wheel"
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "filename": "cffi-2.1.1-cp313-cp313-win_amd64.whl",
+      "sha256": "1aa5645c30469b09530c4ebca77ebf8f17618293c58f8549cb1a543a50236e7d",
+      "kind": "wheel"
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.5.2",
+      "filename": "charset_normalizer-3.5.2-cp313-cp313-win_amd64.whl",
+      "sha256": "78456a747de8dc58360ffa581f30a002baf5aa28cb262536545e91f113ed7639",
+      "kind": "wheel"
+    },
+    {
+      "name": "click",
+      "version": "8.4.2",
+      "filename": "click-8.4.2-py3-none-any.whl",
+      "sha256": "e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76",
+      "kind": "wheel"
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "filename": "colorama-0.4.6-py2.py3-none-any.whl",
+      "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+      "kind": "wheel"
+    },
+    {
+      "name": "construct",
+      "version": "2.10.70",
+      "filename": "construct-2.10.70-py3-none-any.whl",
+      "sha256": "c80be81ef595a1a821ec69dc16099550ed22197615f4320b57cc9ce2a672cb30",
+      "kind": "wheel"
+    },
+    {
+      "name": "cryptography",
+      "version": "48.0.1",
+      "filename": "cryptography-48.0.1-cp311-abi3-win_amd64.whl",
+      "sha256": "39489bfca54c7a1f6b297efcd8bc608ab92d16c4ca631b0cad4da46724588b24",
+      "kind": "wheel"
+    },
+    {
+      "name": "esp-coredump",
+      "version": "1.17.2",
+      "filename": "esp_coredump-1.17.2-py3-none-any.whl",
+      "sha256": "376d594d565fede658481d3780ed5623b9b993592078dfcf75fecbab53901a70",
+      "kind": "wheel"
+    },
+    {
+      "name": "esp-idf-diag",
+      "version": "0.2.0",
+      "filename": "esp_idf_diag-0.2.0-py3-none-any.whl",
+      "sha256": "0a23b8ebf263231e9323fc6098c01ec4a51d6dd4ce8af7a1f766e78a91284642",
+      "kind": "wheel"
+    },
+    {
+      "name": "esp-idf-kconfig",
+      "version": "3.14.0",
+      "filename": "esp_idf_kconfig-3.14.0-py3-none-any.whl",
+      "sha256": "1613adf806f2ab63c778eeb0aba7a1b248b507cb11dff99983deb248b2b12a74",
+      "kind": "wheel"
+    },
+    {
+      "name": "esp-idf-monitor",
+      "version": "1.10.0",
+      "filename": "esp_idf_monitor-1.10.0-py3-none-any.whl",
+      "sha256": "b7a328f580f771ce1c3e306f6ac7d8c2c2e54f9091fa3f60908214be072feb48",
+      "kind": "wheel"
+    },
+    {
+      "name": "esp_idf_nvs_partition_gen",
+      "version": "0.1.9",
+      "filename": "esp_idf_nvs_partition_gen-0.1.9-py3-none-any.whl",
+      "sha256": "9655b81dcfac034372bc00ac301f26830619abdd622949efb70cb7f78c80ba12",
+      "kind": "wheel"
+    },
+    {
+      "name": "esp_idf_panic_decoder",
+      "version": "1.5.0",
+      "filename": "esp_idf_panic_decoder-1.5.0-py3-none-any.whl",
+      "sha256": "c711abafb99efdc343e19c45b6416b14a863fbe29115fafa8264cefaab85b8ea",
+      "kind": "wheel"
+    },
+    {
+      "name": "esp-idf-sbom",
+      "version": "1.5.0",
+      "filename": "esp_idf_sbom-1.5.0-py3-none-any.whl",
+      "sha256": "1b0ab72d610cfd649e89ca60139b1e59464688c454bff9d29a03f77ac086c6ff",
+      "kind": "wheel"
+    },
+    {
+      "name": "esp-idf-size",
+      "version": "2.3.2",
+      "filename": "esp_idf_size-2.3.2-py3-none-any.whl",
+      "sha256": "dd395d7baa2693bc0b6092a50bf4dadf31a0a8a8f0920c6da3dcde6c75b2a9ef",
+      "kind": "wheel"
+    },
+    {
+      "name": "esp-pylib",
+      "version": "1.2.0",
+      "filename": "esp_pylib-1.2.0-py3-none-any.whl",
+      "sha256": "581fd31eb20db4b80519fe883eaeacf5b3c6a2c0b7cce353a7d326ae7cbd4f5f",
+      "kind": "wheel"
+    },
+    {
+      "name": "esptool",
+      "version": "5.6.0",
+      "filename": "esptool-5.6.0.tar.gz",
+      "sha256": "86c7249e9cc3a824e032ede9ba20abad057a2c49e231418cc4f02b177bb36f42",
+      "kind": "sdist"
+    },
+    {
+      "name": "freertos-gdb",
+      "version": "1.0.4",
+      "filename": "freertos_gdb-1.0.4-py3-none-any.whl",
+      "sha256": "f924aa5c51318d9978afffca57bb07b979569a2c0adddacfcd931ac8d58ee53b",
+      "kind": "wheel"
+    },
+    {
+      "name": "idf-component-manager",
+      "version": "3.1.2",
+      "filename": "idf_component_manager-3.1.2-py3-none-any.whl",
+      "sha256": "424494493b47b61ea0f7666d3018a71deecb77f21186bc8b6761b0b6f98e8f90",
+      "kind": "wheel"
+    },
+    {
+      "name": "idf-drivers-gdb",
+      "version": "0.1.1",
+      "filename": "idf_drivers_gdb-0.1.1-py3-none-any.whl",
+      "sha256": "aab3fbc57bfcef44332b9510c4bc16efe40d4b5db1f69f736ae397690f53f273",
+      "kind": "wheel"
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "filename": "idna-3.20-py3-none-any.whl",
+      "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+      "kind": "wheel"
+    },
+    {
+      "name": "intelhex",
+      "version": "2.3.0",
+      "filename": "intelhex-2.3.0-py2.py3-none-any.whl",
+      "sha256": "87cc5225657524ec6361354be928adfd56bcf2a3dcc646c40f8f094c39c07db4",
+      "kind": "wheel"
+    },
+    {
+      "name": "jsonref",
+      "version": "1.1.0",
+      "filename": "jsonref-1.1.0-py3-none-any.whl",
+      "sha256": "590dc7773df6c21cbf948b5dac07a72a251db28b0238ceecce0a2abfa8ec30a9",
+      "kind": "wheel"
+    },
+    {
+      "name": "license-expression",
+      "version": "30.4.4",
+      "filename": "license_expression-30.4.4-py3-none-any.whl",
+      "sha256": "421788fdcadb41f049d2dc934ce666626265aeccefddd25e162a26f23bcbf8a4",
+      "kind": "wheel"
+    },
+    {
+      "name": "linkify-it-py",
+      "version": "2.2.0",
+      "filename": "linkify_it_py-2.2.0-py3-none-any.whl",
+      "sha256": "3adc40eb5af300b2605fcfdb968c24e1d780a90f1f2221af7c15e5111e94d443",
+      "kind": "wheel"
+    },
+    {
+      "name": "markdown-it-py",
+      "version": "4.2.0",
+      "filename": "markdown_it_py-4.2.0-py3-none-any.whl",
+      "sha256": "9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a",
+      "kind": "wheel"
+    },
+    {
+      "name": "mdit-py-plugins",
+      "version": "0.6.1",
+      "filename": "mdit_py_plugins-0.6.1-py3-none-any.whl",
+      "sha256": "214c82fb2ac524472ab6a5bcab1de80f73b50443e187f401bfd77efbc7c6481d",
+      "kind": "wheel"
+    },
+    {
+      "name": "mdurl",
+      "version": "0.1.2",
+      "filename": "mdurl-0.1.2-py3-none-any.whl",
+      "sha256": "84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8",
+      "kind": "wheel"
+    },
+    {
+      "name": "numpy",
+      "version": "2.5.4",
+      "filename": "numpy-2.5.4-cp313-cp313-win_amd64.whl",
+      "sha256": "8b4d2fd2d34e5f8c9235ee787de5631a37a28402b15cb80814df973d2be54129",
+      "kind": "wheel"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "filename": "packaging-26.3-py3-none-any.whl",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "kind": "wheel"
+    },
+    {
+      "name": "pathvalidate",
+      "version": "3.3.1",
+      "filename": "pathvalidate-3.3.1-py3-none-any.whl",
+      "sha256": "5263baab691f8e1af96092fa5137ee17df5bdfbd6cff1fcac4d6ef4bc2e1735f",
+      "kind": "wheel"
+    },
+    {
+      "name": "pillow",
+      "version": "13.0.0",
+      "filename": "pillow-13.0.0-cp313-cp313-win_amd64.whl",
+      "sha256": "9dda0788a9932776a75d8bcc020076edc308ce2508b51f6739a45e3158b3fc42",
+      "kind": "wheel"
+    },
+    {
+      "name": "pip",
+      "version": "26.2.2",
+      "filename": "pip-26.2.2-py3-none-any.whl",
+      "sha256": "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70",
+      "kind": "wheel"
+    },
+    {
+      "name": "platformdirs",
+      "version": "4.13.6",
+      "filename": "platformdirs-4.13.6-py3-none-any.whl",
+      "sha256": "21fc198fb09f3e78cadcdfd8a6ae4fd65cadc64a3cba78b694321c2996114a3e",
+      "kind": "wheel"
+    },
+    {
+      "name": "psutil",
+      "version": "7.2.2",
+      "filename": "psutil-7.2.2-cp37-abi3-win_amd64.whl",
+      "sha256": "eb7e81434c8d223ec4a219b5fc1c47d0417b12be7ea866e24fb5ad6e84b3d988",
+      "kind": "wheel"
+    },
+    {
+      "name": "pyclang",
+      "version": "0.7.0",
+      "filename": "pyclang-0.7.0-py3-none-any.whl",
+      "sha256": "a19d333ab02ab0df486e29fabf961b8e3748d8b5343d8170764e49f114bb8393",
+      "kind": "wheel"
+    },
+    {
+      "name": "pycparser",
+      "version": "3.12",
+      "filename": "pycparser-3.12-py3-none-any.whl",
+      "sha256": "a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e",
+      "kind": "wheel"
+    },
+    {
+      "name": "pydantic",
+      "version": "2.14.1",
+      "filename": "pydantic-2.14.1-py3-none-any.whl",
+      "sha256": "9195d967ec791692a04438115466764fb8b9a27b31f14a760437694f40d6b454",
+      "kind": "wheel"
+    },
+    {
+      "name": "pydantic_core",
+      "version": "2.50.1",
+      "filename": "pydantic_core-2.50.1-cp313-cp313-win_amd64.whl",
+      "sha256": "7816e98acc08119dc0f340ab167048ecc54126316330c1f0caf7c6756c88e28f",
+      "kind": "wheel"
+    },
+    {
+      "name": "pydantic-settings",
+      "version": "2.16.1",
+      "filename": "pydantic_settings-2.16.1-py3-none-any.whl",
+      "sha256": "30f5313340da4e8f1b440d1910b92a5bc3ccbb6b4ba70ec2b8395bc921f418f5",
+      "kind": "wheel"
+    },
+    {
+      "name": "pyelftools",
+      "version": "0.33",
+      "filename": "pyelftools-0.33-py3-none-any.whl",
+      "sha256": "f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036",
+      "kind": "wheel"
+    },
+    {
+      "name": "pygdbmi",
+      "version": "0.11.0.0",
+      "filename": "pygdbmi-0.11.0.0-py3-none-any.whl",
+      "sha256": "f7cac28e1d558927444c880ed1e65da1a5d8686121a3aac16f42fb84d3ceb60d",
+      "kind": "wheel"
+    },
+    {
+      "name": "Pygments",
+      "version": "2.21.0",
+      "filename": "pygments-2.21.0-py3-none-any.whl",
+      "sha256": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
+      "kind": "wheel"
+    },
+    {
+      "name": "pyparsing",
+      "version": "3.3.3",
+      "filename": "pyparsing-3.3.3-py3-none-any.whl",
+      "sha256": "ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4",
+      "kind": "wheel"
+    },
+    {
+      "name": "pyserial",
+      "version": "3.5",
+      "filename": "pyserial-3.5-py2.py3-none-any.whl",
+      "sha256": "c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0",
+      "kind": "wheel"
+    },
+    {
+      "name": "python-dotenv",
+      "version": "1.2.4",
+      "filename": "python_dotenv-1.2.4-py3-none-any.whl",
+      "sha256": "42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc",
+      "kind": "wheel"
+    },
+    {
+      "name": "PyYAML",
+      "version": "6.0.3",
+      "filename": "pyyaml-6.0.3-cp313-cp313-win_amd64.whl",
+      "sha256": "79005a0d97d5ddabfeeea4cf676af11e647e41d81c9a7722a193022accdb6b7c",
+      "kind": "wheel"
+    },
+    {
+      "name": "qoi-conv",
+      "version": "1.0.2",
+      "filename": "qoi-conv-1.0.2.tar.gz",
+      "sha256": "15cf7bfe364e94724e4a4c3c903fa2d6910c600a8d0004b4f0764a76b44c29c1",
+      "kind": "sdist"
+    },
+    {
+      "name": "reedsolo",
+      "version": "1.7.0",
+      "filename": "reedsolo-1.7.0-py3-none-any.whl",
+      "sha256": "2b6a3e402a1ee3e1eea3f932f81e6c0b7bbc615588074dca1dbbcdeb055002bd",
+      "kind": "wheel"
+    },
+    {
+      "name": "requests",
+      "version": "2.34.2",
+      "filename": "requests-2.34.2-py3-none-any.whl",
+      "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+      "kind": "wheel"
+    },
+    {
+      "name": "requests-file",
+      "version": "3.0.1",
+      "filename": "requests_file-3.0.1-py2.py3-none-any.whl",
+      "sha256": "d0f5eb94353986d998f80ac63c7f146a307728be051d4d1cd390dbdb59c10fa2",
+      "kind": "wheel"
+    },
+    {
+      "name": "requests-toolbelt",
+      "version": "1.0.0",
+      "filename": "requests_toolbelt-1.0.0-py2.py3-none-any.whl",
+      "sha256": "cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06",
+      "kind": "wheel"
+    },
+    {
+      "name": "rich",
+      "version": "15.0.0",
+      "filename": "rich-15.0.0-py3-none-any.whl",
+      "sha256": "33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb",
+      "kind": "wheel"
+    },
+    {
+      "name": "rich-click",
+      "version": "1.9.9",
+      "filename": "rich_click-1.9.9-py3-none-any.whl",
+      "sha256": "365e7a9d0adb42e41ea832a0a12e02c44c079a26536dee688125eb9814f97274",
+      "kind": "wheel"
+    },
+    {
+      "name": "ruamel.yaml",
+      "version": "0.19.1",
+      "filename": "ruamel_yaml-0.19.1-py3-none-any.whl",
+      "sha256": "27592957fedf6e0b62f281e96effd28043345e0e66001f97683aa9a40c667c93",
+      "kind": "wheel"
+    },
+    {
+      "name": "schema",
+      "version": "0.7.8",
+      "filename": "schema-0.7.8-py2.py3-none-any.whl",
+      "sha256": "00bd977fadc7d9521bf289850cd8a8aa5f4948f575476b8daaa5c1b57af2dce1",
+      "kind": "wheel"
+    },
+    {
+      "name": "setuptools",
+      "version": "84.2.1",
+      "filename": "setuptools-84.2.1-py3-none-any.whl",
+      "sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2",
+      "kind": "wheel"
+    },
+    {
+      "name": "textual",
+      "version": "8.2.8",
+      "filename": "textual-8.2.8-py3-none-any.whl",
+      "sha256": "267375fd402dc8d981457212efa71f0e3365fd17bba144ba9bb3ed7563cb374a",
+      "kind": "wheel"
+    },
+    {
+      "name": "tree-sitter",
+      "version": "0.26.0",
+      "filename": "tree_sitter-0.26.0-cp313-cp313-win_amd64.whl",
+      "sha256": "93e220cab7e6a823efeb2046c49171427de92ef71c7c681c01820d14d8d3721f",
+      "kind": "wheel"
+    },
+    {
+      "name": "tree-sitter-c",
+      "version": "0.24.2",
+      "filename": "tree_sitter_c-0.24.2-cp310-abi3-win_amd64.whl",
+      "sha256": "abb549225091f7b25df2dd3a0143ece6e208f7055d8bcb4700b41ee79b9ef1e1",
+      "kind": "wheel"
+    },
+    {
+      "name": "truststore",
+      "version": "0.10.5",
+      "filename": "truststore-0.10.5-py3-none-any.whl",
+      "sha256": "9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c",
+      "kind": "wheel"
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.16.0",
+      "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "kind": "wheel"
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.4",
+      "filename": "typing_inspection-0.4.4-py3-none-any.whl",
+      "sha256": "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147",
+      "kind": "wheel"
+    },
+    {
+      "name": "urllib3",
+      "version": "2.8.0",
+      "filename": "urllib3-2.8.0-py3-none-any.whl",
+      "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+      "kind": "wheel"
+    },
+    {
+      "name": "websockets",
+      "version": "17.3",
+      "filename": "websockets-17.3-cp313-cp313-win_amd64.whl",
+      "sha256": "66027e401c70d0cf55021b91b8a7ec2cd5810e20602f945b4fe6ae8b37ed232b",
+      "kind": "wheel"
+    },
+    {
+      "name": "wheel",
+      "version": "0.48.0",
+      "filename": "wheel-0.48.0-py3-none-any.whl",
+      "sha256": "3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab",
+      "kind": "wheel"
+    }
+  ],
+  "components": {
+    "78/esp-opus": "1.0.5",
+    "78/esp-opus-encoder": "2.4.1",
+    "78/uart-uhci": "0.4.1",
+    "espressif/button": "4.1.7",
+    "espressif/cjson": "1.7.19~2",
+    "espressif/cmake_utilities": "0.5.3",
+    "espressif/esp_codec_dev": "1.5.11",
+    "espressif/esp_lcd_touch": "1.2.1",
+    "espressif/esp_lv_decoder": "0.4.3",
+    "espressif/esp_lv_fs": "1.0.1",
+    "espressif/esp_lvgl_adapter": "0.6.3",
+    "espressif/esp_mmap_assets": "2.0.1",
+    "espressif/esp_new_jpeg": "1.0.2",
+    "espressif/esp_tinyusb": "2.4.0",
+    "espressif/freetype": "2.14.3~1",
+    "espressif/iot_eth": "0.1.0",
+    "espressif/knob": "1.1.0",
+    "espressif/libpng": "1.6.59",
+    "espressif/tinyusb": "0.21.0~2",
+    "espressif/zlib": "1.3.2~2",
+    "lvgl/lvgl": "9.5.0"
+  },
+  "constraints_filename": "espidf.constraints.v6.1.txt",
+  "constraints_sha256": "8fd2a7299a476370a1322e87a21ce0e24a9e5b8b6df4b34f0b8acb4a4b03d135"
+}

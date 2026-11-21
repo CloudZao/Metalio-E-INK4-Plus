@@ -61,6 +61,7 @@ const char* UiBookmarkLayoutBusy() { return Lang::Strings::BOOK_BOOKMARK_LAYOUT_
 const char* UiBookmarkAddMemory() { return Lang::Strings::BOOK_BOOKMARK_ADD_MEMORY; }
 const char* UiBookmarkImageSuffix() { return Lang::Strings::BOOK_BOOKMARK_IMAGE_SUFFIX; }
 const char* UiBookmarkImage() { return Lang::Strings::BOOK_BOOKMARK_IMAGE; }
+const char* UiIllustration() { return Lang::Strings::BOOK_ILLUSTRATION; }
 #else
 const char* UiBlank() { return "(Blank)"; }
 const char* UiReadFileFail() { return "(Read failed)"; }
@@ -71,6 +72,7 @@ const char* UiBookmarkLayoutBusy() { return "Laying out text. Add the bookmark s
 const char* UiBookmarkAddMemory() { return "Not enough memory to add a bookmark"; }
 const char* UiBookmarkImageSuffix() { return " (Image or chapter page)"; }
 const char* UiBookmarkImage() { return "Image or chapter page"; }
+const char* UiIllustration() { return "[Illustration]"; }
 #endif
 
 constexpr const char* TAG = "BookSession";
@@ -169,7 +171,8 @@ bool FlushLineToPage(std::string& line, BookPageStore& pages, Page& cur, lv_coor
                      const TextLineLayout& layout, int& row, lv_coord_t gap_before,
                      bool para_indent = false, bool chapter_title = false,
                      bool para_gap_before = false, uint32_t source_block = UINT32_MAX,
-                     uint32_t source_begin = 0, uint32_t source_end = 0, bool justify = false) {
+                     uint32_t source_begin = 0, uint32_t source_end = 0, bool justify = false,
+                     bool hyphenated = false, bool centered = false) {
     if (line.empty()) {
         return true;
     }
@@ -187,7 +190,9 @@ bool FlushLineToPage(std::string& line, BookPageStore& pages, Page& cur, lv_coor
         item.para_indent = para_indent && !chapter_title;
         item.para_gap_before = para_gap_before;
         item.chapter_title = chapter_title;
-        item.justify = justify && !chapter_title;
+        item.justify = justify && !chapter_title && !centered;
+        item.hyphenated = hyphenated;
+        item.centered = centered;
         item.text = std::move(line);
         line.clear();
         cur.items.push_back(std::move(item));
@@ -1155,6 +1160,9 @@ uint32_t BookSession::FontFingerprint() const {
     h = h * 131u + static_cast<uint32_t>(text_style_.line_gap + 1);
     h = h * 131u + static_cast<uint32_t>(text_style_.letter_gap);
     h = h * 131u + static_cast<uint32_t>(text_style_.indent_chars);
+    if (!text_style_.inline_images && info_.format != BookFormat::kTxt) {
+        for (const char* p = UiIllustration(); *p; ++p) h = h * 131u + static_cast<unsigned char>(*p);
+    }
     h = h * 131u + 0x42524B33u;
     h = h * 131u + static_cast<uint32_t>(viewport_w_);
     h = h * 131u + static_cast<uint32_t>(viewport_h_);
@@ -2383,16 +2391,19 @@ bool BookSession::PaginateChapter(int chapter, BookPageStore& built, uint32_t ge
     TextSpacingState spacing;
     uint32_t block_index = UINT32_MAX, offset = 0, line_begin = 0;
     bool first_line = true;
+    bool illustration_placeholder = false;
     size_t glyphs = 0;
     bool preview_full = false;
     ZipReader image_source;
-    auto flush_line = [&](bool title, bool justify = false) {
+    auto flush_line = [&](bool title, bool justify = false, bool hyphenated = false) {
         if (line.empty()) return true;
         const bool indent = first_line && !title;
         if (indent) StripLeadingParaWs(line);
+        if (hyphenated) line.push_back('-');
         const lv_coord_t gap = first_line ? ReaderParagraphGap(para_gap_, previous_title) : 0;
         const bool ok = FlushLineToPage(line, built, cur, y, layout, row, gap,
-            indent, title, first_line, block_index, line_begin, offset, justify);
+            indent, title, first_line, block_index, illustration_placeholder ? 0 : line_begin,
+            illustration_placeholder ? 1 : offset, justify, hyphenated, illustration_placeholder);
         if (preview && !built.empty()) preview_full = true;
         first_line = false; line_w = 0; breaks = {}; spacing = {};
         return ok && !preview_full;
@@ -2451,6 +2462,12 @@ bool BookSession::PaginateChapter(int chapter, BookPageStore& built, uint32_t ge
             first_line = preview->source_para_start;
             if (offset < preview->source_offset) return true;
         }
+        illustration_placeholder = block.kind == ContentKind::kImage && !text_style_.inline_images;
+        if (illustration_placeholder) {
+            block.kind = ContentKind::kText;
+            block.text = UiIllustration();
+            first_line = false;
+        }
         if (block.kind == ContentKind::kText) {
             if (block.chapter_title && !epub_ && !cur.items.empty()) {
                 if (!built.Push(std::move(cur))) return false;
@@ -2458,6 +2475,7 @@ bool BookSession::PaginateChapter(int chapter, BookPageStore& built, uint32_t ge
                 cur = Page{}; y = 0; row = 0;
             }
             const auto* data = reinterpret_cast<const uint8_t*>(block.text.data());
+            size_t english_end = 0, english_split = SIZE_MAX;
             for (size_t i = 0; i < block.text.size();) {
                 if (interrupted()) return false;
                 if ((++glyphs & 0x7FFu) == 0) {
@@ -2466,6 +2484,11 @@ bool BookSession::PaginateChapter(int chapter, BookPageStore& built, uint32_t ge
                     #endif
                 }
                 if (!apply_epub_breaks(block.chapter_title)) return false;
+                if (i == english_split) {
+                    if (!flush_line(block.chapter_title, true, true)) return false;
+                    english_split = SIZE_MAX;
+                    english_end = i;
+                }
                 uint32_t cp = 0;
                 const size_t n = Utf8Next(data + i, block.text.size() - i, &cp);
                 if (!n) { error_ = BookReadError::kInvalidData; return false; }
@@ -2474,12 +2497,33 @@ bool BookSession::PaginateChapter(int chapter, BookPageStore& built, uint32_t ge
                     i += n; offset += n; continue;
                 }
                 if (first_line && line.empty() && IsTxtParaIndentWs(cp)) { i += n; offset += n; continue; }
+                if (!vertical_writing_ && ReaderEnglishLetter(cp) && i >= english_end) {
+                    english_end = i + 1;
+                    while (english_end < block.text.size()) {
+                        const unsigned char next = block.text[english_end];
+                        if (!ReaderEnglishLetter(next) && !(next == '\'' && english_end + 1 < block.text.size() &&
+                            ReaderEnglishLetter(static_cast<unsigned char>(block.text[english_end - 1])) &&
+                            ReaderEnglishLetter(static_cast<unsigned char>(block.text[english_end + 1])))) break;
+                        ++english_end;
+                    }
+                    const int used = line.empty() && first_line && !block.chapter_title ? LayoutIndentWidth() : line_w;
+                    const auto plan = ReaderPlanEnglishBreak(
+                        std::string_view(block.text).substr(i, english_end - i), viewport_w_ - used,
+                        kMaxLineSourceBytes - line.size(), line.empty(),
+                        [&](uint32_t letter) { return LayoutGlyphWidth(letter); });
+                    if (plan.move_word) {
+                        if (!flush_line(block.chapter_title, true)) return false;
+                        english_end = i;
+                        continue;
+                    }
+                    english_split = plan.hyphen ? i + plan.prefix : SIZE_MAX;
+                }
                 lv_coord_t width = LayoutGlyphWidth(cp);
                 if ((cp == 0x20 || cp == 0xA0) && width <= 0) width = std::max<lv_coord_t>(1, line_h / 3);
                 TextSpacingState candidate_spacing = spacing;
                 if (!vertical_writing_ && line_w + width > viewport_w_) ObserveTextGlyph(candidate_spacing, glyph_font_, cp, text_style_.letter_gap);
                 VerticalBreakState candidate = breaks;
-                candidate.Observe(cp, offset, line.size());
+                candidate.Observe(cp, offset, line.size(), !vertical_writing_);
                 if (!line.empty() && ((line_w + width > viewport_w_ && (vertical_writing_ ||
                     !CanFitTrailingPunctuation(cp, line_w + width, viewport_w_, candidate_spacing))) ||
                     line.size() + n > kMaxLineSourceBytes)) {
@@ -2500,7 +2544,7 @@ bool BookSession::PaginateChapter(int chapter, BookPageStore& built, uint32_t ge
                                                          line.size() - j, &tail_cp);
                             if (!count) return false;
                             if (!vertical_writing_) ObserveTextGlyph(spacing, glyph_font_, tail_cp, text_style_.letter_gap);
-                            breaks.Observe(tail_cp, cut + j, j);
+                            breaks.Observe(tail_cp, cut + j, j, !vertical_writing_);
                             line_w += LayoutGlyphWidth(tail_cp);
                             j += count;
                         }
@@ -2508,13 +2552,18 @@ bool BookSession::PaginateChapter(int chapter, BookPageStore& built, uint32_t ge
                 }
                 if (line.empty()) { line_begin = offset; line_w = first_line && !block.chapter_title ? LayoutIndentWidth() : 0; }
                 if (!vertical_writing_) ObserveTextGlyph(spacing, glyph_font_, cp, text_style_.letter_gap);
-                breaks.Observe(cp, offset, line.size());
+                breaks.Observe(cp, offset, line.size(), !vertical_writing_);
                 line.append(block.text.data() + i, n); line_w += width; i += n; offset += n;
             }
             if (!apply_epub_breaks(block.chapter_title)) return false;
             if (!block.continues) {
                 if (!line.empty() && !flush_line(block.chapter_title)) return false;
                 previous_title = block.chapter_title;
+            }
+            if (illustration_placeholder && page_images_mode_ && !cur.items.empty()) {
+                if (!built.Push(std::move(cur))) return false;
+                if (preview) { preview_full = true; return false; }
+                cur = Page{}; y = 0; row = 0;
             }
             return true;
         }
@@ -2658,7 +2707,7 @@ bool BookSession::CountChapterPages(int chapter, int& out_pages, uint32_t genera
 
 namespace {
 
-constexpr uint32_t kChapterPageCacheVersion = 15;
+constexpr uint32_t kChapterPageCacheVersion = 17;
 
 #pragma pack(push, 1)
 struct ChapterPageHdr {
@@ -2671,7 +2720,8 @@ struct ChapterPageHdr {
     uint16_t para_gap;
     uint32_t font_fp;
     uint8_t page_images_mode;
-    uint8_t reserved[3];
+    uint8_t inline_images; // 页内插图开关
+    uint8_t reserved[2];
 };
 #pragma pack(pop)
 
@@ -2696,7 +2746,8 @@ bool BookSession::TryLoadChapterPageCache() {
         hdr.viewport_w != static_cast<uint16_t>(viewport_w_) ||
         hdr.viewport_h != static_cast<uint16_t>(viewport_h_) ||
         hdr.line_spacing_percent != static_cast<uint16_t>(line_spacing_percent_) ||
-        hdr.para_gap != static_cast<uint16_t>(para_gap_) || hdr.font_fp != (page_images_mode_ ? 0 : FontFingerprint()) ||
+        hdr.para_gap != static_cast<uint16_t>(para_gap_) || hdr.font_fp != (page_images_mode_ && text_style_.inline_images ? 0 : FontFingerprint()) ||
+        hdr.inline_images != static_cast<uint8_t>(text_style_.inline_images) ||
         hdr.page_images_mode != static_cast<uint8_t>(page_images_mode_ ? 1 : 0)) {
         std::fclose(ifp);
         return false;
@@ -2748,8 +2799,9 @@ bool BookSession::SaveChapterPageCache(const std::vector<uint32_t>& counts) cons
     hdr.viewport_h = static_cast<uint16_t>(viewport_h_);
     hdr.line_spacing_percent = static_cast<uint16_t>(line_spacing_percent_);
     hdr.para_gap = static_cast<uint16_t>(para_gap_);
-    hdr.font_fp = page_images_mode_ ? 0 : FontFingerprint();
+    hdr.font_fp = page_images_mode_ && text_style_.inline_images ? 0 : FontFingerprint();
     hdr.page_images_mode = static_cast<uint8_t>(page_images_mode_ ? 1 : 0);
+    hdr.inline_images = static_cast<uint8_t>(text_style_.inline_images);
     if (std::fwrite(&hdr, 1, sizeof(hdr), ofp) != sizeof(hdr) ||
         std::fwrite(counts.data(), sizeof(uint32_t), counts.size(),
                     ofp) != counts.size()) {
@@ -3559,6 +3611,7 @@ bool BookSession::BeginLiveRelayout(LayoutAnchor* anchor_inout) {
     if (!open_ || font_ == nullptr) {
         return false;
     }
+    if (!text_style_.inline_images) ClearPageImageCache();
     LayoutAnchor anchor = CaptureLayoutAnchor();
     if (anchor_inout != nullptr && anchor_inout->valid) {
         anchor = *anchor_inout;
@@ -3984,8 +4037,9 @@ bool BookSession::AddCurrentPageBookmark(std::string& error) {
                 entry.excerpt+='\n';++characters;
             }
             size_t i=0;
-            while(i<item.text.size() && characters<150) {
-                const size_t n=Utf8Next(reinterpret_cast<const uint8_t*>(item.text.data()+i),item.text.size()-i,nullptr);
+            const size_t text_size = item.text.size() - (item.hyphenated && !item.text.empty() ? 1 : 0);
+            while(i<text_size && characters<150) {
+                const size_t n=Utf8Next(reinterpret_cast<const uint8_t*>(item.text.data()+i),text_size-i,nullptr);
                 if(!n || entry.excerpt.size()+n>BookBookmarkStore::kMaxExcerptBytes)break;
                 entry.excerpt.append(item.text,i,n);i+=n;++characters;
             }

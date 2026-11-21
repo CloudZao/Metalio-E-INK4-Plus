@@ -164,6 +164,8 @@
     X(BOOK_WRITING_HORIZONTAL, "横排", "Horizontal") \
     X(BOOK_WRITING_VERTICAL, "竖排", "Vertical") \
     X(BOOK_WRITING_TITLE, "文字排版", "Text layout") \
+    X(BOOK_INLINE_IMAGES, "页内插图", "Illustrations") \
+    X(BOOK_ILLUSTRATION, "[插图]", "[Illustration]") \
     X(BOOK_TEXT_DIRECTION, "文字方向", "Text direction") \
     X(BOOK_TEXT_LEFT_TO_RIGHT, "从左往右", "Left to right") \
     X(BOOK_TEXT_RIGHT_TO_LEFT, "从右往左", "Right to left") \
@@ -704,7 +706,11 @@
     X(SETTINGS_POWER_STANDBY_TITLE, "浅睡待机（默认 5 分钟）", "Light sleep (def 5 min)")                       \
     X(SETTINGS_POWER_STANDBY_HINT, "无操作 5 分钟后进入浅睡待机", "Enters light sleep after 5 minutes of inactivity")                     \
     X(SETTINGS_POWER_OFF_TITLE, "自动关机（默认 30 分钟）", "Auto power-off (def 30 min)")                      \
-    X(SETTINGS_POWER_OFF_HINT, "待机累计 30 分钟后自动关机", "Powers off after 30 minutes in standby")                      \
+    X(SETTINGS_POWER_30_MIN, "30 分钟", "30 min") \
+    X(SETTINGS_POWER_1_HOUR, "1 小时", "1 hour") \
+    X(SETTINGS_POWER_3_HOURS, "3 小时", "3 hours") \
+    X(SETTINGS_POWER_24_HOURS, "24 小时", "24 hours") \
+    X(SETTINGS_POWER_OFF_HINT, "待机累计达到所选时长后自动关机", "Powers off after the selected total time in standby") \
     X(SETTINGS_CONV_TITLE, "语音播报", "Voice playback")                                                       \
     X(SETTINGS_CONV_HINT, "控制百问AI是否播报语音\n关闭后仅显示文字", "Whether Ask AI speaks aloud\nOff = text only") \
     X(SETTINGS_CONV_TTS_ON, "开启 TTS", "TTS on")                                                              \

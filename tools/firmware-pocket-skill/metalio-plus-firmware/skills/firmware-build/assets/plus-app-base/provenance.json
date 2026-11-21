@@ -1,0 +1,388 @@
+{
+  "schema": 1,
+  "device": "metalio-eink4-plus",
+  "upstream": {
+    "url": "https://github.com/CloudZao/Metalio-E-INK4-Plus",
+    "commit": "ad8edf4150a688737c0d7c00cae4413079b262ef"
+  },
+  "derived_from": "Plus声音与线稿测试项目 common components, source snapshot 2026-10-28",
+  "runtime_source_dependency": false,
+  "changes": [
+    "Generic application asset symbols and lockscreen style",
+    "Gray framebuffer restoration on sleep refusal preserves 4bpp",
+    "Historical V0.1/V0.2 assembly used local107 bridge; V0.3 replaces it with public-guide-1.1 bridge",
+    "App/version-specific RTC wake marker; original source hashes remain provenance hashes",
+    "V0.2 Chinese Noto UI and real notices, nonblocking state loop, user-activity idle sleep",
+    "Shared Mono1/Gray4 asset contract checked in production Init and all poster paths",
+    "V0.3 protocol-based bridge; classified initialization failure UI preserves control errors separately from business storage"
+  ],
+  "files": [
+    {
+      "path": "epdiy/board_specific.c",
+      "source_sha256": "fa783743af011c2892804fbf8d2b52a8b2f70de7aba981bbf8aaa20fcfef634e"
+    },
+    {
+      "path": "epdiy/builtin_waveforms.c",
+      "source_sha256": "ad039ced1e99dc75539f48fbdf3d3f333b5fd01e329606438a73f8567235ff5b"
+    },
+    {
+      "path": "epdiy/CMakeLists.txt",
+      "source_sha256": "eb465ed289586dcc04b3f50456ccb9e7cb1efadf85c66412cca7d34b7f62f44d"
+    },
+    {
+      "path": "epdiy/config.h",
+      "source_sha256": "859777adc4eda6d7d17ad6483d54ab22633e991d463ea8389f71a9b43cdd466f"
+    },
+    {
+      "path": "epdiy/displays.c",
+      "source_sha256": "9b90f1070abb8ca6f52592e50b6372453e7f637967d3d101744d7fc9ecdd9eed"
+    },
+    {
+      "path": "epdiy/epdiy.c",
+      "source_sha256": "712cd6c25f46b1138a524059ff2d568a4cb24204e960baef298b244f277b2186"
+    },
+    {
+      "path": "epdiy/epdiy.h",
+      "source_sha256": "d071ee922d6fa8bd1cf205f493615fa61ab187774cf7708c877fb63dada3fdf5"
+    },
+    {
+      "path": "epdiy/epdiy_riscv_ve_stub.c",
+      "source_sha256": "525771d5c5334419969d05cb86d7184e4b51ae042af525ad081890f1102ed46a"
+    },
+    {
+      "path": "epdiy/epd_board.c",
+      "source_sha256": "5ed03131b83f0ae5bd461ae1f59062f00b567cf0d7295ae6ee1ed5871eb9ab9c"
+    },
+    {
+      "path": "epdiy/epd_board.h",
+      "source_sha256": "116d5cb6472782fe552b77f8d812dbc89e95285acc8a283f41b363703f1e2587"
+    },
+    {
+      "path": "epdiy/epd_board_common.c",
+      "source_sha256": "67433f86adf549ea5d5cf1d46f0c786a1f185ace24c970280e1262aa8128d013"
+    },
+    {
+      "path": "epdiy/epd_board_common.h",
+      "source_sha256": "c46700603b86dbcbd376827ea6ff5a3990c85435dc66a902f3ecd2dcf8ac1faf"
+    },
+    {
+      "path": "epdiy/epd_board_metalio_eink4_plus.c",
+      "source_sha256": "845e56aaa88f6de8722b42581fba5380381d6725783d16ecab35cca722d16114"
+    },
+    {
+      "path": "epdiy/epd_board_metalio_eink4_plus.h",
+      "source_sha256": "a37ca1144321c53c2a75f79b0855822f7c25cf8444774dc1977bccc6c18e6390"
+    },
+    {
+      "path": "epdiy/epd_board_specific.h",
+      "source_sha256": "dcc3651cfbf18382369a14aa4ab731bc1ec462260dec7e235e0cb0870dc3d093"
+    },
+    {
+      "path": "epdiy/epd_display.h",
+      "source_sha256": "1acd714228f422bde92720302d8bf3c8464c101ea826dd625b740a02e0216433"
+    },
+    {
+      "path": "epdiy/epd_font24.h",
+      "source_sha256": "1ff5f435ffea3a67b9a72644cb0d66ea4517bcd038bd4634f54c6f6253e1f1dc"
+    },
+    {
+      "path": "epdiy/epd_highlevel.h",
+      "source_sha256": "35e27b61bc43d361f8e5860256bd70efe6253b1902efac2c59f5508b1d0236b8"
+    },
+    {
+      "path": "epdiy/epd_internals.h",
+      "source_sha256": "2e0b5595dc86a8e942dc521539fb476019933f42e273873958f4a3b4d0229fee"
+    },
+    {
+      "path": "epdiy/font.c",
+      "source_sha256": "900a8ca0f6b1ab01009b81520e57357e81abea4edf1861a3bffff8a52c7de8ad"
+    },
+    {
+      "path": "epdiy/highlevel.c",
+      "source_sha256": "37bdd988d1092314680c78d3f9731ec647d2262860df9dcb83832db543c37d7a"
+    },
+    {
+      "path": "epdiy/LICENSE",
+      "source_sha256": "b6abfbe557727fcbf3c975908f15cd5860afd1d8d561d4a18abf7679538e09b5"
+    },
+    {
+      "path": "epdiy/metalio_epd.c",
+      "source_sha256": "f11a679124d93ebc44f542ce1e202f8eea458dafe8db4eddaea9559958c6b6e0"
+    },
+    {
+      "path": "epdiy/metalio_epd.h",
+      "source_sha256": "f92142075a0389cc1a9a3b5eb05251b657cbd81347863345d65377f77f0a30c7"
+    },
+    {
+      "path": "epdiy/metalio_sd.h",
+      "source_sha256": "ca7181e31a598bf9ab9d95646435ceb55939e744c185f20b8dd3872dfb86fa76"
+    },
+    {
+      "path": "epdiy/metalio_touch.c",
+      "source_sha256": "26a53f7ebbe7d5fc406f79c0140e8f90835782a4a017a1ba4b138899795608c4"
+    },
+    {
+      "path": "epdiy/metalio_touch.h",
+      "source_sha256": "452c8977c7350a61bf9728bb6648c6743514952e83f2d5a63a82f12088eaa8da"
+    },
+    {
+      "path": "epdiy/metalio_touch_report.h",
+      "source_sha256": "0dee5058bfb587079c2b28ddafa057c0fc2a90b909bc416bddc992d19dbd926c"
+    },
+    {
+      "path": "epdiy/metalio_vibe.cc",
+      "source_sha256": "c8a2255e9a3d4b143125e2c544ad5ad5e32f3ffabf3268a3986760ab65db0303"
+    },
+    {
+      "path": "epdiy/metalio_vibe.h",
+      "source_sha256": "113fd8ae6835e3fff166ba7b188e05d285be8f4f2fefa5cc91dd7ede3c56f85b"
+    },
+    {
+      "path": "epdiy/render.c",
+      "source_sha256": "2f5fa5671b841eb49105fbda1a11c34453f64c5c88c5ff53f302017bc39bc24f"
+    },
+    {
+      "path": "epdiy/render.h",
+      "source_sha256": "523ce4a45cc6e267820809ff1f86ac2841d1306e76c6d01b33b90896b198dde4"
+    },
+    {
+      "path": "epdiy/bus/metalio_i2c1.c",
+      "source_sha256": "74e4a30160906c2470bbd43e767914e3401ea694cfc26b1410739a722c2637e6"
+    },
+    {
+      "path": "epdiy/bus/metalio_i2c1.h",
+      "source_sha256": "fa8a817285536fa0cd099c7985ca4aa33dd3d37f26015849d89e65fb23a481cd"
+    },
+    {
+      "path": "epdiy/bus/pca9555.c",
+      "source_sha256": "f35cecc7d1417296c17b72c202b2cf962737b502cdb402943c3c43d8d70dfa61"
+    },
+    {
+      "path": "epdiy/bus/pca9555.h",
+      "source_sha256": "8d125ee1b6e28f9680cfe7ba64ec7e3c838eeb6d01c560596a76fc732fda2db6"
+    },
+    {
+      "path": "epdiy/bus/tps65185.c",
+      "source_sha256": "613506427c0bd97c4180343dbd5afda060b0ead33696bc5915a16444eb00303e"
+    },
+    {
+      "path": "epdiy/bus/tps65185.h",
+      "source_sha256": "9725a066bb01f6a89cd7ef01f3dee332a530b07b5c0fe5306941fff438768978"
+    },
+    {
+      "path": "epdiy/output_common/line_queue.c",
+      "source_sha256": "09b6b1a11e25fb4231ec825ed315f3f62376ac9ccdbec0279f4f5d1aa0dd5b79"
+    },
+    {
+      "path": "epdiy/output_common/line_queue.h",
+      "source_sha256": "bb4987286d70ce4d971e95d4c62a61ffbaa236b361157a839ca3c9d8b231ba32"
+    },
+    {
+      "path": "epdiy/output_common/lut.c",
+      "source_sha256": "ee11de9bc8bc35b796a80c90d86fee3f09ac020723cc49450520cd0fc81fdd10"
+    },
+    {
+      "path": "epdiy/output_common/lut.h",
+      "source_sha256": "7922f5dc322aadac4b1f7e1a51684e1bf6e27726c8ebe8d5bbeecee5ec0a509e"
+    },
+    {
+      "path": "epdiy/output_common/render_context.c",
+      "source_sha256": "62cb44e4239256a5d4d13aba650d6410b0b4f743f188071cf830d43f732e7278"
+    },
+    {
+      "path": "epdiy/output_common/render_context.h",
+      "source_sha256": "5a20cc00470ede9e8fad8538dc8cf8c6dce3b7ef166f7d096ece6fac92af84cd"
+    },
+    {
+      "path": "epdiy/output_common/render_method.c",
+      "source_sha256": "1c19918d61f031912bfa62a8db63019f3f0e39bef3fdad704acf6a454c4ae1c3"
+    },
+    {
+      "path": "epdiy/output_common/render_method.h",
+      "source_sha256": "d54c2d8e7b0193d6486972785084152f01eab43bdc192dd2a847dde5b92285ef"
+    },
+    {
+      "path": "epdiy/output_common/spatial_wipe.h",
+      "source_sha256": "23eb17f644673a9e41c9bcffcc5dda68347d7b548f04fad573ce822b5e063ff5"
+    },
+    {
+      "path": "epdiy/output_common/white_border.h",
+      "source_sha256": "824d204c397a82cda09167a88ccc5f3e904c502b9eaf5fb361fd03082bc14718"
+    },
+    {
+      "path": "epdiy/output_lcd/epdiy_idf6_compat.h",
+      "source_sha256": "91e5acad99b33d86d02b1c929038a9a91def490c68b6c62b68dd1877af5742e1"
+    },
+    {
+      "path": "epdiy/output_lcd/idf-4-backports.h",
+      "source_sha256": "b8584c98439148e0ceb98d08fb6a87a34752e8c5c11bbb4918670d32858c04bc"
+    },
+    {
+      "path": "epdiy/output_lcd/lcd_driver.c",
+      "source_sha256": "027857519edba9e86832b05e6d1ad30bb9d73447c32ae2e68acab00262c04fd3"
+    },
+    {
+      "path": "epdiy/output_lcd/lcd_driver.h",
+      "source_sha256": "aadc1cfb0484940592ee116873a85e2cdd422c9b68ed5ef880e93397186f333d"
+    },
+    {
+      "path": "epdiy/output_lcd/render_lcd.c",
+      "source_sha256": "b915b8c50955fc1c02f99ee44a13e4025302fea23eb3aab4ad1dfe668dbb69ca"
+    },
+    {
+      "path": "epdiy/output_lcd/render_lcd.h",
+      "source_sha256": "d535a84269f4f59daa499ec60db1260f1d3da934692b89e501179e618f4b225a"
+    },
+    {
+      "path": "epdiy/waveforms/epdiy_ED047TC1.h",
+      "source_sha256": "b0083538007df8377fe3139e265f4d24fcb7cb6de510859bfc86f822b876f8d2"
+    },
+    {
+      "path": "epdiy/waveforms/epdiy_ED047TC2.h",
+      "source_sha256": "141768d946e5770248927b62690213580567a406e246f4ccbfc7a7808e107a56"
+    },
+    {
+      "path": "epdiy/waveforms/epdiy_ED060SC4.h",
+      "source_sha256": "682a7fd1a3b218ca19d913548ebd6c50392411ea439b170dd6638429ef40c5e8"
+    },
+    {
+      "path": "epdiy/waveforms/epdiy_ED060SCT.h",
+      "source_sha256": "064a6c4d03dc6603855ba8932c1459ad05b31f756d1f96bc1fa4217cf053eea1"
+    },
+    {
+      "path": "epdiy/waveforms/epdiy_ED060XC3.h",
+      "source_sha256": "0f72290ec2974d81f64988bc2a31ee7f6a8ff78085abf3fa8ce2691ba541f605"
+    },
+    {
+      "path": "epdiy/waveforms/epdiy_ED097OC4.h",
+      "source_sha256": "0fbb0d8b1ed82cdb2a84ffdf6d4158bb105c4beba81dd5e663b3ac527845c9ca"
+    },
+    {
+      "path": "epdiy/waveforms/epdiy_ED097TC2.h",
+      "source_sha256": "3d9c9aaa97f3febc434b1f0ae1f711e8d99f8d87b1089e73bee59dae036ec279"
+    },
+    {
+      "path": "epdiy/waveforms/epdiy_ED133UT2.h",
+      "source_sha256": "62ee1c23c0cad72c27e966fbdddba3b883d7f0d751f6933ae88f4545f1ebe0f8"
+    },
+    {
+      "path": "epdiy/waveforms/epdiy_NULL.h",
+      "source_sha256": "24a51132dc8bc3f3a7db1b39ab243bfdef1597e22d929c50590b4cbefc4eef79"
+    },
+    {
+      "path": "epdiy/waveforms/LICENSE.gray8",
+      "source_sha256": "ef19e5258fbe5aeb58747280d331458858cd492042be2cbc8b7fac72638a80dc"
+    },
+    {
+      "path": "epdiy/waveforms/my_gray8_gc16.h",
+      "source_sha256": "f043aee371eccfe2423b9be46c9f17f1699e8de7358df3248ea27470847ae3b8"
+    },
+    {
+      "path": "epdiy/waveforms/my_gray8_gl16.h",
+      "source_sha256": "8629bdf4f775d33b6964770717a7557caf0a513076a40d10794c99047261378f"
+    },
+    {
+      "path": "epdiy/waveforms/my_waveform.c",
+      "source_sha256": "d0f80ea657f840e14b436691be03d147b42d3d3e20ea970dff16350af38590fa"
+    },
+    {
+      "path": "epdiy/waveforms/my_waveform.h",
+      "source_sha256": "c2d41ebca6e79cf5495b372c6f7655f9d453bc8b75082abc17b7ffde19a71690"
+    },
+    {
+      "path": "epdiy/waveforms/my_waveform_du.h",
+      "source_sha256": "585f3f2ce0d094a96118e0d734ba4945455e6569289c254c21ad9dcdb988db8f"
+    },
+    {
+      "path": "epdiy/waveforms/my_waveform_gc.h",
+      "source_sha256": "b5a478055895c504d24af3df91d6940c21bde6502b5f69e3e867a9269e587c3d"
+    },
+    {
+      "path": "epdiy/waveforms/my_waveform_gl.h",
+      "source_sha256": "cbfe7666ace7f311ebf112571ad4cc450ccb29a49fedabd73a2701e8e7632ec5"
+    },
+    {
+      "path": "epdiy/waveforms/my_waveform_trim.c",
+      "source_sha256": "1861c7246533b9cb44a3cfb5237bb42ddc85e3c06b8d22598cc29d37dbad66ca"
+    },
+    {
+      "path": "epdiy/waveforms/my_waveform_trim.h",
+      "source_sha256": "724014fe05717ec3c52a4b46f256ca767219d1910f9f3834e1514d0f50110845"
+    },
+    {
+      "path": "plus_hal/ai_key.h",
+      "source_sha256": "3f9a041c2c6999c5bba2a9c5fc4a8c82bad851093487d1a8714c7535f8212acb"
+    },
+    {
+      "path": "plus_hal/CMakeLists.txt",
+      "source_sha256": "520e37b50b1253b9527a2b0ebd56a128b388e299f04621a9b14704b2af320fd7"
+    },
+    {
+      "path": "plus_hal/lockscreen.h",
+      "source_sha256": "085bc4501548dde4fd8960a41f35ec864d51b2373dc5e723739e5ce9b08fe238"
+    },
+    {
+      "path": "plus_hal/mono_frame.h",
+      "source_sha256": "0e95666780c7729b01084c7e27f6ce5a63eac4f60ef5217190020b6c10f50f8d"
+    },
+    {
+      "path": "plus_hal/plus_hal.cc",
+      "source_sha256": "13bd571e516e2452e4a02632f6d2a1e496f12c7eb795dc5ae2f016e31f5ef8f6"
+    },
+    {
+      "path": "plus_hal/power_key.h",
+      "source_sha256": "415467460f3fe08073cdc9ead99db99c71a12035bc72874eff6fe45bbd46f898"
+    },
+    {
+      "path": "plus_hal/volume_key.h",
+      "source_sha256": "0a849c4ca5274d9da1bdf252fc8e6998b458ca75f4dc5a6cda039bd595df8cdd"
+    },
+    {
+      "path": "plus_hal/wake_hold.h",
+      "source_sha256": "90e992e3588861f27c3d3cc27349cd6f566f329cdd616bfef45de4dd37f237a2"
+    },
+    {
+      "path": "plus_hal/include/plus_hal.h",
+      "source_sha256": "dcd9fbb9f2b1d6d867731085c1f8638d0393b4a18b43f16920147f3d6fd9cf03"
+    },
+    {
+      "path": "plus_hal/include/touch_edges.h",
+      "source_sha256": "2ba308b20431fbfa345c7ebe01d0cb556b492bf4bf79d4025f3d44fc59898a02"
+    },
+    {
+      "path": "plus_hal/power/bq27220_gauge.cc",
+      "source_sha256": "fa827d39a8a8436b0728b86ac529f0b7ab87856bc63fa4652f9989d3b6701a92"
+    },
+    {
+      "path": "plus_hal/power/bq27220_gauge.h",
+      "source_sha256": "b25334b41b4dbbffe646e6b129960ac4f432bd27b9d935d4d14480414e3bbebb"
+    },
+    {
+      "path": "plus_hal/power/cx25601n.cc",
+      "source_sha256": "92ac29d17018094b2d85b2eb584db777e223dcba970eaf150e9f88eb4eea472a"
+    },
+    {
+      "path": "plus_hal/power/cx25601n.h",
+      "source_sha256": "f4e1c12728c83f599a6c74f71de030fd180636dcfa362d600a52f8ed6d1bc861"
+    },
+    {
+      "path": "plus_hal/power/power_i2c.c",
+      "source_sha256": "c3ce362c01a630f228cc6265827bec19a6ed211cedb22c67db4af6b491f1342f"
+    },
+    {
+      "path": "plus_hal/power/power_i2c.h",
+      "source_sha256": "fe746ceab627bda3311242f655e3acacbd3097b38811c57d772c1b23b3eec128"
+    }
+  ],
+  "historical_validation_v01": {
+    "new_assembly_hardware_verified": false,
+    "target_build": "PASS; pinned ESP-IDF 6.1/S31; 2026-10-29",
+    "structural_image_check": "PASS local-plus-pocket107; standalone prefix and embedded metadata",
+    "test_application": "HARDWARE_SMOKE_ONLY plus_probe 0.1.0, not user-function acceptance"
+  },
+  "validation": {
+    "version": "0.3.0",
+    "hardware_verified": false,
+    "scope": "See release-validation.json for this package; validate each generated application separately"
+  }
+}

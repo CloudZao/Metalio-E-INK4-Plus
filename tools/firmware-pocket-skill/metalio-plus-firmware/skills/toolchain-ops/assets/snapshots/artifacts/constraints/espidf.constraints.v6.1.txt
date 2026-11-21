@@ -1,0 +1,95 @@
+# --------- CORE ----------
+
+# setuptools: version 64 is required to support PEP 621 - pyproject.toml (with editable installs)
+setuptools>=64
+
+# click: Min. version was set to support the API used in idf.py and auto-completion
+click>=7.0,<8.5
+rich-click~=1.9.0
+
+# pyserial: Min. version was set to support the used API
+pyserial>=3.3,<4
+
+# cryptography: Min. version was set to support all functionality of ESP-IDF
+# Only binary for cryptography is here to make it work on ARMv7 architecture
+# We do have cryptography binary on https://dl.espressif.com/pypi for ARM
+# On https://pypi.org/ are no ARM binaries as standard now
+cryptography>=2.1.4,<49
+--only-binary cryptography
+
+# pyparsing: Min version was set based on https://github.com/pyparsing/pyparsing/issues/482
+pyparsing>=3.1.0,<3.4
+
+# pyelftools
+
+# We will bump component manager dependencies after testing the newly released versions with the ESP-IDF pipeline
+idf-component-manager>=3.0,<=3.1.2
+
+# Keep always dev0 for esptool here in order to not reject development releases on local as well pipeline
+# installations. dev0 doesn't have to exist for this to work.
+esptool>=5.3.0.dev0,<6
+
+# bitstring (esptool dependency): 5.0 introduces breaking changes
+bitstring<5
+
+# IDFCI-13852
+esp-coredump~=1.14,!=1.17.0
+
+esp-idf-kconfig>=3.11.1,<4.0.0
+
+freertos_gdb~=1.0
+
+esp-idf-monitor>=1.10.0,<2
+
+esp-idf-size>=2.0.0,<3.0.0
+
+esp-idf-nvs-partition-gen~=0.1.9
+
+tree-sitter~=0.25
+tree-sitter-c~=0.24
+
+mcp<2
+
+# --------- CORE ends ----------
+
+# --------- CI ----------
+idf-ci>=1.0.0,<2.0
+
+# idf-build-apps 3.1, 2.17 adds new field, which may change the behavior of clang build
+idf-build-apps < 3.1; python_version >= '3.10'
+idf-build-apps < 2.17; python_version < '3.10'
+
+# https://github.com/kislyuk/argcomplete/issues/559
+argcomplete<3.7.1; python_version < "3.10"
+
+# -------- CI ends ----------
+
+# --------- TEST SPECIFIC ---------
+
+# 1.3.2 is not supported in 3.11. See https://gitlab.freedesktop.org/dbus/dbus-python/-/issues/45
+dbus-python<1.3; python_version > "3.10"
+
+# paho mqtt 2.0
+# https://github.com/eclipse/paho.mqtt.python/blob/master/ChangeLog.txt#L1
+# got a few breaking changes
+paho-mqtt<2
+
+# IDFCI-2426
+# https://github.com/secdev/scapy/issues/4512
+scapy<2.6
+
+# --------- TEST SPECIFIC ends ---------
+
+# --------- DOCS -------------
+
+esp-docs~=2.5.0
+linuxdoc==20210324
+
+# --------- DOCS ends ---------
+
+# --------- esp_prov -------------
+
+# https://github.com/protocolbuffers/protobuf/issues/10075
+protobuf<=3.20.1
+
+# --------- esp_prov ends ---------

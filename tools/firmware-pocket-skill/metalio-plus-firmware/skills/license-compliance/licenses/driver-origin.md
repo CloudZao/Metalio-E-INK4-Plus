@@ -1,0 +1,9 @@
+# 驱动来源与许可边界
+
+本版驱动是CloudZao/Metalio-E-INK4-Plus固定提交ad8edf4150a688737c0d7c00cae4413079b262ef及已验证Plus项目派生，具体原文件哈希见firmware-build底座provenance.json。EPDiy并非屏幕供应商专有授权的同义词。
+
+上游https://github.com/vroland/epdiy的LICENSE为LGPL-3.0，全文blob SHA为0a041280bd00a9d068f503b8ee7ce35214bd24a1；本次原文SHA256见sources.json。CloudZao根目录MIT保留用于其有权许可的工程部分，不能推导为对全部上游代码重新许可。灰阶波形保留原Copyright 2026 mindreset及Apache-2.0标记和全文。
+
+当前无证据证明CloudZao已获得对EPDiy整体重新MIT许可的权利，因此本版对EPDiy派生代码按LGPL-3.0路径处理，不采用“仅MIT、闭源BIN自由分发”的说法。源文件/修改/构建资料可随实际项目提供；分发静态链接BIN时还要安排可重新链接的应用目标代码及必要信息。替换显示后端是可行的接口设计，不表示替换工作已完成或现有许可已自动消失。
+
+未确定的逐文件第三方贡献边界、用户新增依赖和分发形式仍需发行人复核；这不是商业授权证明。历史V0.1的MIT单文件遗漏在V0.2补正，历史包和原生材料不被改写。

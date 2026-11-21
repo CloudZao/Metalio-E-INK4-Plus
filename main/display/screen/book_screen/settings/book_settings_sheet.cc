@@ -878,6 +878,14 @@ static void SheetAutoTurnToggle(lv_event_t* e) {
     SetReaderAutoTurnEnabled(!ReaderAutoTurnEnabled());
     RequestSettingsSheetPaint();
 }
+static void SheetInlineImagesToggle(lv_event_t* e) {
+    lv_event_stop_bubbling(e);
+    BookReaderPrefsSetInlineImages(!BookReaderPrefsInlineImages());
+    RequestSettingsSheetPaint();
+    const auto& session = Book_State().reader.session;
+    if (session && session->Info().format == reader::BookFormat::kTxt) return;
+    ScheduleLayoutApply(false);
+}
 static void SheetWritingMode(lv_event_t* e) {
     lv_event_stop_bubbling(e);
     const int mode = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
@@ -929,6 +937,12 @@ static void SheetAntialias(lv_event_t* e) {
 }
 struct SwitchRow { lv_obj_t* button = nullptr; lv_obj_t* knob = nullptr; lv_event_cb_t event = nullptr; int button_w = 0; int displayed = -1; };
 static std::vector<SwitchRow> s_switch_rows;
+static bool SwitchRowEnabled(lv_event_cb_t event) {
+    if (event == SheetShakeTurnToggle) return BookReaderPrefsShakeTurn();
+    if (event == SheetAntialias) return BookReaderPrefsAntialias();
+    if (event == SheetInlineImagesToggle) return BookReaderPrefsInlineImages();
+    return ReaderAutoTurnEnabled();
+}
 static void PlaceSwitchCaption(lv_obj_t* caption, int button_w) {
     const int toggle_space = static_cast<int>(UiSx(8)) + static_cast<int>(UiSx(34)) + static_cast<int>(UiSx(8));
     const int text_w = std::max<int>(1, button_w - toggle_space);
@@ -940,7 +954,7 @@ static void PlaceSwitchCaption(lv_obj_t* caption, int button_w) {
 }
 static void RefreshSwitchRows() {
     for (auto& row : s_switch_rows) {
-        const bool on = row.event == SheetShakeTurnToggle ? BookReaderPrefsShakeTurn() : row.event == SheetAntialias ? BookReaderPrefsAntialias() : ReaderAutoTurnEnabled();
+        const bool on = SwitchRowEnabled(row.event);
         auto* caption = lv_obj_get_child(row.button, 0);
         const char* text = on ? Lang::Strings::COMMON_ON : Lang::Strings::COMMON_OFF;
         if (row.displayed == static_cast<int>(on)) continue;
@@ -963,7 +977,7 @@ static void AddSwitchRow(lv_obj_t* body, const char* title, lv_event_cb_t event,
     const int width = lv_obj_get_content_width(body), height = UiSy(60);
     const int start = column > 0 ? column : SettingsColumn(body, {title});
     const int button_w = std::max<int>(1, static_cast<int>(width) - start);
-    const bool on = event == SheetShakeTurnToggle ? BookReaderPrefsShakeTurn() : event == SheetAntialias ? BookReaderPrefsAntialias() : ReaderAutoTurnEnabled();
+    const bool on = SwitchRowEnabled(event);
     auto* row = SheetBox(body, width, height);
     auto* label = SheetLabel(row, title);
     PlaceSettingsCaption(label, start);
@@ -1032,7 +1046,7 @@ static void BuildSheetSettings(lv_obj_t* body) {
         }
         return;
     }
-    ConfigureSheetScroll(body);
+    if (page != kSettingsWriting) ConfigureSheetScroll(body);
     if (page == kSettingsRotation || page == kSettingsBackground) {
         const bool background = page == kSettingsBackground;
         const char* orientation_labels[] = {BOOK_ORIENT_PORTRAIT, BOOK_ORIENT_LAND_LEFT, BOOK_ORIENT_LAND_RIGHT, BOOK_ORIENT_AUTO};
@@ -1058,13 +1072,14 @@ static void BuildSheetSettings(lv_obj_t* body) {
         const char* layouts[] = {BOOK_FOOTER_BOTTOM}; const int values[] = {0};
         SettingsRow(body, BOOK_FOOTER_LAYOUT, 1, layouts, nullptr, values, 0, false, 0, column);
     } else if (page == kSettingsWriting) {
-        const int column = SettingsColumn(body, {BOOK_WRITING_TITLE, BOOK_TEXT_DIRECTION});
+        const int column = SettingsColumn(body, {BOOK_WRITING_TITLE, BOOK_TEXT_DIRECTION, BOOK_INLINE_IMAGES});
         const char* labels[] = {BOOK_WRITING_HORIZONTAL, BOOK_WRITING_VERTICAL}; const int values[] = {0, 1};
         SettingsRow(body, BOOK_WRITING_TITLE, 2, labels, SheetWritingMode, values, BookReaderPrefsWritingMode(), false, 0, column);
         if (BookReaderPrefsWritingMode()) {
             const char* directions[] = {BOOK_TEXT_LEFT_TO_RIGHT, BOOK_TEXT_RIGHT_TO_LEFT};
             SettingsRow(body, BOOK_TEXT_DIRECTION, 2, directions, SheetTextDirection, values, BookReaderPrefsTextDirection(), false, 0, column);
         }
+        AddSwitchRow(body, BOOK_INLINE_IMAGES, SheetInlineImagesToggle, column);
     } else if (page == kSettingsAntialias) {
         const int column = SettingsColumn(body, {BOOK_ANTIALIAS, BOOK_AA_STRENGTH});
         AddSwitchRow(body, BOOK_ANTIALIAS, SheetAntialias, column);
@@ -1123,7 +1138,7 @@ static int SettingsBodyHeight(int page) {
             content = row * 2;
             break;
         case kSettingsWriting:
-            content = row * (BookReaderPrefsWritingMode() ? 2 : 1);
+            content = row * (BookReaderPrefsWritingMode() ? 3 : 2);
             break;
         case kSettingsSpacing:
             content = (LV_HOR_RES > LV_VER_RES ? UiSy(52) : row) * 6;

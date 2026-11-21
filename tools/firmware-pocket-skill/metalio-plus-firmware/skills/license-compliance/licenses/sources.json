@@ -1,0 +1,26 @@
+[
+  {
+    "file": "LGPL-3.0.txt",
+    "url": "https://raw.githubusercontent.com/vroland/epdiy/main/LICENSE",
+    "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+    "bytes": 7652
+  },
+  {
+    "file": "GPL-3.0.txt",
+    "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/GPL-3.0-only.txt",
+    "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0",
+    "bytes": 34674
+  },
+  {
+    "file": "Apache-2.0.txt",
+    "url": "https://raw.githubusercontent.com/espressif/esp-idf/fff9895c82d744c7237be8847347bdd1b07c6643/LICENSE",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "bytes": 11358
+  },
+  {
+    "file": "CloudZao-MIT.txt",
+    "url": "https://raw.githubusercontent.com/CloudZao/Metalio-E-INK4-Plus/ad8edf4150a688737c0d7c00cae4413079b262ef/LICENSE",
+    "sha256": "0a5a839033bfe18fe75d32b50d9d028912cf876f69ef59c2791aeb2971335d05",
+    "bytes": 1140
+  }
+]

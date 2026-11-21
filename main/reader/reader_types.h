@@ -61,6 +61,8 @@ struct PageItem {
     // 章名行：加粗居中；「第N章」与章节名可分行；误识别也不丢句
     bool chapter_title = false;
     bool justify = false; // 容量折行的正文续行或续列，两端对齐；段末和章名不拉伸
+    bool hyphenated = false; // 行末包含排版添加的连字符，不属于源正文
+    bool centered = false; // 居中显示正文占位文字，不使用章名样式
 };
 
 struct Page {
@@ -68,6 +70,7 @@ struct Page {
 };
 
 struct TextStyle {
+    bool inline_images = true; // 显示书籍内图片，关闭时在源位置显示插图占位文字
     int line_gap = -1; // 行间首选留白像素，负数沿用相对行距
     int letter_gap = 0; // 每字额外步进像素
     int indent_chars = 2; // 首行缩进字数

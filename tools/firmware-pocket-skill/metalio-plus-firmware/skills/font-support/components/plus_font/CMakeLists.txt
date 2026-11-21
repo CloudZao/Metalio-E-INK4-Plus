@@ -1,0 +1,8 @@
+if(COMMAND idf_component_register)
+    idf_component_register(SRCS "plus_font.cc" INCLUDE_DIRS "include")
+    target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_11)
+else()
+    add_library(plus_font STATIC plus_font.cc)
+    target_include_directories(plus_font PUBLIC include)
+    target_compile_features(plus_font PUBLIC cxx_std_11)
+endif()

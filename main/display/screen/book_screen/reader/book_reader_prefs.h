@@ -173,6 +173,12 @@ int BookReaderPrefsTextDirection();
 /** @brief 设置并保存竖排列方向 */
 void BookReaderPrefsSetTextDirection(int direction);
 
+/** @brief 获取页内插图开关，默认开启。 */
+int BookReaderPrefsInlineImages();
+
+/** @brief 设置并保存页内插图开关。 */
+void BookReaderPrefsSetInlineImages(int value);
+
 /** @brief 读取晃动翻页开关，默认关闭。 */
 int BookReaderPrefsShakeTurn();
 /** @brief 设置并保存晃动翻页开关。 */

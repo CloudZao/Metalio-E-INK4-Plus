@@ -80,7 +80,7 @@
 #define CAM_PIN_HREF        GPIO_NUM_57
 #define CAM_MCLK_HZ         20000000
 #define VIBRATION_MOTOR_PULSE_MS 50 // 短震脉宽 ms
-#define POWER_DISCHARGE_MOTOR_PULSE_MS 500 // 共享电源断电后马达持续置高的放电时长 ms
+#define POWER_DISCHARGE_MOTOR_PULSE_MS 3000 // 共享电源断电后马达持续置高的放电时长 ms
 #define POWER_RAIL_SETTLE_MS 80 // 外围电源上电后、恢复下一路电源或显示总线前的稳定等待 ms
 
 #define I2C_SDA_PIN          GPIO_NUM_0

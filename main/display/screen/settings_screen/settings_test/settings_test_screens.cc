@@ -249,7 +249,8 @@ static void RefreshBluetoothVersion() {
         s_bt_query_done = true;
         return;
     }
-    if (!s_bt_query_sent && MetalioAudio_ModeReady()) {
+    // 版本查询只依赖 UART 供电/初始化，不要求 MODE1 已就绪（开机跳过 P14 时 mode 可能失败）
+    if (!s_bt_query_sent) {
         const esp_err_t err = MetalioAudio_QueryVersion();
         if (err == ESP_OK) {
             s_bt_query_sent = true;

@@ -1,0 +1,99 @@
+{
+  "version": "0.4.0",
+  "date": "2026-11-07",
+  "target": "Windows native Codex / Metalio Plus 4.7 / ESP32-S31",
+  "scope": "Material acquisition changes; firmware runtime source inherited byte-for-byte from V0.3",
+  "checks": {
+    "powershell_5_1_plan_and_routing_cases": 30,
+    "start_orchestration_stub_cases": 18,
+    "mirror_map_offline_get_cases": 5,
+    "acquisition_cli_cases": 15,
+    "loopback_http_transfer_cases": 6,
+    "download_policy_cases": 6,
+    "selected_real02_member": "Ninja original extracted and SHA verified; entire ZIP not expanded",
+    "live_https_originals": 2,
+    "live_trusted_mirrors": 2,
+    "mirror_test_boundary": "Original failure injected; actual Espressif and TUNA downloads verified against frozen SHA",
+    "python_wrapper_plan_cache": "passed with actual PowerShell Get and frozen canonical cache",
+    "standalone_project_generation": "passed optional wifi+pinyin / direct-tf scaffold; no target compile",
+    "independent_forward_read": "isolated Skill without02 and Python commands on PATH; SDK29 plan executed in existing PowerShell7.6.9 host; PS5.1 policy restriction recorded separately",
+    "previous_version_unchanged_files": 337,
+    "protected_firmware_files_identical": 286
+  },
+  "limits": {
+    "full_online_cold_install": false,
+    "new_target_build": false,
+    "usb_or_flash_executed": false,
+    "new_firmware_hardware_verified": false,
+    "baseline_gain_measured": false,
+    "other_harness_acceptance": false
+  },
+  "inherited_v0_3_evidence": {
+    "version": "0.3.0",
+    "date": "2026-11-02",
+    "target": "Windows native Codex / Metalio Plus 4.7 / ESP32-S31",
+    "integration": {
+      "guide": "1.1",
+      "abi": "1.0",
+      "profile": "public-plus-pocket2",
+      "product_version_gate": false,
+      "reference_host": "Plus.16 conformity accepted from user; not reaudited"
+    },
+    "host_checks": {
+      "standard_core_checks": 140,
+      "production_bridge_checks": 70,
+      "production_wifi_sdk_mock_scenarios": 25,
+      "prior_wifi_defects_reproduced": 2,
+      "real_recordstore_and_services": "passed",
+      "native_ui": "passed 8 layouts; actual renderer/font/frame conversion; not device display",
+      "production_main_fault_power": "passed 5 cases, with 3 baseline failure reproductions",
+      "binary_and_evidence_negative_tests": "passed 4 suites",
+      "material_transport_fixtures": 20,
+      "material_path_cases": 10,
+      "material_platform_policy_cases": 4,
+      "cold_forward_test": "passed self-contained generation, no02 routing, help and production-backed host checks"
+    },
+    "environment": {
+      "profile": "plus-base",
+      "selected_raw_files": 105,
+      "selected_raw_bytes": 1272026115,
+      "installation": "passed new environment with local frozen originals, failures fixed and resumed; activation and pip dependency check passed",
+      "online": "2 real small HTTPS originals passed; full105 online cold install not executed",
+      "sdk": "6.1.0",
+      "sdk_commit": "fff9895c82d744c7237be8847347bdd1b07c6643",
+      "python": "3.13.17 x64"
+    },
+    "target_build": {
+      "status": "COMMAND_PASSED",
+      "exit_code": 0,
+      "tasks": 1008,
+      "elapsed_seconds": 249.7418755,
+      "sources_changed_during_build": false,
+      "capabilities_compiled": [
+        "standard_bridge",
+        "wifi_backend",
+        "Noto_renderer",
+        "device_hal"
+      ],
+      "pinyin_core_prepared": true,
+      "application": "plus_v03_probe 1.0.0, scaffold only; not a complete user application"
+    },
+    "merged_image": {
+      "status": "DELIVERY_COPY_VERIFIED",
+      "bytes": 2361680,
+      "sha256": "b17d514a2f424e9342ae170fb3920d6e31655f921d387fe624154147894299fe",
+      "source_segments_match": true,
+      "receiving_copy_equal": true
+    },
+    "limits": {
+      "usb_or_flash_executed": false,
+      "new_firmware_hardware_verified": false,
+      "real_wifi_hotspot_verified": false,
+      "new_standard_roundtrip_hardware_verified": false,
+      "baseline_gain_measured": false,
+      "other_harnesses_verified": false
+    },
+    "evidence_location": "Build, environment, source snapshots, logs and fixture outputs are retained by the author outside the installed Skill. Generated apps must record their own evidence."
+  },
+  "evidence_location": "Author-held internal release evidence; not a runtime dependency. Applications must record their own acquisition, installation, build and hardware outcomes."
+}

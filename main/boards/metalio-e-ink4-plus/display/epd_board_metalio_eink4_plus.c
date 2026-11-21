@@ -196,7 +196,7 @@ static ioexp_output_t s_outputs[2] = {
 };
 static bool s_bt_reset_active; // 复位期间强制 PA 与 P14 低，不阻塞其他输出更新
 static bool s_bt_reset_motor_on; // 复位放电期间强制马达持续置高，屏蔽普通震动 PWM
-static const uint32_t kBtResetLowMs = 1000; // 蓝牙复位的最短断电等待时长 ms
+static const uint32_t kBtResetLowMs = 3000; // 蓝牙复位的最短断电等待时长 ms
 static StaticSemaphore_t s_output_mu_storage;
 static SemaphoreHandle_t s_output_mu;
 static portMUX_TYPE s_output_mu_init = portMUX_INITIALIZER_UNLOCKED;

@@ -13,8 +13,8 @@ class AudioCodec;
 AudioCodec* MetalioAudio_GetCodec();
 
 /**
- * @brief 初始化 UART，后台先复位蓝牙芯片，再配置并确认模式1；不会等待复位完成
- * @param on_boot_reset_done 启动复位结束时调用一次；初始化失败时同样调用以释放等待方
+ * @brief 初始化 UART 并启动后台模式配置；开机不执行 P14 复位
+ * @param on_boot_reset_done 启动流程结束时调用一次；初始化失败时同样调用以释放等待方
  */
 void MetalioAudio_Init(void (*on_boot_reset_done)());
 /**

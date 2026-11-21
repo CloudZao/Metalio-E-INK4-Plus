@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <limits>
+#include <new>
 
 #include <esp_log.h>
 #ifndef EBOOK_EMULATOR
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #endif
@@ -185,7 +188,9 @@ bool EpubDocument::Open(const char* path, bool load_toc) {
     }
     path_ = path;
     if (!ParseContainer(load_toc)) {
-        if (zip_.Error() != BookReadError::kNone) error_ = zip_.Error();
+        if (error_ == BookReadError::kInvalidData && zip_.Error() != BookReadError::kNone) {
+            error_ = zip_.Error();
+        }
         Close();
         return false;
     }
@@ -224,14 +229,27 @@ bool EpubDocument::ParseContainer(bool load_toc) {
     return ParseOpf(NormalizeZipPath({}, opf), load_toc);
 }
 
-bool EpubDocument::ParseOpf(const std::string& opf_path, bool load_toc) {
-    std::vector<uint8_t> bytes;
-    if (!zip_.ReadEntry(opf_path.c_str(), bytes, 512 * 1024)) {
-        ESP_LOGE(TAG, "cannot read opf error=%d", static_cast<int>(zip_.Error()));
+bool EpubDocument::ParseOpf(const std::string& opf_path, bool load_toc) try {
+    size_t available = std::numeric_limits<size_t>::max();
+    #ifndef EBOOK_EMULATOR
+    available = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+    #endif
+    size_t opf_size = 0;
+    if (zip_.GetUncompressedSize(opf_path.c_str(), &opf_size) && opf_size > available) {
+        error_ = BookReadError::kNoMemory;
+        ESP_LOGE(TAG, "opf read rejected bytes=%zu available=%zu", opf_size, available);
         return false;
     }
+    std::string xml;
+    {
+        std::vector<uint8_t> bytes;
+        if (!zip_.ReadEntry(opf_path.c_str(), bytes, available)) {
+            ESP_LOGE(TAG, "cannot read opf error=%d", static_cast<int>(zip_.Error()));
+            return false;
+        }
+        xml = BytesToString(bytes);
+    }
     content_base_ = DirOf(opf_path);
-    const std::string xml = BytesToString(bytes);
 
     // 一次扫描：兼容 <item>/<opf:item>、<itemref>/<opf:itemref>、<meta>/<opf:meta>
     // （so-novel / EPUB4J 等会给 OPF 元素加 opf: 前缀；旧逻辑只找字面量 <item 会得到 spine=0）
@@ -306,6 +324,7 @@ bool EpubDocument::ParseOpf(const std::string& opf_path, bool load_toc) {
 
     const auto ncx = manifest_.find(toc_id);
     if (ncx != manifest_.end()) ncx_href = ncx->second;
+    std::string().swap(xml);
     if (load_toc) {
         if (nav_href.empty() || !ParseNavigation(nav_href, false)) {
             if (!ncx_href.empty()) ParseNavigation(ncx_href, true);
@@ -313,9 +332,13 @@ bool EpubDocument::ParseOpf(const std::string& opf_path, bool load_toc) {
     }
     ESP_LOGI(TAG, "opf ok spine=%d toc=%u", SpineCount(), static_cast<unsigned>(toc_.size()));
     return !spine_.empty();
+} catch (const std::bad_alloc&) {
+    error_ = BookReadError::kNoMemory;
+    ESP_LOGE(TAG, "opf allocation failed stage=read_or_parse");
+    return false;
 }
 
-bool EpubDocument::ParseNavigation(const std::string& href, bool ncx) {
+bool EpubDocument::ParseNavigation(const std::string& href, bool ncx) try {
     struct Node {
         std::string title; // 目录标签文本
         std::string link; // 相对导航文档的链接
@@ -325,6 +348,10 @@ bool EpubDocument::ParseNavigation(const std::string& href, bool ncx) {
         ESP_LOGW(TAG, "toc open failed format=%s error=%d", ncx ? "ncx" : "nav", static_cast<int>(zip_.Error()));
         return false;
     }
+    struct NavigationStreamGuard {
+        ZipReader& zip;
+        ~NavigationStreamGuard() { zip.CloseEntryStream(); }
+    } stream_guard{zip_};
     std::vector<Node> nodes;
     std::vector<size_t> stack;
     std::string tag, type_attribute = "epub:type";
@@ -333,14 +360,13 @@ bool EpubDocument::ParseNavigation(const std::string& href, bool ncx) {
     int nav_depth = 0, list_depth = 0, span_depth = 0;
     size_t capture = SIZE_MAX, total = 0;
     const auto add = [&](const std::string& link, int depth) -> size_t {
-        if (nodes.size() >= 2048 || depth > 64) { invalid = true; return SIZE_MAX; }
+        if (depth < 0 || depth > 64) { invalid = true; return SIZE_MAX; }
         nodes.push_back({{}, link, static_cast<uint16_t>(std::max(0, depth))}); return nodes.size() - 1;
     };
     uint8_t bytes[1024];
     size_t count = 0;
     while (!invalid && (count = zip_.EntryStreamRead(bytes, sizeof(bytes))) != 0) {
         total += count;
-        if (total > 512 * 1024) { invalid = true; break; }
         for (size_t i = 0; i < count && !invalid; ++i) {
             const char c = static_cast<char>(bytes[i]);
             if (!in_tag) {
@@ -415,9 +441,8 @@ bool EpubDocument::ParseNavigation(const std::string& href, bool ncx) {
         #endif
     }
     const bool failed = invalid || in_tag || quote || zip_.EntryStreamError() || !stack.empty() || nav_depth != 0;
-    zip_.CloseEntryStream();
     if (failed) {
-        ESP_LOGW(TAG, "toc parse failed format=%s bytes=%u; trying fallback", ncx ? "ncx" : "nav", static_cast<unsigned>(total));
+        ESP_LOGW(TAG, "toc parse failed format=%s bytes=%u reason=markup_or_read", ncx ? "ncx" : "nav", static_cast<unsigned>(total));
         return false;
     }
     std::vector<EpubTocEntry> parsed;
@@ -453,6 +478,9 @@ bool EpubDocument::ParseNavigation(const std::string& href, bool ncx) {
     }
     toc_.swap(parsed);
     return true;
+} catch (const std::bad_alloc&) {
+    ESP_LOGW(TAG, "toc parse failed format=%s reason=no_memory", ncx ? "ncx" : "nav");
+    return false;
 }
 
 const EpubSpineItem* EpubDocument::SpineItem(int index) const {

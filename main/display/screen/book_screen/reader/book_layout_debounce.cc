@@ -49,8 +49,9 @@ void ApplyReaderLayoutLive(bool reload_font) {
         if (!StartBookFontReload()) ScreenShowToast(Lang::Strings::TTF_APPLY_FAILED);
         return;
     }
+    const bool images_changed = st.reader.session->Style().inline_images != (BookReaderPrefsInlineImages() != 0);
     BindSessionLayoutPrefs(*st.reader.session);
-    if (DeferComicTextSetting()) return;
+    if (!images_changed && DeferComicTextSetting()) return;
     ApplyReaderPageGeometry(ReaderGeomMode::kImmersive);
     st.reader.session->SetViewport(st.reader.viewport_w, st.reader.viewport_h);
 

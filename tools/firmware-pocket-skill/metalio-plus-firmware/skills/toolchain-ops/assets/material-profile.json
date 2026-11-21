@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "material_version": "r2",
+  "registry": "../references/registry.json",
+  "registry_sha256": "dc38a81481b934ccfc7ccc246f1a6408396d39cfeabe365a9d123354b736e354",
+  "original_file_count": 173,
+  "raw_zip_filename": "plus-raw-mirror-win64-r2.zip",
+  "raw_zip_bytes": 1680776568,
+  "raw_zip_sha256": "4675ada29453e3078d29fd768d2bea4450d79297598e0878300b5941c76e5819",
+  "raw_zip_root": "PlusRawMirror/",
+  "cloud_mirror_base": null,
+  "channels": [
+    "Local",
+    "Official",
+    "Mirror"
+  ],
+  "local_channel_network_fallback": false,
+  "default_profile": "plus-base",
+  "acquisition_profiles": "acquisition-profiles.json",
+  "snapshot_provenance": "snapshot-provenance.json",
+  "note": "173 is the frozen universe, not the default acquisition count; selected profile governs fetch and prepare."
+}

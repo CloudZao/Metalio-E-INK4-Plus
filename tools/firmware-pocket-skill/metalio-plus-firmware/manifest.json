@@ -1,0 +1,1804 @@
+{
+  "schema_version": 1,
+  "name": "metalio-plus-firmware",
+  "version": "0.4.0",
+  "release_date": "2026-11-07",
+  "entrypoint": "SKILL.md",
+  "installation": "one_complete_folder_explicit_internal_routing",
+  "target": {
+    "device": "Metalio E-INK4 Plus",
+    "screen_inches": 4.7,
+    "chip": "esp32s31",
+    "host": "Windows x64",
+    "shell_minimum": "Windows PowerShell 5.1",
+    "wsl_required": false,
+    "docker_required": false,
+    "usb_serial": "default_available_but_not_required_for_bin_generation",
+    "agent": "Codex"
+  },
+  "modules": {
+    "app-capabilities": "skills/app-capabilities/MODULE.md",
+    "device-interaction": "skills/device-interaction/MODULE.md",
+    "firmware-build": "skills/firmware-build/MODULE.md",
+    "font-support": "skills/font-support/MODULE.md",
+    "license-compliance": "skills/license-compliance/MODULE.md",
+    "pocket-integration": "skills/pocket-integration/MODULE.md",
+    "product-conventions": "skills/product-conventions/MODULE.md",
+    "text-input": "skills/text-input/MODULE.md",
+    "toolchain-ops": "skills/toolchain-ops/MODULE.md",
+    "verify-delivery": "skills/verify-delivery/MODULE.md"
+  },
+  "materials": {
+    "version": "plus-raw-mirror-win64-r2",
+    "registry": "skills/toolchain-ops/references/registry.json",
+    "registry_sha256": "dc38a81481b934ccfc7ccc246f1a6408396d39cfeabe365a9d123354b736e354",
+    "raw_file_count": 173,
+    "channels": [
+      "auto",
+      "local_preload",
+      "explicit_local",
+      "official",
+      "trusted_mirror",
+      "configured_mirror"
+    ],
+    "includes_raw_archives": false,
+    "sdk_version": "6.1.0",
+    "sdk_commit": "fff9895c82d744c7237be8847347bdd1b07c6643",
+    "official_project_commit": "ad8edf4150a688737c0d7c00cae4413079b262ef",
+    "default_profile": "plus-base",
+    "default_raw_file_count": 105,
+    "default_raw_bytes": 1272026115,
+    "profiles": [
+      "plus-base",
+      "debug",
+      "official",
+      "full"
+    ],
+    "installation_download_count": 0,
+    "default_profile_scope": "New complete build environment only; not Skill installation or every stage",
+    "stages": "skills/toolchain-ops/assets/acquisition-stages.json",
+    "originals_optional": true
+  },
+  "integration": {
+    "profile": "public-plus-pocket2",
+    "guide_revision": "1.1",
+    "abi": "1.0",
+    "layout_profile": "metalio16m-plus-pocket2",
+    "product_version_allowlist": false,
+    "reference_host": {
+      "name": "固件口袋",
+      "version": "1.0.7-plus.16",
+      "conformity_evidence": "user_confirmed_not_reaudited_in_this_release"
+    },
+    "legacy_private_records": "not_implemented",
+    "guide_commit": "59e523c9ea5c3f0064a506f06c84a526f08b4379"
+  },
+  "files": [
+    {
+      "path": "assets/task-state.example.json",
+      "bytes": 1769,
+      "sha256": "7898331e860bdc4a9de06c01390e406cbc6b2bda4ae93bb6e63da43fce5919bd"
+    },
+    {
+      "path": "release-validation.json",
+      "bytes": 4553,
+      "sha256": "163a5dc83a05a9b7913b793c5662883e58788668acc889f1659be43e7fe1f29d"
+    },
+    {
+      "path": "scripts/check_package.py",
+      "bytes": 2571,
+      "sha256": "ff5c7892aeaf7b5c40dcabd60382a422df967a7517da8818681dd83481edbfa2"
+    },
+    {
+      "path": "scripts/Read-PackageInfo.ps1",
+      "bytes": 4607,
+      "sha256": "fc0f310cea77372b03deefd8dab89644c193da17fb28d6bc1e2fe0ca99734f27"
+    },
+    {
+      "path": "scripts/record_progress.py",
+      "bytes": 5240,
+      "sha256": "6feb51eccde648392ad7dd207a1c808c115edee58abe9c7e777077d437ab1c58"
+    },
+    {
+      "path": "SKILL.md",
+      "bytes": 6344,
+      "sha256": "115c1a388f02fd2e69ca04ef1af523f3ec8e1f6517c8e093dbdb0f7c588ad433"
+    },
+    {
+      "path": "skills/app-capabilities/assets/plus_services/bounded_http_body.h",
+      "bytes": 1632,
+      "sha256": "7a3be9687818aef7adcc56d71faf11577fd5fa9f25f5f9581584962b35afca66"
+    },
+    {
+      "path": "skills/app-capabilities/assets/plus_services/counter_state.h",
+      "bytes": 1847,
+      "sha256": "8aedcb4b0acb2707233b48f6e888a6427bfc709116e87f264a8c717c1f6fb4ef"
+    },
+    {
+      "path": "skills/app-capabilities/assets/plus_services/durable_text.h",
+      "bytes": 3878,
+      "sha256": "5d4103bc0e62e2c7fb7e7fbd2469ce52ca43dae266f1153d80260370a3b8b181"
+    },
+    {
+      "path": "skills/app-capabilities/assets/plus_services/media_helpers.h",
+      "bytes": 3626,
+      "sha256": "799b7f25fbf1b9fa088c0903c9886b19662f29b797fab48d8471f19f969137f4"
+    },
+    {
+      "path": "skills/app-capabilities/assets/plus_services/plus_services.h",
+      "bytes": 151,
+      "sha256": "c76ba6ff408798b482d7ace1f50ff348d0925110c6ff80cac0a823d9002b4344"
+    },
+    {
+      "path": "skills/app-capabilities/assets/plus_services/resource_budget.h",
+      "bytes": 1577,
+      "sha256": "19c9db8bd4b4bbe2dbd703e7b93224209bcebfa2f201ee14788b5129adcaee6a"
+    },
+    {
+      "path": "skills/app-capabilities/assets/plus_services/task_fence.h",
+      "bytes": 3871,
+      "sha256": "9c94409946d4cae41c189c7daa225e956ce14eeb7f3b97ed018f4376f049d368"
+    },
+    {
+      "path": "skills/app-capabilities/examples/direct_tf_hooks.cc",
+      "bytes": 2181,
+      "sha256": "1e3f3c046d67614602686e5e417d7a06ad44d82a278a3b39b2c3256f6e18b209"
+    },
+    {
+      "path": "skills/app-capabilities/examples/media_pipeline.h",
+      "bytes": 1240,
+      "sha256": "9b599b0a17b68d5525293e94f77e15eaa7cdcb3c7b0b9a3e4f9886886f3fc684"
+    },
+    {
+      "path": "skills/app-capabilities/examples/network_device_setup.h",
+      "bytes": 3286,
+      "sha256": "80038ac138cf16ba877046fc42bddd2d1445bfa9376200fa22cafdb14f8c5792"
+    },
+    {
+      "path": "skills/app-capabilities/examples/shared_audio_reset.cc",
+      "bytes": 913,
+      "sha256": "f25f448ab4819f9bf068906d54a3ecd1bd870efc7890b7cdfdb2f15125be1dce"
+    },
+    {
+      "path": "skills/app-capabilities/MODULE.md",
+      "bytes": 2888,
+      "sha256": "c86b5c6f2e9cc1c684f47aa41f227a55f8f552f09117099270f378f5309ff137"
+    },
+    {
+      "path": "skills/app-capabilities/references/lifecycle.md",
+      "bytes": 2814,
+      "sha256": "fb25e92903e1e65029577d2f9cedc809d205f3e1bdc3a204365f96ba700c8ff8"
+    },
+    {
+      "path": "skills/app-capabilities/references/media.md",
+      "bytes": 3036,
+      "sha256": "8cff8e8e3fe77780116592bb4686d8c28ef0e295384e725616eaee1f5001d0c5"
+    },
+    {
+      "path": "skills/app-capabilities/references/network.md",
+      "bytes": 8974,
+      "sha256": "fc99a75ed208648a6ae246e01e470d3e9aae4b31bac96c5676dd1df0a835be80"
+    },
+    {
+      "path": "skills/app-capabilities/references/resources.md",
+      "bytes": 1657,
+      "sha256": "66b83c4f8f773b73a1c5142cb7f136be928cceda679fbdd11dbfa331e20359eb"
+    },
+    {
+      "path": "skills/app-capabilities/references/source-license.md",
+      "bytes": 3079,
+      "sha256": "7a7c328a5a7a6dba477e7c23d8d264543068b76bae1d6a61be90092f6645b862"
+    },
+    {
+      "path": "skills/app-capabilities/references/source-record.json",
+      "bytes": 7650,
+      "sha256": "2e2bc9bfde2fe01123d1e2253a18225b9f1e9fba34d1b6c10b98ea8cf62d3306"
+    },
+    {
+      "path": "skills/app-capabilities/references/storage.md",
+      "bytes": 3623,
+      "sha256": "b54a673fd83addf4ab15c51c3f9f439e4fc4ec98b0576c85637c389807e60433"
+    },
+    {
+      "path": "skills/app-capabilities/scripts/run_host_tests.py",
+      "bytes": 3696,
+      "sha256": "c728a66861c7474fc7ed33bf369e4cada21f698f1df2cdb6a4d67c1b09e8c27c"
+    },
+    {
+      "path": "skills/app-capabilities/scripts/run_wifi_production_tests.py",
+      "bytes": 4234,
+      "sha256": "4dbbfa31c34131130057e5a0ce96845c6594097b9e57d37d818fe27278087a1d"
+    },
+    {
+      "path": "skills/app-capabilities/tests/compat/unistd.h",
+      "bytes": 844,
+      "sha256": "707bc397f0e047eef125376a52e1942d0ff33b0682c64086ae57ced2e774541a"
+    },
+    {
+      "path": "skills/app-capabilities/tests/test_application_wifi.cpp",
+      "bytes": 8133,
+      "sha256": "947d207c28140c3f80c81b0f6ecf0c70f80e3eb950360b05e4c55a5a79340954"
+    },
+    {
+      "path": "skills/app-capabilities/tests/test_services.cpp",
+      "bytes": 8291,
+      "sha256": "b2a32ce8a95dbe9abb8712209b5807b315ddf47d45b8645835f87fa7bfe9ca90"
+    },
+    {
+      "path": "skills/app-capabilities/tests/test_wifi_production.cpp",
+      "bytes": 8293,
+      "sha256": "a3f39ef82be2fa8d41b98d5797d86b81699ff6fc9ca56afb3950849ab0aa9ff2"
+    },
+    {
+      "path": "skills/app-capabilities/tests/wifi_sdk_stubs/esp_event.h",
+      "bytes": 37,
+      "sha256": "3ac18eae180f68bf15b25c8d48fda09c0ca5335683ba02a4632d8458ad0e62e5"
+    },
+    {
+      "path": "skills/app-capabilities/tests/wifi_sdk_stubs/esp_heap_caps.h",
+      "bytes": 37,
+      "sha256": "3ac18eae180f68bf15b25c8d48fda09c0ca5335683ba02a4632d8458ad0e62e5"
+    },
+    {
+      "path": "skills/app-capabilities/tests/wifi_sdk_stubs/esp_log.h",
+      "bytes": 37,
+      "sha256": "3ac18eae180f68bf15b25c8d48fda09c0ca5335683ba02a4632d8458ad0e62e5"
+    },
+    {
+      "path": "skills/app-capabilities/tests/wifi_sdk_stubs/esp_netif.h",
+      "bytes": 37,
+      "sha256": "3ac18eae180f68bf15b25c8d48fda09c0ca5335683ba02a4632d8458ad0e62e5"
+    },
+    {
+      "path": "skills/app-capabilities/tests/wifi_sdk_stubs/esp_timer.h",
+      "bytes": 37,
+      "sha256": "3ac18eae180f68bf15b25c8d48fda09c0ca5335683ba02a4632d8458ad0e62e5"
+    },
+    {
+      "path": "skills/app-capabilities/tests/wifi_sdk_stubs/esp_wifi.h",
+      "bytes": 37,
+      "sha256": "3ac18eae180f68bf15b25c8d48fda09c0ca5335683ba02a4632d8458ad0e62e5"
+    },
+    {
+      "path": "skills/app-capabilities/tests/wifi_sdk_stubs/freertos/FreeRTOS.h",
+      "bytes": 37,
+      "sha256": "3ac18eae180f68bf15b25c8d48fda09c0ca5335683ba02a4632d8458ad0e62e5"
+    },
+    {
+      "path": "skills/app-capabilities/tests/wifi_sdk_stubs/freertos/queue.h",
+      "bytes": 37,
+      "sha256": "3ac18eae180f68bf15b25c8d48fda09c0ca5335683ba02a4632d8458ad0e62e5"
+    },
+    {
+      "path": "skills/app-capabilities/tests/wifi_sdk_stubs/freertos/task.h",
+      "bytes": 37,
+      "sha256": "3ac18eae180f68bf15b25c8d48fda09c0ca5335683ba02a4632d8458ad0e62e5"
+    },
+    {
+      "path": "skills/app-capabilities/tests/wifi_sdk_stubs/wifi_sdk.h",
+      "bytes": 8552,
+      "sha256": "1959ad242f6d257b80a917bbcb1f904696de92256ab5bd984a96098cbe594af9"
+    },
+    {
+      "path": "skills/device-interaction/examples/verify_ui.cpp",
+      "bytes": 7007,
+      "sha256": "290fca0f6cace62e030a68f79d8d3d792da249a05104b758c35b1e6943e77f42"
+    },
+    {
+      "path": "skills/device-interaction/MODULE.md",
+      "bytes": 2963,
+      "sha256": "863e895a25a3030e3038d7a1a44991177426ea737271699c5ea82ce925bc06b0"
+    },
+    {
+      "path": "skills/device-interaction/references/audio-animation.md",
+      "bytes": 9243,
+      "sha256": "3232163a7ffe25d71c24f9ff89cbecfaa84eb249cf03e9e6c8d9206bcf67c542"
+    },
+    {
+      "path": "skills/device-interaction/references/display-assets.md",
+      "bytes": 6185,
+      "sha256": "ef81b45bd6b1e1a11c7e726b35b208ddfacf29a223a580b49c6e094053319613"
+    },
+    {
+      "path": "skills/device-interaction/references/plus-hardware.md",
+      "bytes": 3115,
+      "sha256": "32a890c42f4653d9c725226dd0c699bcdd6293e3d4dbf31bae33ba0d57ffb9a5"
+    },
+    {
+      "path": "skills/device-interaction/references/storage-network.md",
+      "bytes": 5207,
+      "sha256": "4c1ec362acdec58713a0b46617648f6a7d13fd86eda447c6167b8affba5fc9e6"
+    },
+    {
+      "path": "skills/device-interaction/references/touch-power.md",
+      "bytes": 7365,
+      "sha256": "9412ee6a7df109f00f9803a01a50a894672784308a9012402183667322857c9a"
+    },
+    {
+      "path": "skills/device-interaction/references/ui-on-device.md",
+      "bytes": 3946,
+      "sha256": "ca3b52608b5ea55bf0b744c4cd6546fdd77cd7ccc7276b6f1786aec20e7b7de2"
+    },
+    {
+      "path": "skills/device-interaction/scripts/layout_tool.py",
+      "bytes": 4257,
+      "sha256": "56e006e50ce2b3567928a2c48e7a33cd55612fb8da69306ee372c3c8ecda4728"
+    },
+    {
+      "path": "skills/device-interaction/scripts/pack_plus_pgm.py",
+      "bytes": 7247,
+      "sha256": "0a53e4cb848bdf3a2278305a5d8a1f6b895a953e3c01f9141b11158b44218b67"
+    },
+    {
+      "path": "skills/device-interaction/scripts/preview_native_frame.py",
+      "bytes": 1271,
+      "sha256": "c4b8fa4d2570fc2ae8b6dd64124531bc9e324b06a2f49425c50c13b26dbc1399"
+    },
+    {
+      "path": "skills/device-interaction/scripts/verify_native_ui.ps1",
+      "bytes": 2709,
+      "sha256": "e48128ca750af31e366633fea204e0bf527cb01e32e9b589ba0f07e68518f582"
+    },
+    {
+      "path": "skills/firmware-build/assets/official-build-fixes/dependencies.lock",
+      "bytes": 9923,
+      "sha256": "c7174533067a093fcd80519487fec96859f41d6212ceac261930f90f55503107"
+    },
+    {
+      "path": "skills/firmware-build/assets/official-build-fixes/p02_build_dependencies/CMakeLists.txt",
+      "bytes": 164,
+      "sha256": "83d1018e837bc52c8aa017a6a8e147da2ca782c976a1b3c461639d0ef171594f"
+    },
+    {
+      "path": "skills/firmware-build/assets/official-build-fixes/p02_build_dependencies/idf_component.yml",
+      "bytes": 202,
+      "sha256": "04ae5026e80bc364d39127fb2baf87322c4fe63fab5ecde3688dc7d316d2094d"
+    },
+    {
+      "path": "skills/firmware-build/assets/official-build-fixes/p02_build_dependencies/project_include.cmake",
+      "bytes": 870,
+      "sha256": "e174e1270ca8616ddf96a2feffbd1ec3b6bc55d42392422a16c44e5e9ab6a993"
+    },
+    {
+      "path": "skills/firmware-build/assets/official-build-fixes/source-selection.json",
+      "bytes": 147293,
+      "sha256": "3d2a039531586b437782484d095ac8aed5f27860131465e9719c681f8753a107"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/CMakeLists.txt",
+      "bytes": 244,
+      "sha256": "6beb2b0f4eeca45f222ea53dc30d58b29fbd045cc75f7eb78afd4b3752052c2a"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/Apache-2.0.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/board_specific.c",
+      "bytes": 165,
+      "sha256": "fa783743af011c2892804fbf8d2b52a8b2f70de7aba981bbf8aaa20fcfef634e"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/builtin_waveforms.c",
+      "bytes": 472,
+      "sha256": "ad039ced1e99dc75539f48fbdf3d3f333b5fd01e329606438a73f8567235ff5b"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/bus/metalio_i2c1.c",
+      "bytes": 7813,
+      "sha256": "74e4a30160906c2470bbd43e767914e3401ea694cfc26b1410739a722c2637e6"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/bus/metalio_i2c1.h",
+      "bytes": 1549,
+      "sha256": "fa8a817285536fa0cd099c7985ca4aa33dd3d37f26015849d89e65fb23a481cd"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/bus/pca9555.c",
+      "bytes": 2577,
+      "sha256": "f35cecc7d1417296c17b72c202b2cf962737b502cdb402943c3c43d8d70dfa61"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/bus/pca9555.h",
+      "bytes": 1413,
+      "sha256": "8d125ee1b6e28f9680cfe7ba64ec7e3c838eeb6d01c560596a76fc732fda2db6"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/bus/tps65185.c",
+      "bytes": 4369,
+      "sha256": "613506427c0bd97c4180343dbd5afda060b0ead33696bc5915a16444eb00303e"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/bus/tps65185.h",
+      "bytes": 1703,
+      "sha256": "9725a066bb01f6a89cd7ef01f3dee332a530b07b5c0fe5306941fff438768978"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/CMakeLists.txt",
+      "bytes": 535,
+      "sha256": "eb465ed289586dcc04b3f50456ccb9e7cb1efadf85c66412cca7d34b7f62f44d"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/config.h",
+      "bytes": 6585,
+      "sha256": "859777adc4eda6d7d17ad6483d54ab22633e991d463ea8389f71a9b43cdd466f"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/displays.c",
+      "bytes": 2457,
+      "sha256": "9b90f1070abb8ca6f52592e50b6372453e7f637967d3d101744d7fc9ecdd9eed"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epd_board.c",
+      "bytes": 3036,
+      "sha256": "5ed03131b83f0ae5bd461ae1f59062f00b567cf0d7295ae6ee1ed5871eb9ab9c"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epd_board.h",
+      "bytes": 2762,
+      "sha256": "116d5cb6472782fe552b77f8d812dbc89e95285acc8a283f41b363703f1e2587"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epd_board_common.c",
+      "bytes": 3212,
+      "sha256": "67433f86adf549ea5d5cf1d46f0c786a1f185ace24c970280e1262aa8128d013"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epd_board_common.h",
+      "bytes": 1285,
+      "sha256": "c46700603b86dbcbd376827ea6ff5a3990c85435dc66a902f3ecd2dcf8ac1faf"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epd_board_metalio_eink4_plus.c",
+      "bytes": 35208,
+      "sha256": "845e56aaa88f6de8722b42581fba5380381d6725783d16ecab35cca722d16114"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epd_board_metalio_eink4_plus.h",
+      "bytes": 4671,
+      "sha256": "a37ca1144321c53c2a75f79b0855822f7c25cf8444774dc1977bccc6c18e6390"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epd_board_specific.h",
+      "bytes": 1336,
+      "sha256": "dcc3651cfbf18382369a14aa4ab731bc1ec462260dec7e235e0cb0870dc3d093"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epd_display.h",
+      "bytes": 1222,
+      "sha256": "1acd714228f422bde92720302d8bf3c8464c101ea826dd625b740a02e0216433"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epd_font24.h",
+      "bytes": 2190,
+      "sha256": "1ff5f435ffea3a67b9a72644cb0d66ea4517bcd038bd4634f54c6f6253e1f1dc"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epd_highlevel.h",
+      "bytes": 5681,
+      "sha256": "35e27b61bc43d361f8e5860256bd70efe6253b1902efac2c59f5508b1d0236b8"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epd_internals.h",
+      "bytes": 3115,
+      "sha256": "2e0b5595dc86a8e942dc521539fb476019933f42e273873958f4a3b4d0229fee"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epdiy.c",
+      "bytes": 15388,
+      "sha256": "712cd6c25f46b1138a524059ff2d568a4cb24204e960baef298b244f277b2186"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epdiy.h",
+      "bytes": 19831,
+      "sha256": "d071ee922d6fa8bd1cf205f493615fa61ab187774cf7708c877fb63dada3fdf5"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/epdiy_riscv_ve_stub.c",
+      "bytes": 8511,
+      "sha256": "525771d5c5334419969d05cb86d7184e4b51ae042af525ad081890f1102ed46a"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/font.c",
+      "bytes": 12244,
+      "sha256": "900a8ca0f6b1ab01009b81520e57357e81abea4edf1861a3bffff8a52c7de8ad"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/GPL-3.0.txt",
+      "bytes": 34674,
+      "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/highlevel.c",
+      "bytes": 9402,
+      "sha256": "37bdd988d1092314680c78d3f9731ec647d2262860df9dcb83832db543c37d7a"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/LGPL-3.0.txt",
+      "bytes": 7652,
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/LICENSE",
+      "bytes": 285,
+      "sha256": "8fa37975472cbe809fd03ea7e08072abb4041d5834820b8d4c448961fe173ca3"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/LICENSE.CloudZao-MIT",
+      "bytes": 1141,
+      "sha256": "b6abfbe557727fcbf3c975908f15cd5860afd1d8d561d4a18abf7679538e09b5"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/metalio_epd.c",
+      "bytes": 2872,
+      "sha256": "f11a679124d93ebc44f542ce1e202f8eea458dafe8db4eddaea9559958c6b6e0"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/metalio_epd.h",
+      "bytes": 449,
+      "sha256": "f92142075a0389cc1a9a3b5eb05251b657cbd81347863345d65377f77f0a30c7"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/metalio_sd.h",
+      "bytes": 115,
+      "sha256": "ca7181e31a598bf9ab9d95646435ceb55939e744c185f20b8dd3872dfb86fa76"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/metalio_touch.c",
+      "bytes": 17336,
+      "sha256": "26a53f7ebbe7d5fc406f79c0140e8f90835782a4a017a1ba4b138899795608c4"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/metalio_touch.h",
+      "bytes": 2841,
+      "sha256": "452c8977c7350a61bf9728bb6648c6743514952e83f2d5a63a82f12088eaa8da"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/metalio_touch_report.h",
+      "bytes": 3258,
+      "sha256": "0dee5058bfb587079c2b28ddafa057c0fc2a90b909bc416bddc992d19dbd926c"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/metalio_vibe.cc",
+      "bytes": 6001,
+      "sha256": "c8a2255e9a3d4b143125e2c544ad5ad5e32f3ffabf3268a3986760ab65db0303"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/metalio_vibe.h",
+      "bytes": 768,
+      "sha256": "113fd8ae6835e3fff166ba7b188e05d285be8f4f2fefa5cc91dd7ede3c56f85b"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_common/line_queue.c",
+      "bytes": 2561,
+      "sha256": "09b6b1a11e25fb4231ec825ed315f3f62376ac9ccdbec0279f4f5d1aa0dd5b79"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_common/line_queue.h",
+      "bytes": 1048,
+      "sha256": "bb4987286d70ce4d971e95d4c62a61ffbaa236b361157a839ca3c9d8b231ba32"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_common/lut.c",
+      "bytes": 21579,
+      "sha256": "ee11de9bc8bc35b796a80c90d86fee3f09ac020723cc49450520cd0fc81fdd10"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_common/lut.h",
+      "bytes": 1282,
+      "sha256": "7922f5dc322aadac4b1f7e1a51684e1bf6e27726c8ebe8d5bbeecee5ec0a509e"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_common/render_context.c",
+      "bytes": 4084,
+      "sha256": "62cb44e4239256a5d4d13aba650d6410b0b4f743f188071cf830d43f732e7278"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_common/render_context.h",
+      "bytes": 3411,
+      "sha256": "5a20cc00470ede9e8fad8538dc8cf8c6dce3b7ef166f7d096ece6fac92af84cd"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_common/render_method.c",
+      "bytes": 375,
+      "sha256": "1c19918d61f031912bfa62a8db63019f3f0e39bef3fdad704acf6a454c4ae1c3"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_common/render_method.h",
+      "bytes": 765,
+      "sha256": "d54c2d8e7b0193d6486972785084152f01eab43bdc192dd2a847dde5b92285ef"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_common/spatial_wipe.h",
+      "bytes": 2780,
+      "sha256": "23eb17f644673a9e41c9bcffcc5dda68347d7b548f04fad573ce822b5e063ff5"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_common/white_border.h",
+      "bytes": 745,
+      "sha256": "824d204c397a82cda09167a88ccc5f3e904c502b9eaf5fb361fd03082bc14718"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_lcd/epdiy_idf6_compat.h",
+      "bytes": 1065,
+      "sha256": "91e5acad99b33d86d02b1c929038a9a91def490c68b6c62b68dd1877af5742e1"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_lcd/idf-4-backports.h",
+      "bytes": 759,
+      "sha256": "b8584c98439148e0ceb98d08fb6a87a34752e8c5c11bbb4918670d32858c04bc"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_lcd/lcd_driver.c",
+      "bytes": 47916,
+      "sha256": "027857519edba9e86832b05e6d1ad30bb9d73447c32ae2e68acab00262c04fd3"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_lcd/lcd_driver.h",
+      "bytes": 1891,
+      "sha256": "aadc1cfb0484940592ee116873a85e2cdd422c9b68ed5ef880e93397186f333d"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_lcd/render_lcd.c",
+      "bytes": 16451,
+      "sha256": "b915b8c50955fc1c02f99ee44a13e4025302fea23eb3aab4ad1dfe668dbb69ca"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/output_lcd/render_lcd.h",
+      "bytes": 462,
+      "sha256": "d535a84269f4f59daa499ec60db1260f1d3da934692b89e501179e618f4b225a"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/render.c",
+      "bytes": 22325,
+      "sha256": "2f5fa5671b841eb49105fbda1a11c34453f64c5c88c5ff53f302017bc39bc24f"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/render.h",
+      "bytes": 247,
+      "sha256": "523ce4a45cc6e267820809ff1f86ac2841d1306e76c6d01b33b90896b198dde4"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/epdiy_ED047TC1.h",
+      "bytes": 36978,
+      "sha256": "b0083538007df8377fe3139e265f4d24fcb7cb6de510859bfc86f822b876f8d2"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/epdiy_ED047TC2.h",
+      "bytes": 273272,
+      "sha256": "141768d946e5770248927b62690213580567a406e246f4ccbfc7a7808e107a56"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/epdiy_ED060SC4.h",
+      "bytes": 36613,
+      "sha256": "682a7fd1a3b218ca19d913548ebd6c50392411ea439b170dd6638429ef40c5e8"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/epdiy_ED060SCT.h",
+      "bytes": 36942,
+      "sha256": "064a6c4d03dc6603855ba8932c1459ad05b31f756d1f96bc1fa4217cf053eea1"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/epdiy_ED060XC3.h",
+      "bytes": 36616,
+      "sha256": "0f72290ec2974d81f64988bc2a31ee7f6a8ff78085abf3fa8ce2691ba541f605"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/epdiy_ED097OC4.h",
+      "bytes": 36619,
+      "sha256": "0fbb0d8b1ed82cdb2a84ffdf6d4158bb105c4beba81dd5e663b3ac527845c9ca"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/epdiy_ED097TC2.h",
+      "bytes": 36942,
+      "sha256": "3d9c9aaa97f3febc434b1f0ae1f711e8d99f8d87b1089e73bee59dae036ec279"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/epdiy_ED133UT2.h",
+      "bytes": 36634,
+      "sha256": "62ee1c23c0cad72c27e966fbdddba3b883d7f0d751f6933ae88f4545f1ebe0f8"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/epdiy_NULL.h",
+      "bytes": 36722,
+      "sha256": "24a51132dc8bc3f3a7db1b39ab243bfdef1597e22d929c50590b4cbefc4eef79"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/LICENSE.gray8",
+      "bytes": 625,
+      "sha256": "ef19e5258fbe5aeb58747280d331458858cd492042be2cbc8b7fac72638a80dc"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/my_gray8_gc16.h",
+      "bytes": 11718,
+      "sha256": "f043aee371eccfe2423b9be46c9f17f1699e8de7358df3248ea27470847ae3b8"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/my_gray8_gl16.h",
+      "bytes": 11718,
+      "sha256": "8629bdf4f775d33b6964770717a7557caf0a513076a40d10794c99047261378f"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/my_waveform.c",
+      "bytes": 12488,
+      "sha256": "d0f80ea657f840e14b436691be03d147b42d3d3e20ea970dff16350af38590fa"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/my_waveform.h",
+      "bytes": 955,
+      "sha256": "c2d41ebca6e79cf5495b372c6f7655f9d453bc8b75082abc17b7ffde19a71690"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/my_waveform_du.h",
+      "bytes": 7673,
+      "sha256": "585f3f2ce0d094a96118e0d734ba4945455e6569289c254c21ad9dcdb988db8f"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/my_waveform_gc.h",
+      "bytes": 17445,
+      "sha256": "b5a478055895c504d24af3df91d6940c21bde6502b5f69e3e867a9269e587c3d"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/my_waveform_gl.h",
+      "bytes": 17804,
+      "sha256": "cbfe7666ace7f311ebf112571ad4cc450ccb29a49fedabd73a2701e8e7632ec5"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/my_waveform_trim.c",
+      "bytes": 3400,
+      "sha256": "1861c7246533b9cb44a3cfb5237bb42ddc85e3c06b8d22598cc29d37dbad66ca"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/waveforms/my_waveform_trim.h",
+      "bytes": 873,
+      "sha256": "724014fe05717ec3c52a4b46f256ca767219d1910f9f3834e1514d0f50110845"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/ai_key.h",
+      "bytes": 1252,
+      "sha256": "3f9a041c2c6999c5bba2a9c5fc4a8c82bad851093487d1a8714c7535f8212acb"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/CMakeLists.txt",
+      "bytes": 649,
+      "sha256": "7cf6ba6c4c722d7023168f95491e6985574fdcebb5be63824e66211a5dd5c232"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/include/asset_contract.h",
+      "bytes": 1414,
+      "sha256": "d9265b38ddb0444355e1058d293cfe35cc38c2b78ef56f58425e92c869d09012"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/include/plus_hal.h",
+      "bytes": 5570,
+      "sha256": "3ddd4e011cd76cc1e4fa22d0a964290b79c3820ada149ab8f8b603be0bb2df58"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/include/touch_edges.h",
+      "bytes": 3425,
+      "sha256": "2ba308b20431fbfa345c7ebe01d0cb556b492bf4bf79d4025f3d44fc59898a02"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/lockscreen.h",
+      "bytes": 10479,
+      "sha256": "085bc4501548dde4fd8960a41f35ec864d51b2373dc5e723739e5ce9b08fe238"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/mono_frame.h",
+      "bytes": 1281,
+      "sha256": "0e95666780c7729b01084c7e27f6ce5a63eac4f60ef5217190020b6c10f50f8d"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/plus_hal.cc",
+      "bytes": 55603,
+      "sha256": "088e4d63b206e1981c54436e4424cf883a7cd8dfd43cb315919b1d66849ed46a"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/power/bq27220_gauge.cc",
+      "bytes": 7071,
+      "sha256": "fa827d39a8a8436b0728b86ac529f0b7ab87856bc63fa4652f9989d3b6701a92"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/power/bq27220_gauge.h",
+      "bytes": 2754,
+      "sha256": "b25334b41b4dbbffe646e6b129960ac4f432bd27b9d935d4d14480414e3bbebb"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/power/cx25601n.cc",
+      "bytes": 20483,
+      "sha256": "92ac29d17018094b2d85b2eb584db777e223dcba970eaf150e9f88eb4eea472a"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/power/cx25601n.h",
+      "bytes": 3797,
+      "sha256": "f4e1c12728c83f599a6c74f71de030fd180636dcfa362d600a52f8ed6d1bc861"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/power/power_i2c.c",
+      "bytes": 2570,
+      "sha256": "c3ce362c01a630f228cc6265827bec19a6ed211cedb22c67db4af6b491f1342f"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/power/power_i2c.h",
+      "bytes": 1282,
+      "sha256": "fe746ceab627bda3311242f655e3acacbd3097b38811c57d772c1b23b3eec128"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/power_key.h",
+      "bytes": 2338,
+      "sha256": "415467460f3fe08073cdc9ead99db99c71a12035bc72874eff6fe45bbd46f898"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/volume_key.h",
+      "bytes": 1715,
+      "sha256": "0a849c4ca5274d9da1bdf252fc8e6998b458ca75f4dc5a6cda039bd595df8cdd"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/components/plus_hal/wake_hold.h",
+      "bytes": 646,
+      "sha256": "90e992e3588861f27c3d3cc27349cd6f566f329cdd616bfef45de4dd37f237a2"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/main/app_lifecycle.h",
+      "bytes": 2183,
+      "sha256": "e1c464e669829a9570622de0f8a6edc3c429d5c72c629421b0a043f1742e2c42"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/main/app_view.h",
+      "bytes": 8796,
+      "sha256": "25c7a74936fd7c3bcc221fe4f640819173797c3d5af956925c02d78d97c7f25a"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/main/CMakeLists.txt",
+      "bytes": 718,
+      "sha256": "c12e3508a96fb2db832208b67227d8ff7939f8a4663bc902a65fc431b14d5cc3"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/main/main.cc",
+      "bytes": 8406,
+      "sha256": "88832cc27528a4fb2b6265f0276796056107555114ff7261f116b52b50471e42"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/main/plus_canvas.h",
+      "bytes": 3767,
+      "sha256": "8be3f1ebb9e6baf4dc2c4832f8728b24f3a4346134b67189f568ee4345c84638"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/provenance.json",
+      "bytes": 14954,
+      "sha256": "55224e5dbec7b5e081d9f2f09666d6139dc4313525c265513cf5ddb870277c30"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/sdkconfig.defaults",
+      "bytes": 928,
+      "sha256": "fb902172c9698642a0176aaabeb91e970a4649c6375c0c91f6b5991f729aade0"
+    },
+    {
+      "path": "skills/firmware-build/assets/plus-app-base/sdkconfig.defaults.esp32s31",
+      "bytes": 421,
+      "sha256": "e4a2964a49c65c137c15469307e6bfb4bd11f16b9644c6e645c508022de9ee32"
+    },
+    {
+      "path": "skills/firmware-build/MODULE.md",
+      "bytes": 2973,
+      "sha256": "2dfa194378a65b6d37ca2b1f64d38fcfc4486f15e6cb78d32db85aa3e13fca73"
+    },
+    {
+      "path": "skills/firmware-build/references/build-failures.md",
+      "bytes": 2245,
+      "sha256": "d2bd332aee0a6d842e8329a0d310b9f1c86909d7ef2c55f6024f81db298fc5e0"
+    },
+    {
+      "path": "skills/firmware-build/references/official-preparation.md",
+      "bytes": 1886,
+      "sha256": "e0badc18841ee43e7cb54960b4812f22728f616d6d7cf19ddfd9c36d2e111bc0"
+    },
+    {
+      "path": "skills/firmware-build/references/plus-app-base.md",
+      "bytes": 4186,
+      "sha256": "9498fb42a653d4bb28759b9469433e2841c625cdcc4853a90cedcffdc7fd5ae7"
+    },
+    {
+      "path": "skills/firmware-build/references/project-routes.md",
+      "bytes": 3198,
+      "sha256": "a9ac8f437984d5fde0c9c3cdbf0b097ecc8735b1fc8df4f380e62de95066f735"
+    },
+    {
+      "path": "skills/firmware-build/references/windows-build.md",
+      "bytes": 4557,
+      "sha256": "f20c284341ea60ad6a8d459418e61bd2d9db0d7af2776543c95a5525992661d4"
+    },
+    {
+      "path": "skills/firmware-build/scripts/capture_build_evidence.py",
+      "bytes": 3417,
+      "sha256": "f0f88d0925671cb8cbd244afae68a0bb6fb5470bd16cfff6940d59da8956e68e"
+    },
+    {
+      "path": "skills/firmware-build/scripts/create_plus_project.py",
+      "bytes": 6394,
+      "sha256": "041fc0f8cb6f11cf8305392ddf51e43a2fb9cbb81a03d1ce0de48f175e83e003"
+    },
+    {
+      "path": "skills/firmware-build/scripts/direct_cmake.ps1",
+      "bytes": 1102,
+      "sha256": "19e2a49e114affe8f15fb1107d836a5c4963b5ecace2c077ab4a7a43cd22f022"
+    },
+    {
+      "path": "skills/firmware-build/scripts/generate_language_header.py",
+      "bytes": 5877,
+      "sha256": "168e19334404deafca7c86ca3ada34475a168c75a16b0dad56c3812e15ff51f4"
+    },
+    {
+      "path": "skills/firmware-build/scripts/prepare_official_project.py",
+      "bytes": 5001,
+      "sha256": "403901e5a3023fb25ada0f3f0546f8503bb129e6cf92e0e674267e56aa487610"
+    },
+    {
+      "path": "skills/firmware-build/scripts/prepare_posters.py",
+      "bytes": 2417,
+      "sha256": "83a2cc57506566c9676d2a09322223e33596a362341c33618116cf0982b74b56"
+    },
+    {
+      "path": "skills/firmware-build/scripts/run_build.ps1",
+      "bytes": 8809,
+      "sha256": "22176b17c57a48ff046a89d689b5c039bd9ec029d656167e64219bebf626c930"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/characters.txt",
+      "bytes": 20890,
+      "sha256": "17552e9381c245115c3371e94a766c9467e7bfd309e3894e59626b25acb3063b"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/fonts-manifest.json",
+      "bytes": 9067,
+      "sha256": "7b1e40af8d84cd5876a0bf3f6fcbdc06ef6e0e9324766399aa37a98eca51a671"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-24-400-112.ntf.zlib",
+      "bytes": 302843,
+      "sha256": "411feb5f240409d2daca612de1993e2195ebdfad6823ef93c48507fd568b0775"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-24-500-112.ntf.zlib",
+      "bytes": 305341,
+      "sha256": "8d56e53ddd64f4edc40d52d7644de0b39fda2a9d598da0e4b74663e486d014ff"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-24-600-112.ntf.zlib",
+      "bytes": 311289,
+      "sha256": "5aa6df60c5b004f05d5fb3d5f867f7071a52df40c7d3280637f8961da2557dce"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-28-400-112.ntf.zlib",
+      "bytes": 395692,
+      "sha256": "341e844298f0690d27e044067a36e2d839cc8cf0d1fcb61ee0b494128276dc58"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-28-500-112.ntf.zlib",
+      "bytes": 413139,
+      "sha256": "c4968c318ca735dbf725d3af8cd6dfeeaa1bce5a749ed4137f99e37960e6907f"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-28-600-112.ntf.zlib",
+      "bytes": 407657,
+      "sha256": "0f42b73fc1fab518cddcf38356dee5a1c5d706446770d10773101e2b4173aa4f"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-32-400-112.ntf.zlib",
+      "bytes": 433292,
+      "sha256": "6642a42a3cf2a419c763d2f612273e3665c39ac7b3d34f74f0ab41253929af8d"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-32-500-112.ntf.zlib",
+      "bytes": 437812,
+      "sha256": "ff72a94f85c0c75810637f7cafc05017721bd0399ba4845baf0b9a915cdaf7ba"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-32-600-112.ntf.zlib",
+      "bytes": 441431,
+      "sha256": "ce370f0958e950690f732f80008420940ff9ef5628460d25ea0c02f49678fb38"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-36-400-112.ntf.zlib",
+      "bytes": 573422,
+      "sha256": "21d6b8ef07e835677eeaaf62efbfc82af7d8cc5b34ae014c82c8006926ef03d4"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-36-500-112.ntf.zlib",
+      "bytes": 577190,
+      "sha256": "c5cf01f5fe978da528ba26cd66df6053360af4296afe35e578d1cc9a3b62413e"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-36-600-112.ntf.zlib",
+      "bytes": 577225,
+      "sha256": "26cb26a07c5b6272fe97dbcf4d62fff6bd6310193fdf0668ebefcec8f90fa574"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-40-400-112.ntf.zlib",
+      "bytes": 561153,
+      "sha256": "4c2b07f04029c694c7c823be33c1d9a7e6a17ce30c319e9d4a977032a5954ea0"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-40-500-112.ntf.zlib",
+      "bytes": 570955,
+      "sha256": "1a14ac83b549a5549bdb0e0f61f192969d2ec38b74775a55b8da5755f765e7cf"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-40-600-112.ntf.zlib",
+      "bytes": 572249,
+      "sha256": "4e28fbeb29fdfec27312bce2a839ee3fe4e62b0898b8fcce870f1043cec692c0"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-48-400-112.ntf.zlib",
+      "bytes": 700945,
+      "sha256": "680d1a9f204d92a68a415a38ba5b8cda6f11375a1ddd81cc26581090ace090ff"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-48-500-112.ntf.zlib",
+      "bytes": 710757,
+      "sha256": "08f5906457e8e26111719ce587c9ef19ba7f45175e32a3a16ea56d4f83ed1525"
+    },
+    {
+      "path": "skills/font-support/assets/fonts/plus-mono-48-600-112.ntf.zlib",
+      "bytes": 711263,
+      "sha256": "aac3cc8e206f69a109debcc52a95f2685bf4bf97c41347e1f2388908400c29c3"
+    },
+    {
+      "path": "skills/font-support/components/plus_font/CMakeLists.txt",
+      "bytes": 346,
+      "sha256": "35e89d5da37c3691be5798c9b739425de6e0eb21a98008194612f9f9971b4270"
+    },
+    {
+      "path": "skills/font-support/components/plus_font/include/plus_font.h",
+      "bytes": 2795,
+      "sha256": "78c60ff0e3e2250cf85e42332ef9be78b461fc1e5df2777c1e5923f01b2d218a"
+    },
+    {
+      "path": "skills/font-support/components/plus_font/plus_font.cc",
+      "bytes": 9326,
+      "sha256": "960566f6a5776e2a43562f53e13617fb1f3307a0d8df8cba4575b8e509bd9e80"
+    },
+    {
+      "path": "skills/font-support/LICENSE",
+      "bytes": 1538,
+      "sha256": "736a56d72f5ac00f3c94e98426e65fff944ea4fa7b760d83234b7d38f0317e09"
+    },
+    {
+      "path": "skills/font-support/licenses/FONT-NOTICE.txt",
+      "bytes": 1039,
+      "sha256": "e279d2234b2bdccce8f2a063728dd8d68d518aadb0d74935440db89e05dcb319"
+    },
+    {
+      "path": "skills/font-support/licenses/OFL.txt",
+      "bytes": 4388,
+      "sha256": "1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9"
+    },
+    {
+      "path": "skills/font-support/MODULE.md",
+      "bytes": 1538,
+      "sha256": "1e0acb069eb7cbfd186d06097a70dc0682d113a38cf5a5393913c7e4ee1071ca"
+    },
+    {
+      "path": "skills/font-support/references/regeneration.md",
+      "bytes": 1508,
+      "sha256": "f9bcb219d60165b34964f86510c5551789187519f96f30ee90d8ba28ce669605"
+    },
+    {
+      "path": "skills/font-support/references/windows-font.md",
+      "bytes": 2499,
+      "sha256": "248dbfa9072ba435cd3bf3f1203c680073ec633db0d8bc7edd6d6a3cd69ed7f3"
+    },
+    {
+      "path": "skills/font-support/scripts/font_format.py",
+      "bytes": 5502,
+      "sha256": "e8bdc61ae156f3401f1a0802ff2e5b040f726b5338ab7305fc6e12e7e5d21c72"
+    },
+    {
+      "path": "skills/font-support/scripts/generate_fonts.py",
+      "bytes": 6130,
+      "sha256": "9ca98ea08a080af1d39b621823d8c7f3fc140677435f80fb1393bdd3f59af421"
+    },
+    {
+      "path": "skills/font-support/scripts/generator-requirements.txt",
+      "bytes": 107,
+      "sha256": "f3456e69e78c13a6b686c8f4b4848992c412e46751326c36557685a2c189e89b"
+    },
+    {
+      "path": "skills/font-support/scripts/prepare_font.py",
+      "bytes": 8490,
+      "sha256": "aa65fbba502de2e2829ce92d34b63eb239323872a7e244b1196ce7724e1c613e"
+    },
+    {
+      "path": "skills/license-compliance/licenses/Apache-2.0.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "skills/license-compliance/licenses/CloudZao-MIT.txt",
+      "bytes": 1140,
+      "sha256": "0a5a839033bfe18fe75d32b50d9d028912cf876f69ef59c2791aeb2971335d05"
+    },
+    {
+      "path": "skills/license-compliance/licenses/driver-origin.md",
+      "bytes": 1295,
+      "sha256": "7a7be8935b9e7ce2ca4cf712bba77f6748a7c2b5f32d993fa59644dc5156c78d"
+    },
+    {
+      "path": "skills/license-compliance/licenses/GPL-3.0.txt",
+      "bytes": 34674,
+      "sha256": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0"
+    },
+    {
+      "path": "skills/license-compliance/licenses/LGPL-3.0.txt",
+      "bytes": 7652,
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+    },
+    {
+      "path": "skills/license-compliance/licenses/sources.json",
+      "bytes": 1001,
+      "sha256": "bc4fdb016d69562c0f57de676dffef8a4ab9221cf121e24b6de4cadd247c205f"
+    },
+    {
+      "path": "skills/license-compliance/MODULE.md",
+      "bytes": 2807,
+      "sha256": "7b860eb944a206668395dae2b4010e0cd8b345715edf328636c3d27dc4160bf4"
+    },
+    {
+      "path": "skills/license-compliance/scripts/emit_licenses.py",
+      "bytes": 9868,
+      "sha256": "acf14b80af33051360313a2e64f2ab64b53c0851b492fe11ee8125de956c7f01"
+    },
+    {
+      "path": "skills/pocket-integration/assets/application-declaration.example.json",
+      "bytes": 301,
+      "sha256": "638fd6fc67e82504208909ffffe23dca5f02ecbf72df5d9df735cf716b7ecf53"
+    },
+    {
+      "path": "skills/pocket-integration/assets/plus_pocket_bridge.cc",
+      "bytes": 15578,
+      "sha256": "0fb74acd61907dfc1fa690385d7c194877f22a090309720402f83a235df9b5ab"
+    },
+    {
+      "path": "skills/pocket-integration/assets/plus_pocket_bridge.h",
+      "bytes": 1601,
+      "sha256": "e941390ab7dcd914d16e2991d744942dbda83c14174ac44db138bd115d732fd6"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket-standard/pocket_boot_layout.h",
+      "bytes": 2097,
+      "sha256": "496fe6175e7809b9f2afe9fea6293456b4b100db910fcb8081446169f81ceb37"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket-standard/pocket_build.h.in",
+      "bytes": 509,
+      "sha256": "087e750cedd1c6ce1140aabbad8ba549e04057465c52b3a39be182618686eea7"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket-standard/pocket_core.cc",
+      "bytes": 17517,
+      "sha256": "60d451af83157065553f302e3135029bcc3512b7e6176ee75f27172ff1b79dac"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket-standard/pocket_core.h",
+      "bytes": 3140,
+      "sha256": "76107b9b292f279af2c006fd25978858f69f5e830890617c270f8c172bea3ec6"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket-standard/pocket_handoff.cc",
+      "bytes": 11887,
+      "sha256": "20fb3c0c78345ba73b509a936d07d54102b7cdbe5f1fa55a47c1c4dddb44699c"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket-standard/pocket_handoff.h",
+      "bytes": 3191,
+      "sha256": "0aef9312732d74a54bb067820454ee763924ceb5a48d1dd9aa566530ec1d4254"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket-standard/pocket_hash.h",
+      "bytes": 2192,
+      "sha256": "b1c9a58f5088940992b6174ad378067fc80fe11529ca8def5c09f18694220cfc"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket-standard/pocket_image.cc",
+      "bytes": 20534,
+      "sha256": "5cf81e554f14d8851ec2ed5c1f08967bd21db3afbb992d9b89ba54edc3502149"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket-standard/pocket_image.h",
+      "bytes": 3387,
+      "sha256": "181d0242f82017c759db2e5225a47efb82bac25106aedffedb1af900dae7a4c9"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket-standard/pocket_layout.h",
+      "bytes": 1789,
+      "sha256": "e775b5e43cc9db27cd95e36930f4c887ac351c60929970d6ccbb279d2d774849"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket-standard/pocket_metadata.cc",
+      "bytes": 1823,
+      "sha256": "d585a7eb624856a2804a675aaf9fab4f4519cdafa6fe65987ad4633dc334ad0e"
+    },
+    {
+      "path": "skills/pocket-integration/assets/pocket_binding.cmake",
+      "bytes": 1075,
+      "sha256": "a80c2aef1362c01e0d0e7b631da49ac464621f141aba690e997e5f3f3b57370a"
+    },
+    {
+      "path": "skills/pocket-integration/assets/standalone-partitions.csv",
+      "bytes": 174,
+      "sha256": "cff25b54f6d0ea809c0d7ba26a0fdc0a91973f5028866ce58644d7fd2b0e5770"
+    },
+    {
+      "path": "skills/pocket-integration/assets/wifi-standard/pocket_wifi.cc",
+      "bytes": 12738,
+      "sha256": "c3d5409fd2284878761f602816dd4c77e0f12dd9d4f489829a3f911722065119"
+    },
+    {
+      "path": "skills/pocket-integration/assets/wifi-standard/pocket_wifi.h",
+      "bytes": 2808,
+      "sha256": "4066eec9ac9032fab1860107eeaafbb7686a5a67f390348258b11cf7940a8715"
+    },
+    {
+      "path": "skills/pocket-integration/assets/wifi-standard/pocket_wifi_connection.cc",
+      "bytes": 29346,
+      "sha256": "71219a509c71b68be1f00e1c439e808cd375fcdd15354d97f09e4458a2463cd0"
+    },
+    {
+      "path": "skills/pocket-integration/assets/wifi-standard/pocket_wifi_connection.h",
+      "bytes": 2133,
+      "sha256": "827f4cee9ef917873df7fcd681497ab44cf18612c3ed6bd544a97fcb62303619"
+    },
+    {
+      "path": "skills/pocket-integration/assets/wifi-standard/pocket_wifi_connection_model.h",
+      "bytes": 3640,
+      "sha256": "4f4a3c82922242428eff628d360e4bdc9747c6546e2511000bffbcffd68638a7"
+    },
+    {
+      "path": "skills/pocket-integration/MODULE.md",
+      "bytes": 2904,
+      "sha256": "97f30f0d4362aa3b0bfce2a54a52741b0e91f1b9120dddd662864480e0e4b62d"
+    },
+    {
+      "path": "skills/pocket-integration/references/cmake-wiring.md",
+      "bytes": 1243,
+      "sha256": "fff25bd5ddfa56be23504b53d685cbfe9b1b5a3c10e4bf20a8699a13f88f689c"
+    },
+    {
+      "path": "skills/pocket-integration/references/platform-bridge.md",
+      "bytes": 2069,
+      "sha256": "69199a0151cfb824f1bb3eb06e2d77e5902ad081d20b90f7e8af68eecfbddb4e"
+    },
+    {
+      "path": "skills/pocket-integration/references/public-guide-1.1.md",
+      "bytes": 45499,
+      "sha256": "c016a290fdd6b2a81f4fa128add00d41d61cab3e9a8aa08ac1720fcfcf6a4c0d"
+    },
+    {
+      "path": "skills/pocket-integration/references/sources.json",
+      "bytes": 4792,
+      "sha256": "3f27b1797dfad8291240ab7bff3c883433eee07ecfa68a9bfa666031a5687df4"
+    },
+    {
+      "path": "skills/pocket-integration/references/standard-integration.md",
+      "bytes": 4819,
+      "sha256": "80629393c51a85b3ebdf31980a54f3b77e81a182c12eed4a5d616ed8e19a6dcc"
+    },
+    {
+      "path": "skills/pocket-integration/scripts/run_host_tests.py",
+      "bytes": 3364,
+      "sha256": "4242651a059b11c706609b688dcbe38c00309216fe56110f0e9c15288a7d39f3"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/esp_app_desc.h",
+      "bytes": 13,
+      "sha256": "b3adf106d95b8934f690943f2921308b90be5b766c4c8ba250c792de56400201"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/esp_log.h",
+      "bytes": 45,
+      "sha256": "de2fc71d8fcfcac3a0e09caff4c9da62cc92889ddb212efc742906f5dd6acf0a"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/esp_ota_ops.h",
+      "bytes": 373,
+      "sha256": "bb3c21df201354bdea02e3e8298cc5df4fa533a2fddf399609338d66441872d4"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/esp_partition.h",
+      "bytes": 666,
+      "sha256": "97698604309931eb9263eb032c5601695fbc0cb04b028eedf1b879ceca3d7e0b"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/esp_system.h",
+      "bytes": 33,
+      "sha256": "616f599eba4e201cb6768758af489e6c7ab323f736d65bcb100a4f8bca17bc5a"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/ff.h",
+      "bytes": 122,
+      "sha256": "bc569fee9ac0ea459a81a04fda41a25a77a722f03708f4909ab9f1afb2fb64d4"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/freertos/FreeRTOS.h",
+      "bytes": 42,
+      "sha256": "d169ee6141368c774999b0a2631108e67e759d344145635234f66f67b260b48f"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/freertos/task.h",
+      "bytes": 48,
+      "sha256": "1147c731606bb2057ae2e3cb37684312b561db0e5990cd26ccffb56fce417f47"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/mbedtls/md5.h",
+      "bytes": 484,
+      "sha256": "e088f2fe1a1de6116dbee9f1b916992abd529fc049ab9ecbea7018bc51b9298a"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/mbedtls/sha256.h",
+      "bytes": 984,
+      "sha256": "8f1b685d05a08f6ed887136f7b79fe6c0ecffb6a7c9852a9954824c4619ad592"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/plus_hal.h",
+      "bytes": 160,
+      "sha256": "dc2a8a0c1ef7552f7ec6248fa7aeeaf3b368c267cf120f70676b9b9a62f1ea68"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/pocket_build.h",
+      "bytes": 248,
+      "sha256": "482e096e6743533d92f4ceaa46362afc42c9e5f0059eb522df8dc050bda69d78"
+    },
+    {
+      "path": "skills/pocket-integration/tests/compat/unistd.h",
+      "bytes": 539,
+      "sha256": "e8b99eed2a48b75a86c90d32cc920f16a0f768fae31c69367a26bad1f6faed7e"
+    },
+    {
+      "path": "skills/pocket-integration/tests/test_bridge.cpp",
+      "bytes": 7799,
+      "sha256": "6c944b6fd441e7693df75f51e534ed23e37a98b9b2cee3e336f6a90e3a3936a3"
+    },
+    {
+      "path": "skills/pocket-integration/tests/test_standard.cpp",
+      "bytes": 12394,
+      "sha256": "a6be37956869d9ef6b85353bbe5f47654a0234535277cc0106cdb14ed4f914bf"
+    },
+    {
+      "path": "skills/product-conventions/MODULE.md",
+      "bytes": 2723,
+      "sha256": "6f7be0208a8ea60a49c485533739c3c8c14e98c389c93a69ffaba84eb418fa71"
+    },
+    {
+      "path": "skills/text-input/assets/ime_core.h",
+      "bytes": 9527,
+      "sha256": "6075645af20e109cab699cc7c6ea7d9776eff91543170db73e32f83399947f37"
+    },
+    {
+      "path": "skills/text-input/assets/pinyin-candidates.tsv",
+      "bytes": 15348,
+      "sha256": "0169c1a2f0c39094f24b066d572f26485f2c01f63f42b237bf21d8d9ff70db5a"
+    },
+    {
+      "path": "skills/text-input/examples/input_flow.cc",
+      "bytes": 914,
+      "sha256": "d04de8206b0f299e13f65ae711251c39cc72cc5844859e4cad042eb236b56e54"
+    },
+    {
+      "path": "skills/text-input/generation/common-readings.json",
+      "bytes": 5207,
+      "sha256": "5946341ee4e6ba9396b54c32b73dd0a990c743f9d43db329cd110baeb6818d09"
+    },
+    {
+      "path": "skills/text-input/generation/compat-characters.txt",
+      "bytes": 12787,
+      "sha256": "78a712c382171747ebf3f4ae285af847647477fcd83de87f4c2ad4da4af630f7"
+    },
+    {
+      "path": "skills/text-input/generation/frequency-weights.tsv",
+      "bytes": 38429,
+      "sha256": "1c54380c0a94e1e30d312a6b036bb730730ffbdebdd7eed3c3cbde7013115ce1"
+    },
+    {
+      "path": "skills/text-input/generation/generate_source_tables.py",
+      "bytes": 6107,
+      "sha256": "33fe34cef3271ba5e7c4aa0349dee038e298a8b4a21058146d90175de7255d39"
+    },
+    {
+      "path": "skills/text-input/generation/generation-report.json",
+      "bytes": 2038,
+      "sha256": "66b4a8d481174b513c8d0a36c0390e3b427bb4e61a304202351858c1db3ff1b6"
+    },
+    {
+      "path": "skills/text-input/generation/sources.json",
+      "bytes": 2726,
+      "sha256": "7a19f577a09d775cb101e50cf6f4cb7c2ad9c5433f8b12dccf81da420a6da94c"
+    },
+    {
+      "path": "skills/text-input/generation/生成方法.md",
+      "bytes": 2377,
+      "sha256": "76c710d893dea0fca6e78d6616f9a20d44b4514f8f685b21ac1cdff6b56ce57b"
+    },
+    {
+      "path": "skills/text-input/licenses/Apache-2.0.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "skills/text-input/licenses/ATTRIBUTION.md",
+      "bytes": 3775,
+      "sha256": "20f94ca7cf7b082e8f4a4621de3f431b0f9abec8688c00b2e1f51765dc241706"
+    },
+    {
+      "path": "skills/text-input/licenses/CC-BY-SA-4.0.txt",
+      "bytes": 18375,
+      "sha256": "cde7883b9050a1104f4ac19a1572aafd6e5d7323b68351aaf51fbf4beba54966"
+    },
+    {
+      "path": "skills/text-input/licenses/help-notice.txt",
+      "bytes": 331,
+      "sha256": "b85fdb0b3adcabd661b07fb6aaa27b58356d8dc06f5c19d0b174fe9b0fa839b6"
+    },
+    {
+      "path": "skills/text-input/licenses/pinyin-data-MIT.txt",
+      "bytes": 1076,
+      "sha256": "9c048697be2502a16e8bcb282d5d465a07295b2def0ffb05a269c5d39dbe1586"
+    },
+    {
+      "path": "skills/text-input/licenses/pypinyin-0.55.0-MIT.txt",
+      "bytes": 1105,
+      "sha256": "1e6c90014b4912815c296ee64bb6f6280af47e6d4c5d80e86232dfc5defe764c"
+    },
+    {
+      "path": "skills/text-input/licenses/wordfreq-3.1.1-copyright.txt",
+      "bytes": 552,
+      "sha256": "262b51ebd3e7e29d3e5b82cb1fceefcf0a0db5627f119d4ad85157adfb6e16fe"
+    },
+    {
+      "path": "skills/text-input/licenses/wordfreq-3.1.1-data-notice.txt",
+      "bytes": 6055,
+      "sha256": "1de60f78c5f7af00370ee190bbf776f90759a5da422e2ab453c97e45b6da92f4"
+    },
+    {
+      "path": "skills/text-input/MODULE.md",
+      "bytes": 3065,
+      "sha256": "1acb03609cab8ef355e9c3388a80f854733d43ea525a480b7696945e80a9c3d3"
+    },
+    {
+      "path": "skills/text-input/references/可复用核心与来源.md",
+      "bytes": 2699,
+      "sha256": "b6da7bd8c62c64077edef181345a0adb9af8fd974a3bf97e0c77705ca4fb2789"
+    },
+    {
+      "path": "skills/text-input/references/接入与验收.md",
+      "bytes": 14391,
+      "sha256": "9fee68ea4c3fe918c474fef555db9c27581fc3aafcbcd054b6ea6babd23a1162"
+    },
+    {
+      "path": "skills/text-input/scripts/table_tool.py",
+      "bytes": 5491,
+      "sha256": "0068662df147659294c46dd629a3a62350ab4f21dadb7dabdeb772833cf2c6d6"
+    },
+    {
+      "path": "skills/text-input/tests/ime_core_test.cc",
+      "bytes": 4573,
+      "sha256": "acfbb517ece18fe29be0674f0a287e9650a85a7404563e6088b737d471efb3f2"
+    },
+    {
+      "path": "skills/text-input/tests/test_table.py",
+      "bytes": 3434,
+      "sha256": "c6e0a8d11dc866043b561fb8b8943e76dd9fa101d392e276ca8c763b8ba0820a"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/acquisition-profiles.json",
+      "bytes": 15700,
+      "sha256": "656d80ede38e78437725138c8601a84d5670dc6d938898314f2d102918b7220f"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/acquisition-stages.json",
+      "bytes": 4008,
+      "sha256": "846537a6d2a3f81bf3dd38812667c9b8830b583f09f3a7063e41ff4020a4e9e2"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/environment-profile.json",
+      "bytes": 17897,
+      "sha256": "bf0f00fe23d6be0730287978f6e73383bf40fdc669d53129a987302a86b52c43"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/material-profile.json",
+      "bytes": 838,
+      "sha256": "367b4542743ddd98c5ab8d5e751b415520b7287b8748d00672dfda5a6c504a8c"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshot-provenance.json",
+      "bytes": 9272,
+      "sha256": "84b1373be3ec407bf3fff1a779e9865f34412f148da7fd6a6214879e733740d4"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/78/esp-opus-encoder.json",
+      "bytes": 18520,
+      "sha256": "7b0cb1d43772e3c1dddfc58ce4973b946a26a4e53cbc824a8acea04be0739d82"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/78/esp-opus.json",
+      "bytes": 7824,
+      "sha256": "078beecf28ece0554dbf528a3b623674aab9a985260250dc3879ec86a5463726"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/78/uart-uhci.json",
+      "bytes": 12618,
+      "sha256": "362b9b0d1c9769ad2cee2d9ea8a70e514d0257f7296749c6b4b0774fa8bc9f4d"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/button.json",
+      "bytes": 80202,
+      "sha256": "2f2831b8f8ba8e5c43bba1f87978777f5f7567319c707c1c1017e1b53b7a204e"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/cjson.json",
+      "bytes": 4120,
+      "sha256": "432da8f85ec39541ef62948929da7731aced8fdc4fd494ed6ff582283be1a192"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/cmake_utilities.json",
+      "bytes": 30315,
+      "sha256": "e8d083161676d7a78a72a276846b8728a3f2959ec5ef398457739df5c9449fc2"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/esp_codec_dev.json",
+      "bytes": 52254,
+      "sha256": "c10e176dc01a8952f80fe492d35c5b398c7ab6c6ed600ce9dfccabd5fa028820"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/esp_lcd_touch.json",
+      "bytes": 15744,
+      "sha256": "67f2ba4fa487dfa4eadca08da007e590e1a017c5781097fa671729033889ca64"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/esp_lv_decoder.json",
+      "bytes": 32399,
+      "sha256": "5e6262196a0029fa7bcb22406d1273da7a7794a3c68ede7377549495f6fe814f"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/esp_lv_fs.json",
+      "bytes": 10694,
+      "sha256": "66f3da3bbc524af70eda8e3f36434230ac302dca2e8a3adc80802e13f20d4681"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/esp_lvgl_adapter.json",
+      "bytes": 150653,
+      "sha256": "709c97da087f224637dc593d11db8818024e748298c949284560e00b2c274100"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/esp_mmap_assets.json",
+      "bytes": 22482,
+      "sha256": "034534d047066489b00c00c061b02c530553972cab5984f3c8151e9780c9467b"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/esp_new_jpeg.json",
+      "bytes": 10177,
+      "sha256": "cad91fc8c798ea9488430391fae2cdb4089777274312647641bafe0201cc72a1"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/esp_tinyusb.json",
+      "bytes": 81050,
+      "sha256": "b88337bdb4157490c3318bd30ebaca0a55f504b76057a1e490101bbf0c723f80"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/freetype.json",
+      "bytes": 16088,
+      "sha256": "21b4825474c20d4cc70fc529512f6f357a38fcd699eb448d1117bd59555e1fca"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/iot_eth.json",
+      "bytes": 6582,
+      "sha256": "e17bd6a4e6cb01aaed8b82f65164ebccedc1cc8819cab9c991f0ffed1396bd27"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/knob.json",
+      "bytes": 20977,
+      "sha256": "5d4ac92854173257c2a6a61758b62b2054d79888c6d911c8da8163c1b1c57d64"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/libpng.json",
+      "bytes": 19047,
+      "sha256": "910b3981c4dcc127f6aa9d28e208c44c12b58524d98a9cc187273b83020dda81"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/tinyusb.json",
+      "bytes": 45380,
+      "sha256": "6a331b71230d9e6b84bd44bff1dcebaa3a18c4704f8f13fc9d716e0f2912194e"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/espressif/zlib.json",
+      "bytes": 9984,
+      "sha256": "285a1565018920ffe7c7b46cd4be1ad0f7c888e18993e0ef82546898b043f154"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/components/components/lvgl/lvgl.json",
+      "bytes": 26251,
+      "sha256": "895d8231003ff0a0650b65e57a22a9c34ff180b15fda1a76ad49177393dca093"
+    },
+    {
+      "path": "skills/toolchain-ops/assets/snapshots/artifacts/constraints/espidf.constraints.v6.1.txt",
+      "bytes": 2518,
+      "sha256": "8fd2a7299a476370a1322e87a21ce0e24a9e5b8b6df4b34f0b8acb4a4b03d135"
+    },
+    {
+      "path": "skills/toolchain-ops/MODULE.md",
+      "bytes": 3632,
+      "sha256": "5c13a6c81960285f953c95570204353dcb31cfdfeafdd1b534ddea6a8e8b3f18"
+    },
+    {
+      "path": "skills/toolchain-ops/references/acquisition.md",
+      "bytes": 8110,
+      "sha256": "ef529f555be408f0a6ae88dedf7dd8e59d12cefcac929e5aedad22021053517a"
+    },
+    {
+      "path": "skills/toolchain-ops/references/operations.md",
+      "bytes": 13955,
+      "sha256": "bdfcb4b5dc3c467c420221215142095d0a0cb88c1809406fdde14ff0ec316592"
+    },
+    {
+      "path": "skills/toolchain-ops/references/registry.json",
+      "bytes": 204998,
+      "sha256": "dc38a81481b934ccfc7ccc246f1a6408396d39cfeabe365a9d123354b736e354"
+    },
+    {
+      "path": "skills/toolchain-ops/scripts/Download-Policy.ps1",
+      "bytes": 11818,
+      "sha256": "437200e4e31354aa87b66305a2ef4213b18e7b7bb4799afc0c8ba11791e7d2fa"
+    },
+    {
+      "path": "skills/toolchain-ops/scripts/Get-Materials.ps1",
+      "bytes": 11728,
+      "sha256": "ef9340273a91afcf0b6dfeecfb3ae96e0917bc125db5e103e051df72ee8f6032"
+    },
+    {
+      "path": "skills/toolchain-ops/scripts/Material-Common.ps1",
+      "bytes": 15370,
+      "sha256": "b05a15cfb4b12fb5d1d6c8b5db60539a8aeda71a371c50e918c9408694accb6d"
+    },
+    {
+      "path": "skills/toolchain-ops/scripts/Plan-Materials.ps1",
+      "bytes": 4465,
+      "sha256": "d8ea0bba2002741457d4b4b4bdd81fc7fd9bf441e50540e79d9d83631fbfdfa3"
+    },
+    {
+      "path": "skills/toolchain-ops/scripts/Prepare-Toolchain.ps1",
+      "bytes": 3861,
+      "sha256": "d32bc3428b5a784fbb11367e46c29c7e22d6c25555ed2383d2bf38d229aec305"
+    },
+    {
+      "path": "skills/toolchain-ops/scripts/Resolve-Materials.ps1",
+      "bytes": 5683,
+      "sha256": "049975cdc35368a7ed8e45049237b5b6de849e352ff2a0466fa95df22ee71382"
+    },
+    {
+      "path": "skills/toolchain-ops/scripts/Start-Toolchain.ps1",
+      "bytes": 7857,
+      "sha256": "a539919f9adda5d01bf1e8c49baed776eae6683416dbc6c93ee06b88918b1a03"
+    },
+    {
+      "path": "skills/toolchain-ops/scripts/Test-Environment.ps1",
+      "bytes": 3313,
+      "sha256": "dc246c3bb51da4087ed787bf3fc56ca23ed02cb161801c7561ca206d22e81e92"
+    },
+    {
+      "path": "skills/toolchain-ops/scripts/Test-SetupPaths.ps1",
+      "bytes": 2793,
+      "sha256": "bee88e6688985b630ca09f6e20a8a41ce50cdd54fbe4ac2c325bdb84a241f3ec"
+    },
+    {
+      "path": "skills/toolchain-ops/scripts/toolchain_ops.py",
+      "bytes": 30864,
+      "sha256": "c1306f667507856de81b6e29c6453e0701027294bfecd58e2c7cbf6915f393f5"
+    },
+    {
+      "path": "skills/toolchain-ops/scripts/Use-ShortToolsPath.ps1",
+      "bytes": 1745,
+      "sha256": "bf01542dcfa45839614b7853e6399c1fc4b009fbcec8c66d9a50d348c3500ee4"
+    },
+    {
+      "path": "skills/verify-delivery/MODULE.md",
+      "bytes": 3787,
+      "sha256": "03934cede118a4e2dc40ceba1c0240f12e209456de0b5e1df4d69ac2cd570cf8"
+    },
+    {
+      "path": "skills/verify-delivery/references/acceptance.md",
+      "bytes": 6117,
+      "sha256": "c672d74da86cac23dc4af901bbfa93643904792cf034baa9584da3c9a8a1c148"
+    },
+    {
+      "path": "skills/verify-delivery/references/symptom-routing.md",
+      "bytes": 2274,
+      "sha256": "96514be24c9f789f8e0f51c0b414c077a3aef82c10c5aeb52559c8c4a5116669"
+    },
+    {
+      "path": "skills/verify-delivery/scripts/deliver_artifact.py",
+      "bytes": 3440,
+      "sha256": "ba071020dd235f440d20f9a4b22856a62f631c8fe64e781e3b13f24315a05800"
+    },
+    {
+      "path": "skills/verify-delivery/scripts/device_session.py",
+      "bytes": 6584,
+      "sha256": "ab9d4eac2d1278ae747c55cb4cf12132264d534903a5007487f9eb1bfe650993"
+    },
+    {
+      "path": "skills/verify-delivery/scripts/firmware_tools.py",
+      "bytes": 20313,
+      "sha256": "482647381925a5f8f7b7beed8eb89cefbdb6d0c12e7b6e218ea87051f2f5c6e2"
+    },
+    {
+      "path": "skills/verify-delivery/scripts/validation_record.py",
+      "bytes": 11888,
+      "sha256": "621e466b25be297c6539d190d3f7c2e1bf646ede649acc52a97f4a47689f238d"
+    },
+    {
+      "path": "skills/verify-delivery/scripts/verify_merged_image.py",
+      "bytes": 5831,
+      "sha256": "da3f12c2320464b7194e004b112c38b102c61067167b1116a0d09443bcd0e1c4"
+    },
+    {
+      "path": "skills/verify-delivery/tests/test_verification.py",
+      "bytes": 6213,
+      "sha256": "2329152d0249347f166b2dd32519263426044d75676bbac5f047403f90bbe942"
+    },
+    {
+      "path": "workflow/capability-composition.md",
+      "bytes": 2920,
+      "sha256": "4b28e569dabcf5bedc038dc6b948bf6d904d7933be7b26a2776d77fe14ae976a"
+    },
+    {
+      "path": "workflow/device-validation.md",
+      "bytes": 1348,
+      "sha256": "babf46bb5881340857468f965dd9990a8c2dfde4645293af48cc39c6e2fa338f"
+    },
+    {
+      "path": "workflow/host-handshake.md",
+      "bytes": 1462,
+      "sha256": "ab1b6bbcb9a12957a1f276c767d5c5c3a88d15a33a726a378f50e79427e18af2"
+    },
+    {
+      "path": "workflow/project-progress.md",
+      "bytes": 2113,
+      "sha256": "0d8b8f81670a266bdd8382aa1f630406a692afabf674ac5953de94f74c20619f"
+    },
+    {
+      "path": "workflow/requirements-ui.md",
+      "bytes": 1602,
+      "sha256": "4ed23f6768cdb9d05f243c32948f52a09c15c9a4e3fdb1e11ad5ff3bef9058d4"
+    }
+  ],
+  "predecessor_version": "0.3.0",
+  "revision": "windows-codex-demand-acquisition",
+  "documentation_patch": {
+    "id": "audio-startup-test006-1",
+    "date": "2026-11-02",
+    "files": [
+      "skills/device-interaction/references/audio-animation.md",
+      "skills/app-capabilities/references/media.md"
+    ],
+    "scope": "Documentation only; historical code/build evidence unchanged; user confirmed calculator v1.0.1 key sound after one fix."
+  },
+  "inherited_validation_boundary_v0_3": {
+    "cross_harness_trials": "Codex Windows native only; no other host acceptance claimed",
+    "baseline_gain_measured": false,
+    "new_business_firmware_hardware_tested": false,
+    "host_tool_tests": "passed production-backed protocol, Wi-Fi, storage, native UI and negative fixtures",
+    "generic_plus_template_target_build": "passed S31 1008-task build, source/merged/receiving-byte checks; scaffold only",
+    "generic_plus_template_hardware_tested": false,
+    "fresh_environment_full_install": "passed new plus-base environment from frozen local105 originals; failures fixed and resumed",
+    "full_online_cold_install": "not_executed; only selected live downloads and transport fixtures tested"
+  },
+  "validation_boundary": {
+    "new_business_firmware_hardware_tested": false,
+    "full_online_cold_install": false,
+    "target_firmware_rebuilt": false,
+    "scope": "Acquisition changes only; historical validation is explicitly separated",
+    "acquisition_cases": "80 Windows PowerShell5.1 cases; Start uses stubs for environment orchestration",
+    "selected_live_acquisition": "2 real originals, 2 real trusted mirrors with original-failure injection, selected local02 member verified",
+    "independent_forward_test": "isolated install/SDK planning, no02/no Python commands; no full environment install",
+    "old_firmware_files_identical": 286
+  }
+}

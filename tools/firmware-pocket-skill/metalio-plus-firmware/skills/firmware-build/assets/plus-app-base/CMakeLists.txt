@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22)
+include(app-config.cmake)
+set(COMPONENTS main)
+configure_file(main/pocket/pocket_build.h.in pocket_generated/pocket_build.h @ONLY)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(${POCKET_APP_ID})

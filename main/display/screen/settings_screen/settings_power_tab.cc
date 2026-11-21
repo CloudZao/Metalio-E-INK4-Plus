@@ -38,6 +38,22 @@ constexpr SecOption kNetGraceOptions[] = {
 };
 constexpr int kNetGraceCount = sizeof(kNetGraceOptions) / sizeof(kNetGraceOptions[0]);
 
+constexpr SecOption kStandbyOffOptions[] = {{30 * 60}, {60 * 60}, {3 * 60 * 60}, {24 * 60 * 60}};
+constexpr int kStandbyOffCount = sizeof(kStandbyOffOptions) / sizeof(kStandbyOffOptions[0]);
+
+const char* StandbyOffOptionTitle(int sec) {
+    switch (sec) {
+        case 60 * 60:
+            return Lang::Strings::SETTINGS_POWER_1_HOUR;
+        case 3 * 60 * 60:
+            return Lang::Strings::SETTINGS_POWER_3_HOURS;
+        case 24 * 60 * 60:
+            return Lang::Strings::SETTINGS_POWER_24_HOURS;
+        default:
+            return Lang::Strings::SETTINGS_POWER_30_MIN;
+    }
+}
+
 const char* SecOptionTitle(int sec) {
     switch (sec) {
         case 0:
@@ -56,6 +72,7 @@ const char* SecOptionTitle(int sec) {
 struct PowerUi {
     lv_obj_t* mhz_btns[kMhzCount] = {};
     lv_obj_t* grace_btns[kNetGraceCount] = {};
+    lv_obj_t* standby_off_btns[kStandbyOffCount] = {};
 };
 
 PowerUi s_ui;
@@ -64,6 +81,7 @@ void RefreshOptions() {
     auto& pp = PowerPolicy::GetInstance();
     const int mhz = pp.GetIdleCpuMhz();
     const int grace_s = pp.GetNetGraceSec();
+    const int standby_off_s = pp.GetStandbyToShutdownSec();
 
     for (int i = 0; i < kMhzCount; ++i) {
         if (s_ui.mhz_btns[i] != nullptr) {
@@ -75,6 +93,12 @@ void RefreshOptions() {
         if (s_ui.grace_btns[i] != nullptr) {
             SettingsStyleSelectable(s_ui.grace_btns[i], lv_obj_get_child(s_ui.grace_btns[i], 0),
                                     kNetGraceOptions[i].sec == grace_s);
+        }
+    }
+    for (int i = 0; i < kStandbyOffCount; ++i) {
+        if (s_ui.standby_off_btns[i] != nullptr) {
+            SettingsStyleSelectable(s_ui.standby_off_btns[i], lv_obj_get_child(s_ui.standby_off_btns[i], 0),
+                                    kStandbyOffOptions[i].sec == standby_off_s);
         }
     }
 }
@@ -94,6 +118,13 @@ void OnNetGraceClicked(lv_event_t* e) {
         return;
     }
     PowerPolicy::GetInstance().SetNetGraceSec(sec);
+    RefreshOptions();
+}
+
+void OnStandbyOffClicked(lv_event_t* e) {
+    const int sec = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+    if (PowerPolicy::GetInstance().GetStandbyToShutdownSec() == sec) return;
+    PowerPolicy::GetInstance().SetStandbyToShutdownSec(sec);
     RefreshOptions();
 }
 
@@ -202,6 +233,13 @@ void SettingsPowerTab_Build(lv_obj_t* page) {
 
     AddSectionTitle(page, Lang::Strings::SETTINGS_POWER_OFF_TITLE);
     AddSectionHint(page, Lang::Strings::SETTINGS_POWER_OFF_HINT);
+    for (int i = 0; i < kStandbyOffCount; i += 2) {
+        lv_obj_t* row = CreateOptionRow(page);
+        for (int j = i; j < i + 2 && j < kStandbyOffCount; ++j) {
+            s_ui.standby_off_btns[j] = CreateCompactOption(row, StandbyOffOptionTitle(kStandbyOffOptions[j].sec),
+                                                         OnStandbyOffClicked, kStandbyOffOptions[j].sec);
+        }
+    }
 
     RefreshOptions();
 }

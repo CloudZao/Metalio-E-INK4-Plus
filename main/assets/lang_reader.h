@@ -24,6 +24,8 @@ extern const char* BOOK_ORIENT_TITLE;
 extern const char* BOOK_WRITING_HORIZONTAL;
 extern const char* BOOK_WRITING_VERTICAL;
 extern const char* BOOK_WRITING_TITLE;
+extern const char* BOOK_INLINE_IMAGES;
+extern const char* BOOK_ILLUSTRATION;
 extern const char* BOOK_TEXT_DIRECTION;
 extern const char* BOOK_TEXT_LEFT_TO_RIGHT;
 extern const char* BOOK_TEXT_RIGHT_TO_LEFT;

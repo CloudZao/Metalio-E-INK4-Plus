@@ -1,0 +1,23 @@
+# Small application baseline, not a blind copy of the official AI appliance.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
+# ReadSlot no longer puts a 4-KiB record buffer on this task's stack.
+# 8192 is a starting budget for THIS bootstrap; remeasure after adding business.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_FREERTOS_HZ=100
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_CODEPAGE_936=y
+CONFIG_FATFS_API_ENCODING_UTF_8=y
+CONFIG_FATFS_MAX_LFN=255
+CONFIG_FATFS_SECTOR_4096=y
+CONFIG_FATFS_FS_LOCK=4
+CONFIG_FATFS_TIMEOUT_MS=10000
+CONFIG_MBEDTLS_SHA256_C=y
+# Keep watchdog defaults. Investigate bounded work/yields instead of extending
+# the timeout merely to hide a hang.

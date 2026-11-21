@@ -1,0 +1,103 @@
+{
+  "version": "0.3.0",
+  "date": "2026-11-02",
+  "profile": "public-plus-pocket2",
+  "abi": "FPOCKET ABI 1.0",
+  "public_json_wire_compatible": true,
+  "protocol_source": {
+    "file": "references/public-guide-1.1.md",
+    "revision": "1.1",
+    "git_commit_prefix": "59e523c",
+    "sha256": "c016a290fdd6b2a81f4fa128add00d41d61cab3e9a8aa08ac1720fcfcf6a4c0d",
+    "policy": "Immutable supplied public guide snapshot; no Plus16 implementation/source inspected",
+    "url": "https://github.com/Changkai9888/CloudZao-Projects/blob/59e523c9ea5c3f0064a506f06c84a526f08b4379/protocols/固件口袋接入规范与开发指南.md",
+    "git_commit": "59e523c9ea5c3f0064a506f06c84a526f08b4379",
+    "git_blob": "9fb506d0934aa1f286f7bcccd81b0aa9955e24e5"
+  },
+  "upstream_device": {
+    "url": "https://github.com/CloudZao/Metalio-E-INK4-Plus",
+    "commit": "ad8edf4150a688737c0d7c00cae4413079b262ef"
+  },
+  "compatibility": "Public ABI and explicit Plus physical binding; no product-version allowlist. Legacy private control channel not supported.",
+  "evidence": "140 standard core checks plus 70 real bridge checks on native Windows MSVC /W4 /WX; no hardware/TF/USB claim.",
+  "files": [
+    {
+      "file": "assets/pocket-standard/pocket_boot_layout.h",
+      "sha256": "496fe6175e7809b9f2afe9fea6293456b4b100db910fcb8081446169f81ceb37",
+      "bytes": 2097,
+      "evidence": "V0.3 public guide 1.1 implementation; host-tested, no new device acceptance"
+    },
+    {
+      "file": "assets/pocket-standard/pocket_build.h.in",
+      "sha256": "087e750cedd1c6ce1140aabbad8ba549e04057465c52b3a39be182618686eea7",
+      "bytes": 509,
+      "evidence": "V0.3 public guide 1.1 implementation; host-tested, no new device acceptance"
+    },
+    {
+      "file": "assets/pocket-standard/pocket_core.cc",
+      "sha256": "60d451af83157065553f302e3135029bcc3512b7e6176ee75f27172ff1b79dac",
+      "bytes": 17517,
+      "evidence": "V0.3 public guide 1.1 implementation; host-tested, no new device acceptance"
+    },
+    {
+      "file": "assets/pocket-standard/pocket_core.h",
+      "sha256": "76107b9b292f279af2c006fd25978858f69f5e830890617c270f8c172bea3ec6",
+      "bytes": 3140,
+      "evidence": "V0.3 public guide 1.1 implementation; host-tested, no new device acceptance"
+    },
+    {
+      "file": "assets/pocket-standard/pocket_handoff.cc",
+      "sha256": "20fb3c0c78345ba73b509a936d07d54102b7cdbe5f1fa55a47c1c4dddb44699c",
+      "bytes": 11887,
+      "evidence": "V0.3 public guide 1.1 implementation; host-tested, no new device acceptance"
+    },
+    {
+      "file": "assets/pocket-standard/pocket_handoff.h",
+      "sha256": "0aef9312732d74a54bb067820454ee763924ceb5a48d1dd9aa566530ec1d4254",
+      "bytes": 3191,
+      "evidence": "V0.3 public guide 1.1 implementation; host-tested, no new device acceptance"
+    },
+    {
+      "file": "assets/pocket-standard/pocket_hash.h",
+      "sha256": "b1c9a58f5088940992b6174ad378067fc80fe11529ca8def5c09f18694220cfc",
+      "bytes": 2192,
+      "evidence": "V0.3 public guide 1.1 implementation; host-tested, no new device acceptance"
+    },
+    {
+      "file": "assets/pocket-standard/pocket_image.cc",
+      "sha256": "5cf81e554f14d8851ec2ed5c1f08967bd21db3afbb992d9b89ba54edc3502149",
+      "bytes": 20534,
+      "evidence": "V0.3 public guide 1.1 implementation; host-tested, no new device acceptance"
+    },
+    {
+      "file": "assets/pocket-standard/pocket_image.h",
+      "sha256": "181d0242f82017c759db2e5225a47efb82bac25106aedffedb1af900dae7a4c9",
+      "bytes": 3387,
+      "evidence": "V0.3 public guide 1.1 implementation; host-tested, no new device acceptance"
+    },
+    {
+      "file": "assets/pocket-standard/pocket_layout.h",
+      "sha256": "e775b5e43cc9db27cd95e36930f4c887ac351c60929970d6ccbb279d2d774849",
+      "bytes": 1789,
+      "evidence": "V0.3 public guide 1.1 implementation; host-tested, no new device acceptance"
+    },
+    {
+      "file": "assets/pocket-standard/pocket_metadata.cc",
+      "sha256": "d585a7eb624856a2804a675aaf9fab4f4519cdafa6fe65987ad4633dc334ad0e",
+      "bytes": 1823,
+      "evidence": "V0.3 public guide 1.1 implementation; host-tested, no new device acceptance"
+    },
+    {
+      "file": "assets/plus_pocket_bridge.cc",
+      "sha256": "0fb74acd61907dfc1fa690385d7c194877f22a090309720402f83a235df9b5ab",
+      "bytes": 15578,
+      "evidence": "Production bridge tested with mocked HAL/Flash/OTA; device execution pending"
+    },
+    {
+      "file": "assets/plus_pocket_bridge.h",
+      "sha256": "e941390ab7dcd914d16e2991d744942dbda83c14174ac44db138bd115d732fd6",
+      "bytes": 1601,
+      "evidence": "Production bridge tested with mocked HAL/Flash/OTA; device execution pending"
+    }
+  ]
+}

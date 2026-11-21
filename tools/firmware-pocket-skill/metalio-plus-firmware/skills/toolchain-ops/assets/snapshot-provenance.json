@@ -1,0 +1,182 @@
+{
+  "schema": 1,
+  "purpose": "Small historical upstream metadata snapshots required for reproducible installation; not a firmware source or tool binary bundle. Byte-identical to the frozen r2 registry. Never substitute a changing live index.",
+  "items": [
+    {
+      "id": "P02-78-esp-opus-encoder-index",
+      "asset": "snapshots/artifacts/components/components/78/esp-opus-encoder.json",
+      "upstream_url": "https://components-file.espressif.com/components/78/esp-opus-encoder.json",
+      "sha256": "7b0cb1d43772e3c1dddfc58ce4973b946a26a4e53cbc824a8acea04be0739d82",
+      "bytes": 18520,
+      "frozen_at_utc": "2026-10-28T02:37:09.616522+00:00"
+    },
+    {
+      "id": "P02-78-esp-opus-index",
+      "asset": "snapshots/artifacts/components/components/78/esp-opus.json",
+      "upstream_url": "https://components-file.espressif.com/components/78/esp-opus.json",
+      "sha256": "078beecf28ece0554dbf528a3b623674aab9a985260250dc3879ec86a5463726",
+      "bytes": 7824,
+      "frozen_at_utc": "2026-10-28T02:37:09.599601+00:00"
+    },
+    {
+      "id": "P02-78-uart-uhci-index",
+      "asset": "snapshots/artifacts/components/components/78/uart-uhci.json",
+      "upstream_url": "https://components-file.espressif.com/components/78/uart-uhci.json",
+      "sha256": "362b9b0d1c9769ad2cee2d9ea8a70e514d0257f7296749c6b4b0774fa8bc9f4d",
+      "bytes": 12618,
+      "frozen_at_utc": "2026-10-28T02:37:09.205663+00:00"
+    },
+    {
+      "id": "P02-espressif-button-index",
+      "asset": "snapshots/artifacts/components/components/espressif/button.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/button.json",
+      "sha256": "2f2831b8f8ba8e5c43bba1f87978777f5f7567319c707c1c1017e1b53b7a204e",
+      "bytes": 80202,
+      "frozen_at_utc": "2026-10-28T02:37:09.931476+00:00"
+    },
+    {
+      "id": "P02-espressif-cjson-index",
+      "asset": "snapshots/artifacts/components/components/espressif/cjson.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/cjson.json",
+      "sha256": "432da8f85ec39541ef62948929da7731aced8fdc4fd494ed6ff582283be1a192",
+      "bytes": 4120,
+      "frozen_at_utc": "2026-10-28T02:37:10.372871+00:00"
+    },
+    {
+      "id": "P02-espressif-cmake_utilities-index",
+      "asset": "snapshots/artifacts/components/components/espressif/cmake_utilities.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/cmake_utilities.json",
+      "sha256": "e8d083161676d7a78a72a276846b8728a3f2959ec5ef398457739df5c9449fc2",
+      "bytes": 30315,
+      "frozen_at_utc": "2026-10-28T02:37:11.388944+00:00"
+    },
+    {
+      "id": "P02-espressif-esp_codec_dev-index",
+      "asset": "snapshots/artifacts/components/components/espressif/esp_codec_dev.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/esp_codec_dev.json",
+      "sha256": "c10e176dc01a8952f80fe492d35c5b398c7ab6c6ed600ce9dfccabd5fa028820",
+      "bytes": 52254,
+      "frozen_at_utc": "2026-10-28T02:37:11.452294+00:00"
+    },
+    {
+      "id": "P02-espressif-esp_lcd_touch-index",
+      "asset": "snapshots/artifacts/components/components/espressif/esp_lcd_touch.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/esp_lcd_touch.json",
+      "sha256": "67f2ba4fa487dfa4eadca08da007e590e1a017c5781097fa671729033889ca64",
+      "bytes": 15744,
+      "frozen_at_utc": "2026-10-28T02:37:11.359699+00:00"
+    },
+    {
+      "id": "P02-espressif-esp_lv_decoder-index",
+      "asset": "snapshots/artifacts/components/components/espressif/esp_lv_decoder.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/esp_lv_decoder.json",
+      "sha256": "5e6262196a0029fa7bcb22406d1273da7a7794a3c68ede7377549495f6fe814f",
+      "bytes": 32399,
+      "frozen_at_utc": "2026-10-28T02:37:12.208172+00:00"
+    },
+    {
+      "id": "P02-espressif-esp_lv_fs-index",
+      "asset": "snapshots/artifacts/components/components/espressif/esp_lv_fs.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/esp_lv_fs.json",
+      "sha256": "66f3da3bbc524af70eda8e3f36434230ac302dca2e8a3adc80802e13f20d4681",
+      "bytes": 10694,
+      "frozen_at_utc": "2026-10-28T02:37:12.371579+00:00"
+    },
+    {
+      "id": "P02-espressif-esp_lvgl_adapter-index",
+      "asset": "snapshots/artifacts/components/components/espressif/esp_lvgl_adapter.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/esp_lvgl_adapter.json",
+      "sha256": "709c97da087f224637dc593d11db8818024e748298c949284560e00b2c274100",
+      "bytes": 150653,
+      "frozen_at_utc": "2026-10-28T02:37:12.616011+00:00"
+    },
+    {
+      "id": "P02-espressif-esp_mmap_assets-index",
+      "asset": "snapshots/artifacts/components/components/espressif/esp_mmap_assets.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/esp_mmap_assets.json",
+      "sha256": "034534d047066489b00c00c061b02c530553972cab5984f3c8151e9780c9467b",
+      "bytes": 22482,
+      "frozen_at_utc": "2026-10-28T02:37:12.666805+00:00"
+    },
+    {
+      "id": "P02-espressif-esp_new_jpeg-index",
+      "asset": "snapshots/artifacts/components/components/espressif/esp_new_jpeg.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/esp_new_jpeg.json",
+      "sha256": "cad91fc8c798ea9488430391fae2cdb4089777274312647641bafe0201cc72a1",
+      "bytes": 10177,
+      "frozen_at_utc": "2026-10-28T02:37:13.043199+00:00"
+    },
+    {
+      "id": "P02-espressif-esp_tinyusb-index",
+      "asset": "snapshots/artifacts/components/components/espressif/esp_tinyusb.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/esp_tinyusb.json",
+      "sha256": "b88337bdb4157490c3318bd30ebaca0a55f504b76057a1e490101bbf0c723f80",
+      "bytes": 81050,
+      "frozen_at_utc": "2026-10-28T02:37:13.300350+00:00"
+    },
+    {
+      "id": "P02-espressif-freetype-index",
+      "asset": "snapshots/artifacts/components/components/espressif/freetype.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/freetype.json",
+      "sha256": "21b4825474c20d4cc70fc529512f6f357a38fcd699eb448d1117bd59555e1fca",
+      "bytes": 16088,
+      "frozen_at_utc": "2026-10-28T02:37:13.260925+00:00"
+    },
+    {
+      "id": "P02-espressif-iot_eth-index",
+      "asset": "snapshots/artifacts/components/components/espressif/iot_eth.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/iot_eth.json",
+      "sha256": "e17bd6a4e6cb01aaed8b82f65164ebccedc1cc8819cab9c991f0ffed1396bd27",
+      "bytes": 6582,
+      "frozen_at_utc": "2026-10-28T02:37:13.362139+00:00"
+    },
+    {
+      "id": "P02-espressif-knob-index",
+      "asset": "snapshots/artifacts/components/components/espressif/knob.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/knob.json",
+      "sha256": "5d4ac92854173257c2a6a61758b62b2054d79888c6d911c8da8163c1b1c57d64",
+      "bytes": 20977,
+      "frozen_at_utc": "2026-10-28T02:37:13.699964+00:00"
+    },
+    {
+      "id": "P02-espressif-libpng-index",
+      "asset": "snapshots/artifacts/components/components/espressif/libpng.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/libpng.json",
+      "sha256": "910b3981c4dcc127f6aa9d28e208c44c12b58524d98a9cc187273b83020dda81",
+      "bytes": 19047,
+      "frozen_at_utc": "2026-10-28T02:37:13.920029+00:00"
+    },
+    {
+      "id": "P02-espressif-tinyusb-index",
+      "asset": "snapshots/artifacts/components/components/espressif/tinyusb.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/tinyusb.json",
+      "sha256": "6a331b71230d9e6b84bd44bff1dcebaa3a18c4704f8f13fc9d716e0f2912194e",
+      "bytes": 45380,
+      "frozen_at_utc": "2026-10-28T02:37:13.962246+00:00"
+    },
+    {
+      "id": "P02-espressif-zlib-index",
+      "asset": "snapshots/artifacts/components/components/espressif/zlib.json",
+      "upstream_url": "https://components-file.espressif.com/components/espressif/zlib.json",
+      "sha256": "285a1565018920ffe7c7b46cd4be1ad0f7c888e18993e0ef82546898b043f154",
+      "bytes": 9984,
+      "frozen_at_utc": "2026-10-28T02:37:13.948700+00:00"
+    },
+    {
+      "id": "P02-lvgl-lvgl-index",
+      "asset": "snapshots/artifacts/components/components/lvgl/lvgl.json",
+      "upstream_url": "https://components-file.espressif.com/components/lvgl/lvgl.json",
+      "sha256": "895d8231003ff0a0650b65e57a22a9c34ff180b15fda1a76ad49177393dca093",
+      "bytes": 26251,
+      "frozen_at_utc": "2026-10-28T02:37:14.187117+00:00"
+    },
+    {
+      "id": "CONSTRAINT-001",
+      "asset": "snapshots/artifacts/constraints/espidf.constraints.v6.1.txt",
+      "upstream_url": "https://dl.espressif.com/dl/esp-idf/espidf.constraints.v6.1.txt",
+      "sha256": "8fd2a7299a476370a1322e87a21ce0e24a9e5b8b6df4b34f0b8acb4a4b03d135",
+      "bytes": 2518,
+      "frozen_at_utc": null
+    }
+  ]
+}

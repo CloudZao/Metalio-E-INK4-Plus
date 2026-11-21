@@ -1,0 +1,57 @@
+{
+  "inputs": [
+    {
+      "name": "wordfreq",
+      "version": "3.1.1",
+      "pypi_metadata_url": "https://pypi.org/pypi/wordfreq/3.1.1/json",
+      "url": "https://files.pythonhosted.org/packages/24/61/62835c475d69872d30689f284497853fe33fe1d6dd18f57346d13305861d/wordfreq-3.1.1-py3-none-any.whl",
+      "filename": "wordfreq-3.1.1-py3-none-any.whl",
+      "sha256": "4b1c6ecffc6198be3396d5cf871c4423ca71c907c231348d352dd54d62b97473",
+      "bytes": 56834549,
+      "uploaded": "2023-11-21T23:09:07.183722Z"
+    },
+    {
+      "name": "pypinyin",
+      "version": "0.55.0",
+      "pypi_metadata_url": "https://pypi.org/pypi/pypinyin/0.55.0/json",
+      "url": "https://files.pythonhosted.org/packages/b9/7b/4cabc76fcc21c3c7d5c671d8783984d30ac9d3bb387c4ba784fca3cdfa3a/pypinyin-0.55.0-py2.py3-none-any.whl",
+      "filename": "pypinyin-0.55.0-py2.py3-none-any.whl",
+      "sha256": "d53b1e8ad2cdb815fb2cb604ed3123372f5a28c6f447571244aca36fc62a286f",
+      "bytes": 840203,
+      "uploaded": "2025-07-20T12:01:48.535927Z"
+    }
+  ],
+  "license_sources": [
+    {
+      "file": "CC-BY-SA-4.0.txt",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/CC-BY-SA-4.0.txt",
+      "bytes": 18375,
+      "sha256": "cde7883b9050a1104f4ac19a1572aafd6e5d7323b68351aaf51fbf4beba54966"
+    },
+    {
+      "file": "Apache-2.0.txt",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "file": "pinyin-data-MIT.txt",
+      "url": "https://raw.githubusercontent.com/mozillazg/pinyin-data/36f6ce9c47a4681c57d491e68c7397c4cf34076e/LICENSE",
+      "bytes": 1076,
+      "sha256": "9c048697be2502a16e8bcb282d5d465a07295b2def0ffb05a269c5d39dbe1586"
+    }
+  ],
+  "compatibility_character_set": {
+    "count": 4262,
+    "legacy_table_sha256": "492b33261aca5e5dc76725cbbb541d5ae89789d603da14088a531655c209aca4",
+    "scope": "Only character union retained; legacy order discarded. Earlier set followed a historical 25px font inventory filtered to GB2312; not derived from the later Jun Da ranking.",
+    "limitation": "Earlier font inventory selection is not newly re-derived; preserved as an application compatibility requirement, with no legacy glyph bitmaps or Jun Da weights."
+  },
+  "pinyin_mapping": "pypinyin 0.55.0 default reading plus explicit common-readings.json; derived mapping copyright notices preserved",
+  "data_license": "CC-BY-SA-4.0 for frequency-derived ranking/weights; mapping attribution under MIT also retained",
+  "tool_dependency": {
+    "name": "msgpack",
+    "version": "1.1.2",
+    "purpose": "authoring decoder only, not included in Skill or BIN"
+  }
+}

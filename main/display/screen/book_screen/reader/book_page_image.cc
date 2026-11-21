@@ -201,7 +201,7 @@ void PageImageWorker(void* arg) {
         std::unique_ptr<reader::EbookDocument> ebook_doc;
         if (ctx->format == reader::BookFormat::kEpub && !ctx->book_path.empty()) {
             epub_doc = std::make_unique<reader::EpubDocument>();
-            if (!epub_doc->Open(ctx->book_path.c_str())) {
+            if (!epub_doc->Open(ctx->book_path.c_str(), false)) {
                 ESP_LOGW(TAG, "book_pimg epub open fail");
                 epub_doc.reset();
             }
@@ -292,6 +292,7 @@ void StartPageImageWorker() {
     auto& st = Book_State();
     if (st.reader.standby_paused) return;
     if (!st.reader.session) return;
+    if (!st.reader.session->Style().inline_images) return;
     const bool prefetch = st.reader.session->IsPageImagesMode() &&
         st.reader.read_chrome == BookUiState::ReadChrome::kReading;
     if (st.reader.page_image_pending.empty() && !prefetch) return;

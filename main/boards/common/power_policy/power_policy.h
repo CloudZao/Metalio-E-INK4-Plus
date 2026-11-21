@@ -118,6 +118,15 @@ public:
      */
     void SetNetGraceSec(int sec);
 
+    /** @brief 获取待机累计自动关机时长，单位秒，默认 30 分钟 */
+    int GetStandbyToShutdownSec() const;
+
+    /**
+     * @brief 设置待机累计自动关机时长并异步保存
+     * @param sec 接受 1800、3600、10800 或 86400，其它值恢复默认 1800 秒
+     */
+    void SetStandbyToShutdownSec(int sec);
+
     /**
      * @brief 电源键短按进待机：跳过断网暂留
      */

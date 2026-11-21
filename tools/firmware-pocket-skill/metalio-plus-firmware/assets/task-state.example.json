@@ -1,0 +1,81 @@
+{
+  "schema_version": 2,
+  "task": {
+    "goal": "",
+    "device": "Metalio E-INK4 Plus",
+    "chip": "esp32s31",
+    "host_os": "Windows x64",
+    "acceptance": [],
+    "assumptions": []
+  },
+  "host": {
+    "shell": null,
+    "file_access": null,
+    "terminal": null,
+    "preview": null,
+    "subagents": null,
+    "usb_serial": "expected"
+  },
+  "paths": {
+    "work": null,
+    "environment": null,
+    "project": null,
+    "delivery": null,
+    "material_root": null
+  },
+  "materials": {
+    "registry_sha256": "dc38a81481b934ccfc7ccc246f1a6408396d39cfeabe365a9d123354b736e354",
+    "channel": null
+  },
+  "integration": {
+    "pocket_version": null,
+    "app_id": null,
+    "data_policy": null
+  },
+  "ui": {
+    "preview": null,
+    "confirmed": null,
+    "layout_source": null,
+    "production_render": null,
+    "physical_feedback": null
+  },
+  "progress": {
+    "phase": "requirements",
+    "completed": [],
+    "decisions_pending": [],
+    "next_action": null
+  },
+  "evidence": [],
+  "measurements": {
+    "started_at": null,
+    "finished_at": null,
+    "elapsed_seconds": null,
+    "phases": [],
+    "tokens": null,
+    "cost": null,
+    "usage_source": null,
+    "interventions": []
+  },
+  "delivery": {
+    "bin": null,
+    "sha256": null,
+    "build": "not_run",
+    "image_checks": "not_run",
+    "standalone_device": "not_run",
+    "pocket_device": "not_run",
+    "status": "in_progress",
+    "host_checks": "not_run",
+    "accepted": false
+  },
+  "skill": {
+    "name": "metalio-plus-firmware",
+    "version": "0.4.0"
+  },
+  "device_session": {
+    "port": null,
+    "identity": null,
+    "authorization_scope": null,
+    "mode": null,
+    "bin_sha256": null
+  }
+}

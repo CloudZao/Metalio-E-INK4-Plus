@@ -212,7 +212,7 @@ bool SaveBookCoverSidecar(const char* book_path) {
         }
     } else {
         EpubDocument doc;
-        if (!doc.Open(book_path)) {
+        if (!doc.Open(book_path, false)) {
             ESP_LOGW(TAG, "sidecar skipped reason=epub_open_failed");
             return false;
         }
