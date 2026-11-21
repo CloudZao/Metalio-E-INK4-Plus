@@ -322,6 +322,9 @@ void epd_board_metalio_eink4_plus_ana_sw_set(bool high) {
     static bool s_gpio_ready = false;
     if (!s_gpio_ready) {
         gpio_reset_pin(ANA_SW_GPIO);
+        // 先写电平再设为输出：上电后输出寄存器为 0，先设输出会让 GPIO36 短暂拉低，
+        // 模拟开关断开 USB 约 0.3 s，主机若正在发数据，USJ 接收会卡住直到断电。
+        gpio_set_level(ANA_SW_GPIO, high ? 1 : 0);
         gpio_set_direction(ANA_SW_GPIO, GPIO_MODE_OUTPUT);
         s_gpio_ready = true;
     }
