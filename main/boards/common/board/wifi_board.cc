@@ -1,44 +1,42 @@
-#include "assets/lang_network.h"
-#include "wifi_board.h"
-
-#include "display.h"
-#include "application.h"
-#include "system_info.h"
-#include "settings.h"
-#include "assets/lang_config.h"
-#include "power_hw.h"
-#include "power_policy.h"
-#include "standby_screen/standby_screen.h"
-#include "screen_common.h"
-
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#include <freertos/portmacro.h>
-#include <esp_network.h>
-#include <esp_log.h>
-#include <esp_timer.h>
-#include <inttypes.h>
-
 #include <algorithm>
-#include <font_awesome.h>
-#include <wifi_station.h>
-#include <ssid_manager.h>
+#include <memory>
+#include <new>
+#include <inttypes.h>
+#include <esp_log.h>
+#include <esp_network.h>
+#include <esp_timer.h>
 #include <esp_wifi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
+#include <freertos/task.h>
+#include <ssid_manager.h>
+#include <wifi_station.h>
+#include <cJSON.h>
+#include <font_awesome.h>
+#include "wifi_board.h"
+#include "boards/common/audio/audio_codec.h"
+#include "assets/lang_config.h"
+#include "assets/lang_network.h"
+#include "boards/common/power/power_hw.h"
+#include "infra/storage/settings.h"
+#include "infra/network/wifi_radio.h"
+#include "sysmgmt/power/policy/power_policy.h"
+#include "sysmgmt/power/power_lifecycle.h"
+#include "infra/platform/system_info.h"
+#include "ui/common/drawing/display.h"
 
-static const char *TAG = "WifiBoard";
+static const char* TAG = "WifiBoard";
 
-namespace {
+static portMUX_TYPE s_ensure_mux = portMUX_INITIALIZER_UNLOCKED;
+static int64_t s_ensure_deadline_us = 0;
+static bool s_ensure_has_leader = false;
 
-portMUX_TYPE s_ensure_mux = portMUX_INITIALIZER_UNLOCKED;
-int64_t s_ensure_deadline_us = 0;
-bool s_ensure_has_leader = false;
-
-constexpr int kEnsureSliceMs = 200;
-constexpr int kEnsureGiveUpPauseMs = 30000;  // 整段等网失败后 Pause STA
-constexpr int64_t kEnsureWaitLogIntervalUs = 3 * 1000 * 1000;  // 未连上网时 enter/fail 日志限流
+static constexpr int kEnsureSliceMs = 200;
+static constexpr int kEnsureGiveUpPauseMs = 30000;                    // 整段等网失败后 Pause STA
+static constexpr int64_t kEnsureWaitLogIntervalUs = 3 * 1000 * 1000;  // 未连上网时 enter/fail 日志限流
 static int64_t s_last_ensure_wait_log_us = 0;
 
-void BumpEnsureDeadlineUs(int64_t deadline_us) {
+static void BumpEnsureDeadlineUs(int64_t deadline_us) {
     portENTER_CRITICAL(&s_ensure_mux);
     if (deadline_us > s_ensure_deadline_us) {
         s_ensure_deadline_us = deadline_us;
@@ -46,8 +44,8 @@ void BumpEnsureDeadlineUs(int64_t deadline_us) {
     portEXIT_CRITICAL(&s_ensure_mux);
 }
 
-/** 传输热点占用射频时不要改回 STA */
-bool SoftApOwnsRadio() {
+// 传输热点占用射频时不要改回 STA
+static bool SoftApOwnsRadio() {
     wifi_mode_t mode = WIFI_MODE_NULL;
     if (esp_wifi_get_mode(&mode) != ESP_OK) {
         return false;
@@ -55,8 +53,11 @@ bool SoftApOwnsRadio() {
     return (mode & WIFI_MODE_AP) != 0 && (mode & WIFI_MODE_STA) == 0;
 }
 
-/** STA 关/未起时拉起；已连上则 no-op */
-void EnsureWifiRadioUp(WifiStation& wifi) {
+// STA 关/未起时拉起；已连上则 no-op
+static void EnsureWifiRadioUp(WifiStation& wifi) {
+    if (WifiRadio::GetInstance().IsStationSetupActive()) {
+        return;
+    }
     if (!wifi.IsUserEnabled() || wifi.IsConnected() || SoftApOwnsRadio()) {
         return;
     }
@@ -73,8 +74,8 @@ void EnsureWifiRadioUp(WifiStation& wifi) {
     }
 }
 
-/** 落墨中推迟起射频；timeout_ms 为最长等待，仍忙则 false */
-bool WaitPanelThenRadioOk(int timeout_ms) {
+// 落墨中推迟起射频；timeout_ms 为最长等待，仍忙则 false
+static bool WaitPanelThenRadioOk(int timeout_ms) {
     if (!Display::IsPanelBusy()) {
         return true;
     }
@@ -82,7 +83,51 @@ bool WaitPanelThenRadioOk(int timeout_ms) {
     return Display::WaitPanelIdle(wait_ms);
 }
 
-}  // namespace
+void WifiBoard::EnterWifiConfigMode() {
+    // 网页 SoftAP 配网已移除：请到「设置 → 网络 → 配置 WIFI 网络」机上扫网配网。
+    // 保留函数以免旧 force_ap / 板级 BOOT 路径崩掉；不再阻塞主启动。
+    ESP_LOGW(TAG, "SoftAP web config removed; use Settings→Network WiFi setup");
+    wifi_config_mode_ = false;
+    auto display = Board::GetInstance().GetDisplay();
+    if (display != nullptr) {
+        display->ShowNotification(LangString_SETTINGS_NET_WIFI_CFG_HINT, 5000);
+    }
+}
+
+std::string WifiBoard::GetBoardJson() try {
+    const auto failed = []() {
+        ESP_LOGE(TAG, "operation=board_snapshot stage=encode result=no_memory");
+        return std::string{};
+    };
+    std::unique_ptr<cJSON, decltype(&cJSON_Delete)> root(cJSON_CreateObject(), cJSON_Delete);
+    if (!root || !cJSON_AddStringToObject(root.get(), "type", BOARD_TYPE) ||
+        !cJSON_AddStringToObject(root.get(), "name", BOARD_NAME)) {
+        return failed();
+    }
+    auto& station = WifiStation::GetInstance();
+    if (!wifi_config_mode_) {
+        wifi_ap_record_t ap_info = {};
+        const bool available = station.TryGetApInfo(ap_info);
+        if (!cJSON_AddStringToObject(root.get(), "ssid", station.GetSsid().c_str()) ||
+            !cJSON_AddNumberToObject(root.get(), "rssi", available ? ap_info.rssi : WifiStation::kRssiUnavailable) ||
+            !cJSON_AddNumberToObject(root.get(), "channel",
+                                     available ? ap_info.primary : WifiStation::kChannelUnavailable) ||
+            !cJSON_AddStringToObject(root.get(), "ip", station.GetIpAddress().c_str())) {
+            return failed();
+        }
+    }
+    if (!cJSON_AddStringToObject(root.get(), "mac", SystemInfo::GetMacAddress().c_str())) {
+        return failed();
+    }
+    std::unique_ptr<char, decltype(&cJSON_free)> encoded(cJSON_PrintUnformatted(root.get()), cJSON_free);
+    if (!encoded) {
+        return failed();
+    }
+    return std::string(encoded.get());
+} catch (const std::bad_alloc&) {
+    ESP_LOGE(TAG, "operation=board_snapshot stage=allocate result=no_memory");
+    return {};
+}
 
 WifiBoard::WifiBoard() {
     Settings settings("wifi", true);
@@ -97,19 +142,10 @@ std::string WifiBoard::GetBoardType() {
     return "wifi";
 }
 
-void WifiBoard::EnterWifiConfigMode() {
-    // 网页 SoftAP 配网已移除：请到「设置 → 网络 → 配置 WIFI 网络」机上扫网配网。
-    // 保留函数以免旧 force_ap / 板级 BOOT 路径崩掉；不再阻塞主启动。
-    ESP_LOGW(TAG, "SoftAP web config removed; use Settings→Network WiFi setup");
-    wifi_config_mode_ = false;
-    auto display = Board::GetInstance().GetDisplay();
-    if (display != nullptr) {
-        display->ShowNotification(Lang::Strings::SETTINGS_NET_WIFI_CFG_HINT, 5000);
-    }
-}
-
 void WifiBoard::StartNetwork() {
-    if (StandbyScreen::IsActive()) return;
+    if (PowerLifecycleIsStandby()) {
+        return;
+    }
     if (wifi_config_mode_) {
         // 旧 NVS force_ap：忽略 SoftAP，继续走正常 STA（或无凭证直接返回）
         ESP_LOGW(TAG, "force_ap ignored (no SoftAP); continue without web config");
@@ -135,12 +171,14 @@ void WifiBoard::StartNetwork() {
     });
     wifi_station.OnConnected([](const std::string& ssid) {
         auto display = Board::GetInstance().GetDisplay();
-        std::string notification = Lang::Strings::CONNECTED_TO;
+        std::string notification = LangString_CONNECTED_TO;
         notification += ssid;
         display->ShowNotification(notification.c_str(), 3000);
         display->UpdateStatusBar(true);
     });
-    if (!wifi_station.IsUserEnabled()) return;
+    if (!wifi_station.IsUserEnabled()) {
+        return;
+    }
     wifi_station.Start();
 
     // 永不保网仍仅等待 30 秒启动联网，超时后保留后台连接。
@@ -148,8 +186,10 @@ void WifiBoard::StartNetwork() {
     const int wait_ms = (grace_sec == 0 ? 30 : grace_sec) * 1000;
     bool connected = false;
     for (int elapsed = 0; elapsed < wait_ms; elapsed += 50) {
-        if (!wifi_station.IsUserEnabled()) return;
-        if (StandbyScreen::IsActive()) {
+        if (!wifi_station.IsUserEnabled()) {
+            return;
+        }
+        if (PowerLifecycleIsStandby()) {
             PowerPolicy::GetInstance().RequestReevaluate();
             ESP_LOGI(TAG, "boot WiFi wait cancelled for standby");
             return;
@@ -167,52 +207,12 @@ void WifiBoard::StartNetwork() {
     }
 }
 
-bool WifiBoard::IsWifiConfigMode() {
-    return wifi_config_mode_;
-}
-
-void WifiBoard::RefreshNetworkWaitDeadline(int timeout_ms) {
-    if (timeout_ms < 0) {
-        timeout_ms = 0;
-    }
-    if (wifi_config_mode_) {
-        return;
-    }
-    auto& wifi = WifiStation::GetInstance();
-    if (wifi.IsConnected()) {
-        return;
-    }
-    if (!WaitPanelThenRadioOk(timeout_ms > 0 ? timeout_ms : 50)) {
-        ESP_LOGW(TAG, "RefreshNetworkWaitDeadline: defer radio (panel busy)");
-        return;
-    }
-    EnsureWifiRadioUp(wifi);
-    const int64_t dl = esp_timer_get_time() + static_cast<int64_t>(timeout_ms) * 1000LL;
-    BumpEnsureDeadlineUs(dl);
-    ESP_LOGI(TAG, "RefreshNetworkWaitDeadline +%d ms deadline_us=%" PRId64, timeout_ms, dl);
-}
-
-void WifiBoard::PauseNetworkIfNotReady() {
-    if (wifi_config_mode_) {
-        return;
-    }
-    auto& wifi = WifiStation::GetInstance();
-    if (wifi.IsConnected()) {
-        return;
-    }
-    ESP_LOGI(TAG, "PauseNetworkIfNotReady: pause STA (stop scan)");
-    wifi.PauseForLp();
-}
-
-const char* WifiBoard::GetNetworkErrorText(const char* fallback) {
-    return WifiStation::GetInstance().IsUserEnabled() ? fallback : Lang::Strings::WIFI_DISABLED_RETRY;
-}
-
 bool WifiBoard::EnsureNetworkReady(int timeout_ms) {
+    if (WifiRadio::GetInstance().IsStationSetupActive()) {
+        return false;
+    }
     auto& wifi = WifiStation::GetInstance();
     if (!wifi.IsUserEnabled()) {
-        auto notify = [](void*) { ScreenShowToast(Lang::Strings::WIFI_DISABLED_RETRY); };
-        if (!ScreenLvAsyncUrgent(notify)) ScreenLvAsync(notify);
         return false;
     }
     const char* task = pcTaskGetName(nullptr);
@@ -224,34 +224,28 @@ bool WifiBoard::EnsureNetworkReady(int timeout_ms) {
     }
     const bool already = wifi.IsConnected();
     // 百问等短切片每 200ms 进一次：未连上时 enter/fail 最多 3s 打一对，避免刷屏
-    const bool log_wait =
-        !already && (t0 - s_last_ensure_wait_log_us >= kEnsureWaitLogIntervalUs);
+    const bool log_wait = !already && (t0 - s_last_ensure_wait_log_us >= kEnsureWaitLogIntervalUs);
     if (already || log_wait) {
-        ESP_LOGI(TAG,
-                 "EnsureNetworkReady: enter task=%s core=%d timeout_ms=%d stack_hwm=%u connected=%d",
-                 task != nullptr ? task : "?", core, timeout_ms, static_cast<unsigned>(stack_before),
-                 already ? 1 : 0);
+        ESP_LOGI(TAG, "EnsureNetworkReady: enter task=%s core=%d timeout_ms=%d stack_hwm=%u connected=%d",
+                 task != nullptr ? task : "?", core, timeout_ms, static_cast<unsigned>(stack_before), already ? 1 : 0);
     }
     if (already) {
         return true;
     }
     // SoftAP 配网无 STA 互联网，空等只会拖死主循环/业务线程
     if (wifi_config_mode_) {
-        ESP_LOGW(TAG, "EnsureNetworkReady: skip (wifi config mode) task=%s",
-                 task != nullptr ? task : "?");
+        ESP_LOGW(TAG, "EnsureNetworkReady: skip (wifi config mode) task=%s", task != nullptr ? task : "?");
         return false;
     }
     if (SoftApOwnsRadio()) {
-        ESP_LOGW(TAG, "EnsureNetworkReady: skip (softAP) task=%s",
-                 task != nullptr ? task : "?");
+        ESP_LOGW(TAG, "EnsureNetworkReady: skip (softAP) task=%s", task != nullptr ? task : "?");
         return false;
     }
 
     // 墨水落墨中勿起/扫射频：流式行队列缓冲短，WiFi bring-up 易 underrun
     if (!WaitPanelThenRadioOk(timeout_ms)) {
         if (log_wait) {
-            ESP_LOGW(TAG, "EnsureNetworkReady: defer radio (panel busy) task=%s",
-                     task != nullptr ? task : "?");
+            ESP_LOGW(TAG, "EnsureNetworkReady: defer radio (panel busy) task=%s", task != nullptr ? task : "?");
         }
         return false;
     }
@@ -267,7 +261,9 @@ bool WifiBoard::EnsureNetworkReady(int timeout_ms) {
     // 单飞：同一时刻仅一个 leader 切片 WaitForConnected；后来者延长 shared deadline 并跟随
     // 个人 deadline 到点即返回（百问 200ms 切片不被 30s 传输等网拖死）
     while (wifi.IsUserEnabled() && !wifi.IsConnected()) {
-        if (SoftApOwnsRadio()) return false;
+        if (SoftApOwnsRadio()) {
+            return false;
+        }
         const int64_t now = esp_timer_get_time();
         if (now >= personal_dl) {
             break;
@@ -324,16 +320,15 @@ bool WifiBoard::EnsureNetworkReady(int timeout_ms) {
                  "EnsureNetworkReady: WiFi ready ip=%s task=%s core=%d elapsed_ms=%d "
                  "stack_hwm=%u->%u",
                  wifi.GetIpAddress().c_str(), task != nullptr ? task : "?", core,
-                 static_cast<int>((esp_timer_get_time() - t0) / 1000),
-                 static_cast<unsigned>(stack_before), static_cast<unsigned>(stack_after));
+                 static_cast<int>((esp_timer_get_time() - t0) / 1000), static_cast<unsigned>(stack_before),
+                 static_cast<unsigned>(stack_after));
         return true;
     }
     if (log_wait) {
         ESP_LOGW(TAG,
                  "EnsureNetworkReady: WiFi not connected within %d ms task=%s core=%d "
                  "elapsed_ms=%d stack_hwm=%u->%u",
-                 timeout_ms, task != nullptr ? task : "?", core,
-                 static_cast<int>((esp_timer_get_time() - t0) / 1000),
+                 timeout_ms, task != nullptr ? task : "?", core, static_cast<int>((esp_timer_get_time() - t0) / 1000),
                  static_cast<unsigned>(stack_before), static_cast<unsigned>(stack_after));
         s_last_ensure_wait_log_us = esp_timer_get_time();
     }
@@ -345,8 +340,55 @@ bool WifiBoard::EnsureNetworkReady(int timeout_ms) {
     return false;
 }
 
+const char* WifiBoard::GetNetworkErrorText(const char* fallback) {
+    return WifiStation::GetInstance().IsUserEnabled() ? fallback : LangString_WIFI_DISABLED_RETRY;
+}
+
+void WifiBoard::RefreshNetworkWaitDeadline(int timeout_ms) {
+    if (WifiRadio::GetInstance().IsStationSetupActive()) {
+        return;
+    }
+    if (timeout_ms < 0) {
+        timeout_ms = 0;
+    }
+    if (wifi_config_mode_) {
+        return;
+    }
+    auto& wifi = WifiStation::GetInstance();
+    if (wifi.IsConnected()) {
+        return;
+    }
+    if (!WaitPanelThenRadioOk(timeout_ms > 0 ? timeout_ms : 50)) {
+        ESP_LOGW(TAG, "RefreshNetworkWaitDeadline: defer radio (panel busy)");
+        return;
+    }
+    EnsureWifiRadioUp(wifi);
+    const int64_t dl = esp_timer_get_time() + static_cast<int64_t>(timeout_ms) * 1000LL;
+    BumpEnsureDeadlineUs(dl);
+    ESP_LOGI(TAG, "RefreshNetworkWaitDeadline +%d ms deadline_us=%" PRId64, timeout_ms, dl);
+}
+
+void WifiBoard::PauseNetworkIfNotReady() {
+    if (WifiRadio::GetInstance().IsStationSetupActive()) {
+        return;
+    }
+    if (wifi_config_mode_) {
+        return;
+    }
+    auto& wifi = WifiStation::GetInstance();
+    if (wifi.IsConnected()) {
+        return;
+    }
+    ESP_LOGI(TAG, "PauseNetworkIfNotReady: pause STA (stop scan)");
+    wifi.PauseForLp();
+}
+
 bool WifiBoard::IsNetworkReady() {
     return WifiStation::GetInstance().IsConnected();
+}
+
+bool WifiBoard::IsWifiConfigMode() {
+    return wifi_config_mode_;
 }
 
 NetworkInterface* WifiBoard::GetNetwork() {
@@ -354,54 +396,20 @@ NetworkInterface* WifiBoard::GetNetwork() {
     return &network;
 }
 
-const char* WifiBoard::GetNetworkStateIcon() {
+NetworkStatus WifiBoard::GetNetworkStatus() {
+    NetworkStatus status;
+    auto& station = WifiStation::GetInstance();
     if (wifi_config_mode_) {
-        return FONT_AWESOME_WIFI;
+        status.phase = NetworkPhase::Provisioning;
+    } else if (station.IsLinkInProgress()) {
+        status.phase = station.IsScanning() ? NetworkPhase::Scanning : NetworkPhase::Connecting;
     }
-    auto& wifi_station = WifiStation::GetInstance();
-    wifi_ap_record_t ap_info = {};
-    if (wifi_station.TryGetApInfo(ap_info)) {
-        int8_t rssi = ap_info.rssi;
-        if (rssi >= -60) {
-            return FONT_AWESOME_WIFI;
-        } else if (rssi >= -70) {
-            return FONT_AWESOME_WIFI_FAIR;
-        }
-        return FONT_AWESOME_WIFI_WEAK;
+    wifi_ap_record_t ap_info{};
+    if (!wifi_config_mode_ && station.TryGetApInfo(ap_info)) {
+        status.phase = NetworkPhase::Ready;
+        status.signal = ap_info.rssi;
     }
-    // 扫描/连接中：图标固定未连接，进度改由顶栏文案表示
-    return FONT_AWESOME_PLANE;
-}
-
-const char* WifiBoard::GetNetworkBusyStatusText() {
-    if (wifi_config_mode_) {
-        return nullptr;
-    }
-    auto& wifi_station = WifiStation::GetInstance();
-    if (!wifi_station.IsLinkInProgress()) {
-        return nullptr;
-    }
-    return wifi_station.IsScanning() ? Lang::Strings::WIFI_STATUS_SCANNING
-                                     : Lang::Strings::WIFI_STATUS_CONNECTING;
-}
-
-std::string WifiBoard::GetBoardJson() {
-    // Set the board type for OTA
-    auto& wifi_station = WifiStation::GetInstance();
-    std::string board_json = R"({)";
-    board_json += R"("type":")" + std::string(BOARD_TYPE) + R"(",)";
-    board_json += R"("name":")" + std::string(BOARD_NAME) + R"(",)";
-    if (!wifi_config_mode_) {
-        wifi_ap_record_t ap_info = {};
-        const bool available = wifi_station.TryGetApInfo(ap_info);
-        board_json += R"("ssid":")" + wifi_station.GetSsid() + R"(",)";
-        board_json += R"("rssi":)" + std::to_string(available ? ap_info.rssi : WifiStation::kRssiUnavailable) + R"(,)";
-        board_json += R"("channel":)" + std::to_string(available ? ap_info.primary : WifiStation::kChannelUnavailable) + R"(,)";
-        board_json += R"("ip":")" + wifi_station.GetIpAddress() + R"(",)";
-    }
-    board_json += R"("mac":")" + SystemInfo::GetMacAddress() + R"(")";
-    board_json += R"(})";
-    return board_json;
+    return status;
 }
 
 void WifiBoard::SetPowerSaveMode(bool enabled) {
@@ -411,103 +419,78 @@ void WifiBoard::SetPowerSaveMode(bool enabled) {
 
 void WifiBoard::ResetWifiConfiguration() {
     // SoftAP 网页配网已移除；提示用户到设置里机上配置
-    GetDisplay()->ShowNotification(Lang::Strings::SETTINGS_NET_WIFI_CFG_HINT, 5000);
+    GetDisplay()->ShowNotification(LangString_SETTINGS_NET_WIFI_CFG_HINT, 5000);
 }
 
-std::string WifiBoard::GetDeviceStatusJson() {
-    /*
-     * Return device status JSON
-     * 
-     * The returned JSON structure is as follows:
-     * {
-     *     "audio_speaker": {
-     *         "volume": 70
-     *     },
-     *     "screen": {
-     *         "brightness": 100,
-     *         "theme": "light"
-     *     },
-     *     "battery": {
-     *         "level": 50,
-     *         "charging": true
-     *     },
-     *     "network": {
-     *         "type": "wifi",
-     *         "ssid": "Xiaozhi",
-     *         "rssi": -60
-     *     },
-     *     "chip": {
-     *         "temperature": 25
-     *     }
-     * }
-     */
+std::string WifiBoard::GetDeviceStatusJson() try {
+    const auto failed = []() {
+        ESP_LOGE(TAG, "operation=device_status stage=encode result=no_memory");
+        return std::string{};
+    };
     auto& board = Board::GetInstance();
-    auto root = cJSON_CreateObject();
-
-    // Audio speaker
-    auto audio_speaker = cJSON_CreateObject();
-    auto audio_codec = board.GetAudioCodec();
-    if (audio_codec) {
-        cJSON_AddNumberToObject(audio_speaker, "volume", audio_codec->output_volume());
+    std::unique_ptr<cJSON, decltype(&cJSON_Delete)> root(cJSON_CreateObject(), cJSON_Delete);
+    if (!root) {
+        return failed();
     }
-    cJSON_AddItemToObject(root, "audio_speaker", audio_speaker);
-
-    // Screen brightness
-    auto backlight = board.GetBacklight();
-    auto screen = cJSON_CreateObject();
-    if (backlight) {
-        cJSON_AddNumberToObject(screen, "brightness", backlight->brightness());
+    auto* speaker = cJSON_AddObjectToObject(root.get(), "audio_speaker");
+    auto* codec = board.GetAudioCodec();
+    if (!speaker || (codec && !cJSON_AddNumberToObject(speaker, "volume", codec->output_volume()))) {
+        return failed();
     }
-    auto display = board.GetDisplay();
-    if (display && display->height() > 64) { // For LCD display only
-        auto theme = display->GetTheme();
-        if (theme != nullptr) {
-            cJSON_AddStringToObject(screen, "theme", theme->name().c_str());
+    auto* screen = cJSON_AddObjectToObject(root.get(), "screen");
+    auto* backlight = board.GetBacklight();
+    if (!screen || (backlight && !cJSON_AddNumberToObject(screen, "brightness", backlight->brightness()))) {
+        return failed();
+    }
+    auto* display = board.GetDisplay();
+    if (display && display->height() > 64) {
+        auto* theme = display->GetTheme();
+        if (theme && !cJSON_AddStringToObject(screen, "theme", theme->name().c_str())) {
+            return failed();
         }
     }
-    cJSON_AddItemToObject(root, "screen", screen);
-
-    // Battery
-    int battery_level = 0;
+    int level = 0;
     bool charging = false;
     bool discharging = false;
-    if (board.GetBatteryLevel(battery_level, charging, discharging)) {
-        cJSON* battery = cJSON_CreateObject();
-        cJSON_AddNumberToObject(battery, "level", battery_level);
-        cJSON_AddBoolToObject(battery, "charging", charging);
-        cJSON_AddItemToObject(root, "battery", battery);
+    if (board.GetBatteryLevel(level, charging, discharging)) {
+        auto* battery = cJSON_AddObjectToObject(root.get(), "battery");
+        if (!battery || !cJSON_AddNumberToObject(battery, "level", level) ||
+            !cJSON_AddBoolToObject(battery, "charging", charging)) {
+            return failed();
+        }
     }
-
-    // Network
-    auto network = cJSON_CreateObject();
-    auto& wifi_station = WifiStation::GetInstance();
-    cJSON_AddStringToObject(network, "type", "wifi");
-    cJSON_AddStringToObject(network, "ssid", wifi_station.GetSsid().c_str());
+    auto* network = cJSON_AddObjectToObject(root.get(), "network");
+    auto& station = WifiStation::GetInstance();
     wifi_ap_record_t ap_info = {};
-    const bool available = wifi_station.TryGetApInfo(ap_info);
-    int rssi = ap_info.rssi;
-    if (!available) {
-        cJSON_AddStringToObject(network, "signal", "unavailable");
-    } else if (rssi >= -60) {
-        cJSON_AddStringToObject(network, "signal", "strong");
-    } else if (rssi >= -70) {
-        cJSON_AddStringToObject(network, "signal", "medium");
-    } else {
-        cJSON_AddStringToObject(network, "signal", "weak");
+    const bool available = station.TryGetApInfo(ap_info);
+    const char* signal = "unavailable";
+    if (available) {
+        if (ap_info.rssi >= -60) {
+            signal = "strong";
+        } else if (ap_info.rssi >= -70) {
+            signal = "medium";
+        } else {
+            signal = "weak";
+        }
     }
-    cJSON_AddItemToObject(root, "network", network);
-
-    // Chip
-    float esp32temp = 0.0f;
-    if (board.GetTemperature(esp32temp)) {
-        auto chip = cJSON_CreateObject();
-        cJSON_AddNumberToObject(chip, "temperature", esp32temp);
-        cJSON_AddItemToObject(root, "chip", chip);
+    if (!network || !cJSON_AddStringToObject(network, "type", "wifi") ||
+        !cJSON_AddStringToObject(network, "ssid", station.GetSsid().c_str()) ||
+        !cJSON_AddStringToObject(network, "signal", signal)) {
+        return failed();
     }
-
-    auto json_str = cJSON_PrintUnformatted(root);
-    std::string json(json_str);
-    cJSON_free(json_str);
-    cJSON_Delete(root);
-    return json;
+    float temperature = 0.0f;
+    if (board.GetTemperature(temperature)) {
+        auto* chip = cJSON_AddObjectToObject(root.get(), "chip");
+        if (!chip || !cJSON_AddNumberToObject(chip, "temperature", temperature)) {
+            return failed();
+        }
+    }
+    std::unique_ptr<char, decltype(&cJSON_free)> encoded(cJSON_PrintUnformatted(root.get()), cJSON_free);
+    if (!encoded) {
+        return failed();
+    }
+    return std::string(encoded.get());
+} catch (const std::bad_alloc&) {
+    ESP_LOGE(TAG, "operation=device_status stage=allocate result=no_memory");
+    return {};
 }

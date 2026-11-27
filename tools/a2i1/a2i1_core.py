@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A2I1 encode/decode and e-ink-like preview helpers.
 
-Binary layout matches main/display/a2ui (A2UI_I1_MAGIC):
+Binary layout matches main/ui/common/drawing/a2ui (A2UI_I1_MAGIC):
 
   Offset  Size  Field
   0       4     magic = b'A2I1'

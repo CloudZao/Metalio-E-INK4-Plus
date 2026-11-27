@@ -1,0 +1,293 @@
+#include <atomic>
+#include <new>
+#include <esp_log.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <lvgl.h>
+#include "ui/common/runtime/screen_common_nav.h"
+#include "ui/common/widgets/screen_frontlight.h"
+#include "ui/common/drawing/adapter/epd_refresh.h"
+#include "ui/common/drawing/adapter/lv_adapter_display.h"
+#include "ui/common/runtime/input/vk_key_handler.h"
+#include "ui/common/runtime/lvgl/ui_dispatch.h"
+
+static constexpr const char* TAG = "UiDispatch";
+static constexpr uint64_t kPaintCoalescePendingFallbackUs = 120000;
+
+struct ScreenCommonNavUiMessage {
+    void (*callback)(void*);  // 仅由 UI 线程执行
+    void* context;            // 接收成功后交给回调释放
+    int64_t queued_us;        // 用于定位排队与执行两个阶段
+};
+
+struct ScreenCommonNavUiMailboxes {
+    static constexpr size_t kNormalDepth = 80;                                 // 普通结果和进度消息
+    static constexpr size_t kUrgentDepth = 16;                                 // 导航、待机等优先消息
+    StaticQueue_t normal_storage{}, urgent_storage{};                          // 静态队列控制块
+    uint8_t normal_buffer[kNormalDepth * sizeof(ScreenCommonNavUiMessage)]{};  // 有界普通消息缓冲
+    uint8_t urgent_buffer[kUrgentDepth * sizeof(ScreenCommonNavUiMessage)]{};  // 独立优先缓冲
+    QueueHandle_t normal =
+        xQueueCreateStatic(kNormalDepth, sizeof(ScreenCommonNavUiMessage), normal_buffer, &normal_storage);
+    QueueHandle_t urgent =
+        xQueueCreateStatic(kUrgentDepth, sizeof(ScreenCommonNavUiMessage), urgent_buffer, &urgent_storage);
+};
+
+static std::atomic<bool> s_home_requested{false};  // 合并HOME请求，不受队列容量影响
+struct ScreenCompletionQueue {
+    std::atomic<ScreenUiCompletion*> pending{nullptr};
+    ScreenUiCompletion* ready = nullptr; // 仅由UI任务持有
+};
+static ScreenCompletionQueue s_completions[2]; // 普通完成与资源收尾共用交付方式，分别保证推进
+
+void ScreenCompleteWork(ScreenUiCompletion* completion, bool urgent) {
+    auto& pending = s_completions[urgent ? 1 : 0].pending;
+    completion->next = pending.load(std::memory_order_relaxed);
+    while (!pending.compare_exchange_weak(completion->next, completion, std::memory_order_release,
+                                                std::memory_order_relaxed)) {
+    }
+}
+
+static void DrainCompletion(ScreenCompletionQueue& queue) {
+    auto*& ready = queue.ready;
+    if (ready == nullptr) {
+        auto* pending = queue.pending.exchange(nullptr, std::memory_order_acquire);
+        while (pending != nullptr) {
+            auto* next = pending->next;
+            pending->next = ready;
+            ready = pending;
+            pending = next;
+        }
+    }
+    if (ready != nullptr) {
+        auto* completion = ready;
+        ready = ready->next;
+        try {
+            completion->apply(completion);
+        } catch (const std::bad_alloc&) {
+            ESP_LOGE(TAG, "operation=completion stage=ui_apply result=no_memory");
+        }
+    }
+}
+
+static ScreenCommonNavUiMailboxes& Mailboxes() {
+    static ScreenCommonNavUiMailboxes mailboxes;
+    return mailboxes;
+}
+
+// S31 走 LvAdapterEpdiy，不用 esp_lv_adapter
+static bool ScreenAdapterReady() {
+    auto* d = LVAdapterDisplay::Instance();
+    return d != nullptr && d->IsReady();
+}
+
+void ScreenRequestHome() {
+    EpdCancelPageTurn();
+    s_home_requested.store(true, std::memory_order_release);
+}
+
+bool ScreenLvAsync(void (*cb)(void*), void* user_data) {
+    if (cb == nullptr) {
+        return false;
+    }
+    if (!ScreenAdapterReady()) {
+        ESP_LOGW(TAG, "ScreenLvAsync: adapter not ready");
+        return false;
+    }
+    const ScreenCommonNavUiMessage message{cb, user_data, esp_timer_get_time()};
+    return xQueueSend(Mailboxes().normal, &message, 0) == pdTRUE;
+}
+
+bool ScreenLvAsyncUrgent(void (*cb)(void*), void* user_data) {
+    if (cb == nullptr) {
+        return false;
+    }
+    if (!ScreenAdapterReady()) {
+        ESP_LOGW(TAG, "ScreenLvAsyncUrgent: adapter not ready");
+        return false;
+    }
+    const ScreenCommonNavUiMessage message{cb, user_data, esp_timer_get_time()};
+    return xQueueSend(Mailboxes().urgent, &message, 0) == pdTRUE;
+}
+
+void ScreenLvAsyncDrain() {
+    if (s_home_requested.exchange(false, std::memory_order_acq_rel)) {
+        ScreenCommon_GoHomeAsync(nullptr);
+    }
+    DrainCompletion(s_completions[1]);
+    DrainCompletion(s_completions[0]);
+    auto& queues = Mailboxes();
+    const int64_t begin = esp_timer_get_time();
+    ScreenCommonNavUiMessage message{};
+    for (unsigned count = 0; count < 8; ++count) {
+        if (xQueueReceive(queues.urgent, &message, 0) != pdTRUE &&
+            xQueueReceive(queues.normal, &message, 0) != pdTRUE) {
+            break;
+        }
+        const int64_t started = esp_timer_get_time();
+        message.callback(message.context);
+        const int64_t finished = esp_timer_get_time();
+        if (finished - started > 20000 || started - message.queued_us > 200000) {
+            static int64_t last_log = 0;
+            static unsigned suppressed = 0;
+            if (last_log == 0 || finished - last_log >= 5000000) {
+                ESP_LOGW(TAG, "UI callback=%p wait=%lldms run=%lldms suppressed=%u",
+                         reinterpret_cast<void*>(message.callback),
+                         static_cast<long long>((started - message.queued_us) / 1000),
+                         static_cast<long long>((finished - started) / 1000), suppressed);
+                last_log = finished;
+                suppressed = 0;
+            } else {
+                ++suppressed;
+            }
+        }
+        // 单个回调可能绘制整页；本轮完成后交还输入采样与刷新。
+        if (esp_timer_get_time() - begin >= 5000) {
+            break;
+        }
+    }
+}
+
+static void ScreenPaintCoalesceEnqueue(ScreenPaintCoalesce* c);
+static void ScreenPaintCoalesceArmDefer(ScreenPaintCoalesce* c, uint64_t delay_us);
+static bool ScreenPaintCoalesceEnsureTimer(ScreenPaintCoalesce* c);
+
+static void ScreenPaintCoalesceAsync(void* user_data) {
+    auto* c = static_cast<ScreenPaintCoalesce*>(user_data);
+    if (c == nullptr || c->paint == nullptr) {
+        return;
+    }
+    c->queued.store(false, std::memory_order_release);
+    const uint32_t want = c->seq.load(std::memory_order_acquire);
+    if (want == c->done.load(std::memory_order_acquire)) {
+        return;
+    }
+    // 重建统一等待物理更新结束；尚未起波的待提交帧不阻止合并最新目标。
+    if (!EpdTryBeginUiRender()) {
+        ScreenPaintCoalesceArmDefer(c, 20000);
+        return;
+    }
+
+    struct UiGuard {
+        ~UiGuard() {
+            EpdEndUiRender();
+        }
+    } guard;
+
+    // 每次只画一帧；落后则立刻再排队（不再防抖），让 LVGL/墨水有机会 flush
+    c->paint();
+    c->done.store(want, std::memory_order_release);
+    if (c->seq.load(std::memory_order_acquire) != c->done.load(std::memory_order_acquire)) {
+        ScreenPaintCoalesceEnqueue(c);
+    }
+}
+
+static void ScreenPaintCoalesceEnqueue(ScreenPaintCoalesce* c) {
+    if (c == nullptr || c->paint == nullptr) {
+        return;
+    }
+    bool expected = false;
+    if (!c->queued.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+    // 重绘直接进入 UI 队列，与网络和语音任务独立。
+    if (ScreenLvAsync(ScreenPaintCoalesceAsync, c)) {
+        return;
+    }
+    c->queued.store(false, std::memory_order_release);
+    // 不阻塞触摸或定时器任务；队列满时保留序号并稍后重试。
+    if (ScreenAdapterReady() && ScreenPaintCoalesceEnsureTimer(c)) {
+        auto* timer = static_cast<esp_timer_handle_t>(c->defer_timer.load());
+        esp_timer_stop(timer);
+        if (esp_timer_start_once(timer, 20000) != ESP_OK) {
+            ESP_LOGW(TAG, "paint coalesce retry start failed");
+        }
+    }
+}
+
+static void ScreenPaintCoalesceDeferCb(void* arg) {
+    ScreenPaintCoalesceEnqueue(static_cast<ScreenPaintCoalesce*>(arg));
+}
+
+static bool ScreenPaintCoalesceEnsureTimer(ScreenPaintCoalesce* c) {
+    if (c->defer_timer != nullptr) {
+        return true;
+    }
+    esp_timer_handle_t t = nullptr;
+    const esp_timer_create_args_t args = {
+        .callback = &ScreenPaintCoalesceDeferCb,
+        .arg = c,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "paint_coal",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&args, &t) != ESP_OK || t == nullptr) {
+        ESP_LOGW(TAG, "paint coalesce timer create failed");
+        return false;
+    }
+    void* expected = nullptr;
+    if (!c->defer_timer.compare_exchange_strong(expected, t)) {
+        esp_timer_delete(t);
+    }
+    return true;
+}
+
+static void ScreenPaintCoalesceArmDefer(ScreenPaintCoalesce* c, uint64_t delay_us) {
+    if (!ScreenPaintCoalesceEnsureTimer(c)) {
+        ScreenPaintCoalesceEnqueue(c);
+        return;
+    }
+    auto* t = static_cast<esp_timer_handle_t>(c->defer_timer.load());
+    esp_timer_stop(t);
+    if (esp_timer_start_once(t, delay_us) != ESP_OK) {
+        ScreenPaintCoalesceEnqueue(c);
+    }
+}
+
+void ScreenPaintCoalesceRequest(ScreenPaintCoalesce* c) {
+    if (c == nullptr || c->paint == nullptr) {
+        return;
+    }
+    c->seq.fetch_add(1, std::memory_order_acq_rel);
+
+    // 屏内连点：边沿还在队列 / 下一拍已按下 → 只记序号，让 LVGL 继续交 CLICKED
+    // （固定短窗就开画会堵 indev，连点又变一页一刷）
+    if (TouchUiHasPendingEdges() || TouchUiFingerIsDown()) {
+        ScreenPaintCoalesceArmDefer(c, kPaintCoalescePendingFallbackUs);
+        return;
+    }
+
+    // 触摸空闲（含刚交完最后一拍）：立刻排队画最终页；盖板键连点靠 seq 合并
+    if (c->defer_timer != nullptr) {
+        esp_timer_stop(static_cast<esp_timer_handle_t>(c->defer_timer.load()));
+    }
+    ScreenPaintCoalesceEnqueue(c);
+}
+
+void ScreenPaintCoalesceRequestDebounced(ScreenPaintCoalesce* c, uint64_t delay_us) {
+    if (c == nullptr || c->paint == nullptr) {
+        return;
+    }
+    c->seq.fetch_add(1, std::memory_order_acq_rel);
+    uint64_t wait = delay_us;
+    if (wait == 0) {
+        wait = kPaintCoalescePendingFallbackUs;
+    }
+    // 边沿未交完时至少撑过兜底窗，避免中途开画堵 indev
+    if ((TouchUiHasPendingEdges() || TouchUiFingerIsDown()) && wait < kPaintCoalescePendingFallbackUs) {
+        wait = kPaintCoalescePendingFallbackUs;
+    }
+    ScreenPaintCoalesceArmDefer(c, wait);
+}
+
+void ScreenPaintCoalesceReset(ScreenPaintCoalesce* c) {
+    if (c == nullptr) {
+        return;
+    }
+    if (c->defer_timer != nullptr) {
+        esp_timer_stop(static_cast<esp_timer_handle_t>(c->defer_timer.load()));
+    }
+    c->queued.store(false, std::memory_order_release);
+    const uint32_t seq = c->seq.load(std::memory_order_acquire);
+    c->done.store(seq, std::memory_order_release);
+}

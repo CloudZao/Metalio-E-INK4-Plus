@@ -20,10 +20,12 @@ public:
         NoSdCard,
         FormatRequired,
         HostBusy,
+        CameraHostBusy,
     };
 
     using UiNotifyFn = std::function<void()>;
 
+    /** @brief 获取虚拟 U 盘常驻实例 */
     static UsbVirtualDisk& GetInstance();
 
     UsbVirtualDisk(const UsbVirtualDisk&) = delete;
@@ -32,22 +34,31 @@ public:
     /** @brief 初始化请求队列并保持 USJ；业务请求到来时才创建工作任务。 */
     void Init();
 
+    /** @brief 查询当前目标及配置是否提供 USB 大容量存储功能 */
     bool IsSupported() const;
+
+    /** @brief 查询 USB 存储设备后端是否已启用 */
     bool IsGadgetActive() const;
+
+    /** @brief 查询是否正在执行启用或停用操作 */
     bool IsBusy() const;
+
+    /** @brief 查询 SD 卡是否已交给 USB 主机，交出时本机不可访问 */
     bool IsSdExportedToHost() const;
+
+    /** @brief 获取最近一次切换操作的界面状态快照 */
     UiHint GetUiHint() const;
 
-    // 按钮切换：启用 / 停用虚拟 U 盘（异步；忙时可再点以改期望态）。
+    /** @brief 异步切换启用状态，忙碌时更新目标状态供当前操作结束后处理 */
     void Toggle();
 
-    // 若当前已启用（或正在切换），异步停用；离开设置页时调用。
+    /** @brief 异步停用已启用或正在切换的虚拟 U 盘，供离页时收尾 */
     void DisableIfActive();
 
-    // UI 注册；worker 完成后在 LVGL 线程外调用，UI 侧用 lv_async_call 刷新。
+    /** @brief 设置状态变化通知，回调须自行将刷新转交 UI 线程 */
     void SetUiNotify(UiNotifyFn fn);
 
-    // 中文提示文案。
+    /** @brief 获取指定界面状态在当前语言下的操作提示 */
     static const char* HintText(UiHint hint);
 
 private:

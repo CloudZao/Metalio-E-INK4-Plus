@@ -1,0 +1,424 @@
+#include <cstdint>
+#include <cstdio>
+#include <memory>
+#include <new>
+#include <string>
+#include <esp_log.h>
+#include <lvgl.h>
+#include "ui/common/widgets/screen_text.h"
+#include "sysmgmt/tasks/task_executor.h"
+#include "ui/apps/wallpaper/preview/wallpaper_preview.h"
+#include "assets/lang_config.h"
+#include "assets/lang_wallpaper.h"
+#include "business/reader/reader.h"
+#include "ui/common/runtime/haptic_feedback.h"
+#include "ui/common/drawing/rendering/epd_content_policy.h"
+#include "ui/apps/wallpaper/preview/wallpaper_adjust.h"
+#include "ui/apps/wallpaper/wallpaper_list.h"
+#include "ui/apps/wallpaper/wallpaper_ops.h"
+#include "ui/apps/wallpaper/wallpaper_screen_priv.h"
+#include "ui/apps/wallpaper/wallpaper_ui_helpers.h"
+#include "ui/common/drawing/ui_theme.h"
+#include "ui/common/runtime/lvgl/ui_dispatch.h"
+#include "ui/common/widgets/screen_common.h"
+
+struct LoadWork : ScreenUiCompletion {
+    int index = -1;
+    uint32_t epoch = 0;
+    uint32_t generation = 0;
+    bool ok = false;
+    StorageError storage_error; // 文件访问失败的原始原因
+    ImageDecodeError error = ImageDecodeError::kFailed;  // 解码或预览准备失败原因
+    std::unique_ptr<RasterImage> img;                    // 完成前由工作对象持有解码结果
+    char path[SD_FILE_PATH_CAPACITY] = {};
+};
+
+static void ShowPreviewDecodeFailure(ImageDecodeError error, const StorageError& storage_error = {}) {
+    auto& st = Wallpaper_State();
+    st.preview.decode_error = error == ImageDecodeError::kNone ? ImageDecodeError::kFailed : error;
+    char message[80] = {};
+    Wallpaper_FormatDecodeFailure(message, sizeof(message), st.preview.decode_error, storage_error);
+    if (st.ui.preview_status) {
+        lv_obj_add_flag(st.ui.preview_status, LV_OBJ_FLAG_HIDDEN);
+    }
+    ScreenShowToast(message);
+    UpdateEnableButtonUi();
+    UpdateDeleteButtonUi();
+    UpdateAdjustUi();
+}
+
+static void ApplyPreviewResult(ScreenUiCompletion* completion) {
+    std::unique_ptr<LoadWork> work(static_cast<LoadWork*>(completion));
+    auto* msg = work.get();
+    Wallpaper_State().workers.load_busy.store(false);
+    if (!Wallpaper_State().screen_alive || msg->epoch != Wallpaper_State().epoch) {
+        if (Wallpaper_State().screen_alive.load() && !Wallpaper_State().decode_paused.load() &&
+            Wallpaper_State().mode == UiMode::kPreview && Wallpaper_State().preview.raster == nullptr) {
+            ScheduleLoadPreview(Wallpaper_State().preview.idx);
+        }
+        return;
+    }
+    if (Wallpaper_State().decode_paused.load() || msg->generation != Wallpaper_State().decode_generation.load() ||
+        Wallpaper_State().mode != UiMode::kPreview || msg->index != Wallpaper_State().preview.idx) {
+        if (!Wallpaper_State().decode_paused.load() && Wallpaper_State().mode == UiMode::kPreview &&
+            Wallpaper_State().preview.raster == nullptr) {
+            ScheduleLoadPreview(Wallpaper_State().preview.idx);
+        }
+        return;
+    }
+
+    ClearPreviewImage();
+    if (!msg->ok || msg->img == nullptr || msg->img->empty()) {
+        ShowPreviewDecodeFailure(msg->error, msg->storage_error);
+        return;
+    }
+
+    Wallpaper_State().preview.raster = msg->img.release();
+    try {
+        TrimRasterLetterbox(*Wallpaper_State().preview.raster);
+        Wallpaper_State().preview.raster->BindDsc();
+        Wallpaper_State().preview.base = new RasterImage(*Wallpaper_State().preview.raster);
+    } catch (const std::bad_alloc&) {
+        ESP_LOGE(TAG, "preview preparation failed: no memory");
+        ClearPreviewImage();
+        ShowPreviewDecodeFailure(ImageDecodeError::kNoMemory);
+        return;
+    }
+    Wallpaper_State().preview.rot_cw = 0;
+    Wallpaper_State().preview.mirror_h = false;
+
+    if (Wallpaper_State().ui.preview_img != nullptr) {
+        lv_image_set_scale(Wallpaper_State().ui.preview_img, LV_SCALE_NONE);
+        lv_image_set_src(Wallpaper_State().ui.preview_img, &Wallpaper_State().preview.raster->dsc);
+        EpdSetContentRole(Wallpaper_State().ui.preview_img, EpdContentRole::WallpaperPreview);
+        lv_obj_set_size(Wallpaper_State().ui.preview_img, Wallpaper_State().preview.raster->width,
+                        Wallpaper_State().preview.raster->height);
+        lv_obj_clear_flag(Wallpaper_State().ui.preview_img, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_center(Wallpaper_State().ui.preview_img);
+        lv_obj_invalidate(Wallpaper_State().ui.preview_img);
+        if (Wallpaper_State().ui.preview_img_host != nullptr) {
+            lv_obj_invalidate(Wallpaper_State().ui.preview_img_host);
+        }
+        ESP_LOGI(TAG, "preview L8 %ux%u", Wallpaper_State().preview.raster->width,
+                 Wallpaper_State().preview.raster->height);
+    }
+    if (Wallpaper_State().ui.preview_status != nullptr) {
+        lv_obj_add_flag(Wallpaper_State().ui.preview_status, LV_OBJ_FLAG_HIDDEN);
+    }
+    UpdateEnableButtonUi();
+    UpdateDeleteButtonUi();
+    UpdateAdjustUi();
+}
+
+static void LoadPreviewTask(void* arg) {
+    auto* work = static_cast<LoadWork*>(arg);
+    auto* msg = work;
+    try {
+        WallpaperDecodeToken token{msg->epoch, msg->generation};
+        msg->img.reset(new (std::nothrow) RasterImage());
+        if (msg->img == nullptr) {
+            msg->error = ImageDecodeError::kNoMemory;
+        } else if (!DecodeImageFileToL8(work->path, FrameInner(kPreviewMaxW, kBorderW),
+                                        FrameInner(kPreviewMaxH, kBorderW), *msg->img, Wallpaper_DecodeCancelled,
+                                        &token, &msg->error, &msg->storage_error)) {
+            msg->img.reset();
+        } else {
+            msg->ok = true;
+            ESP_LOGI(TAG, "preview decoded index=%d size=%ux%u", work->index, msg->img->width, msg->img->height);
+        }
+    } catch (const std::bad_alloc&) {
+        msg->ok = false;
+        msg->img.reset();
+        msg->error = ImageDecodeError::kNoMemory;
+    }
+    if (msg->storage_error) {
+        LogStorageError(TAG, msg->storage_error);
+    } else if (!msg->ok && msg->error != ImageDecodeError::kCancelled) {
+        ESP_LOGE(TAG, "preview decode failed: reason=%u", static_cast<unsigned>(msg->error));
+    }
+    ScreenCompleteWork(work);
+}
+
+void ClearPreviewImage() {
+    Wallpaper_State().preview.decode_error = ImageDecodeError::kNone;
+    if (Wallpaper_State().ui.preview_img != nullptr) {
+        lv_image_set_src(Wallpaper_State().ui.preview_img, nullptr);
+        lv_obj_add_flag(Wallpaper_State().ui.preview_img, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (Wallpaper_State().preview.raster != nullptr) {
+        delete Wallpaper_State().preview.raster;
+        Wallpaper_State().preview.raster = nullptr;
+    }
+    if (Wallpaper_State().preview.base != nullptr) {
+        delete Wallpaper_State().preview.base;
+        Wallpaper_State().preview.base = nullptr;
+    }
+    Wallpaper_State().preview.rot_cw = 0;
+    Wallpaper_State().preview.mirror_h = false;
+}
+
+void ScheduleLoadPreview(int index) {
+    if (Wallpaper_State().decode_paused.load()) {
+        return;
+    }
+    if (index < 0 || index >= static_cast<int>(Wallpaper_State().list.files.size())) {
+        ESP_LOGW(TAG, "preview skip: bad index=%d files=%u", index,
+                 static_cast<unsigned>(Wallpaper_State().list.files.size()));
+        return;
+    }
+    if (Wallpaper_State().workers.load_busy.exchange(true)) {
+        ESP_LOGW(TAG, "preview skip: load busy index=%d", index);
+        return;
+    }
+    auto* work = new (std::nothrow) LoadWork{};
+    if (work == nullptr) {
+        Wallpaper_State().workers.load_busy.store(false);
+        ESP_LOGE(TAG, "preview request allocation failed");
+        ShowPreviewDecodeFailure(ImageDecodeError::kNoMemory);
+        return;
+    }
+    work->apply = ApplyPreviewResult;
+    Wallpaper_State().preview.decode_error = ImageDecodeError::kNone;
+    work->index = index;
+    work->epoch = Wallpaper_State().epoch;
+    work->generation = Wallpaper_State().decode_generation.load();
+    std::snprintf(work->path, sizeof(work->path), "%s", Wallpaper_State().list.files[static_cast<size_t>(index)].path);
+    if (!TaskExecutor::Schedule([work] { LoadPreviewTask(work); }, TaskDomain::Image)) {
+        delete work;
+        Wallpaper_State().workers.load_busy.store(false);
+        ShowPreviewDecodeFailure(ImageDecodeError::kFailed, {StorageErrorCode::Rejected, StorageStage::Submit});
+    }
+}
+
+void OpenPreview(int index) {
+    if (index < 0 || index >= static_cast<int>(Wallpaper_State().list.files.size())) {
+        return;
+    }
+    CancelThumbFill();
+    Wallpaper_State().decode_generation.fetch_add(1);
+    Wallpaper_CloseDialog();
+    Wallpaper_State().preview.adjust_open = false;
+    ResetOrientState();
+    Wallpaper_State().preview.idx = index;
+    ClearPreviewImage();
+    ShowMode(UiMode::kPreview);
+    const FileEntry& fe = Wallpaper_State().list.files[static_cast<size_t>(index)];
+    if (Wallpaper_State().ui.preview_title != nullptr) {
+        const char* raw = fe.title[0] != '\0' ? fe.title : fe.name;
+        const std::string shown = ScreenLayoutTitleTwoLines(raw, Wallpaper_UiFont(), Wallpaper_ContentWidth());
+        lv_label_set_text(Wallpaper_State().ui.preview_title, shown.c_str());
+    }
+    if (Wallpaper_State().ui.preview_status != nullptr) {
+        lv_label_set_text(Wallpaper_State().ui.preview_status, LangString_WALLPAPER_LOADING);
+        lv_obj_clear_flag(Wallpaper_State().ui.preview_status, LV_OBJ_FLAG_HIDDEN);
+    }
+    UpdateEnableButtonUi();
+    UpdateDeleteButtonUi();
+    UpdateAdjustUi();
+    ScheduleLoadPreview(index);
+    Wallpaper_RevealAfterWhite();
+}
+
+void ClosePreview() {
+    Wallpaper_State().decode_generation.fetch_add(1);
+    Wallpaper_CloseDialog();
+    if (Wallpaper_OperationPending(WallpaperOperation::Save)) {
+        Wallpaper_CancelRequest();
+    }
+    Wallpaper_State().preview.adjust_open = false;
+    ResetOrientState();
+    Wallpaper_State().preview.idx = -1;
+    ClearPreviewImage();
+    ShowMode(UiMode::kList);
+    CollectWallpapers();
+    RebuildListPage();
+    Wallpaper_RevealAfterWhite();
+}
+
+void BuildPreviewBody(lv_obj_t* scr, lv_coord_t status_h) {
+    // ---- 设置页：大预览 + 标题/标签 + 双列开关 + 删除 ----
+    lv_obj_t* preview_body = lv_obj_create(scr);
+    lv_obj_remove_style_all(preview_body);
+    lv_obj_set_size(preview_body, LV_HOR_RES, Wallpaper_State().list.body_h);
+    lv_obj_align(preview_body, LV_ALIGN_TOP_MID, 0, status_h);
+    lv_obj_set_style_bg_opa(preview_body, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_hor(preview_body, kPad, 0);
+    lv_obj_set_style_pad_top(preview_body, 8, 0);
+    lv_obj_set_style_pad_bottom(preview_body, 12, 0);
+    lv_obj_set_flex_flow(preview_body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(preview_body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(preview_body, kPreviewGap, 0);
+    Wallpaper_DisableScroll(preview_body);
+    lv_obj_add_flag(preview_body, LV_OBJ_FLAG_HIDDEN);
+    Wallpaper_State().ui.preview_body = preview_body;
+
+    lv_obj_t* img_host = lv_obj_create(preview_body);
+    lv_obj_remove_style_all(img_host);
+    lv_obj_set_width(img_host, Wallpaper_ContentWidth());
+    lv_obj_set_flex_grow(img_host, 1);
+    lv_obj_set_style_bg_color(img_host, UiColorBackground(), 0);
+    lv_obj_set_style_bg_opa(img_host, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(img_host, kBorderW, 0);
+    lv_obj_set_style_border_color(img_host, UiColorForeground(), 0);
+    lv_obj_set_style_pad_all(img_host, kBorderW, 0);
+    lv_obj_set_style_radius(img_host, 16, 0);
+    lv_obj_set_style_clip_corner(img_host, true, 0);
+    Wallpaper_DisableScroll(img_host);
+    Wallpaper_State().ui.preview_img_host = img_host;
+
+    lv_obj_t* img = lv_image_create(img_host);
+    lv_obj_add_flag(img, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
+    Wallpaper_State().ui.preview_img = img;
+
+    lv_obj_t* preview_status = lv_label_create(img_host);
+    lv_obj_set_style_text_font(preview_status, Wallpaper_UiFont(), 0);
+    lv_obj_set_style_text_color(preview_status, UiColorForeground(), 0);
+    lv_obj_set_style_text_align(preview_status, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(preview_status, "");
+    lv_obj_align(preview_status, LV_ALIGN_CENTER, 0, 0);
+    Wallpaper_State().ui.preview_status = preview_status;
+
+    lv_obj_t* preview_title = lv_label_create(preview_body);
+    lv_obj_set_width(preview_title, Wallpaper_ContentWidth());
+    {
+        const lv_font_t* f = Wallpaper_UiFont();
+        const lv_coord_t lh = (f != nullptr && f->line_height > 0) ? f->line_height : 29;
+        lv_obj_set_height(preview_title, lh * 2);
+    }
+    lv_obj_set_style_text_font(preview_title, Wallpaper_UiFont(), 0);
+    lv_obj_set_style_text_color(preview_title, UiColorForeground(), 0);
+    lv_obj_set_style_text_align(preview_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_all(preview_title, 0, 0);
+    // 文案已按像素拆成最多两行；CLIP 避免再走 LVGL 整词换行
+    lv_label_set_long_mode(preview_title, LV_LABEL_LONG_CLIP);
+    lv_label_set_text(preview_title, "");
+    Wallpaper_State().ui.preview_title = preview_title;
+
+    lv_obj_t* preview_meta = lv_obj_create(preview_body);
+    lv_obj_remove_style_all(preview_meta);
+    lv_obj_set_width(preview_meta, Wallpaper_ContentWidth());
+    lv_obj_set_height(preview_meta, kPreviewMetaH);
+    lv_obj_set_flex_flow(preview_meta, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(preview_meta, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(preview_meta, 8, 0);
+    lv_obj_clear_flag(preview_meta, LV_OBJ_FLAG_CLICKABLE);
+    Wallpaper_DisableScroll(preview_meta);
+    Wallpaper_State().ui.preview_meta = preview_meta;
+
+    lv_obj_t* actions = lv_obj_create(preview_body);
+    lv_obj_remove_style_all(actions);
+    lv_obj_set_width(actions, Wallpaper_ContentWidth());
+    lv_obj_set_height(actions, kActionH);
+    lv_obj_set_style_bg_opa(actions, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(actions, LV_OBJ_FLAG_CLICKABLE);
+    Wallpaper_DisableScroll(actions);
+    Wallpaper_State().ui.actions_row = actions;
+
+    // 底栏两行高度固定：上行关机/待机/调整 ↔ 左转/右转/镜像；下行阅读背景/删除 ↔ 取消/保存
+    // 叠放子行须写死高度：创建时 get_height(parent) 常为 0，会导致整行不可见
+    const lv_coord_t third_w = (Wallpaper_ContentWidth() - 16) / 3;
+    auto make_row = [&](lv_obj_t* parent, lv_coord_t row_h, bool hidden) {
+        lv_obj_t* row = lv_obj_create(parent);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_size(row, lv_pct(100), row_h);
+        lv_obj_set_pos(row, 0, 0);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(row, 8, 0);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        Wallpaper_DisableScroll(row);
+        if (hidden) {
+            lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
+        }
+        return row;
+    };
+    auto make_slot_btn = [&](lv_obj_t* parent, lv_coord_t w, lv_coord_t h, const char* text, lv_event_cb_t cb,
+                             bool filled, lv_obj_t** out_btn, lv_obj_t** out_lbl) {
+        lv_obj_t* btn = lv_obj_create(parent);
+        lv_obj_remove_style_all(btn);
+        lv_obj_set_size(btn, w, h);
+        lv_obj_set_style_pad_all(btn, 0, 0);
+        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        Wallpaper_DisableScroll(btn);
+        HapticAttachClick(btn);
+        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
+        lv_obj_t* lbl = lv_label_create(btn);
+        lv_obj_set_style_text_font(lbl, Wallpaper_UiFont(), 0);
+        lv_label_set_text(lbl, text);
+        StyleActionBtn(btn, lbl, filled, true);
+        if (out_btn != nullptr) {
+            *out_btn = btn;
+        }
+        if (out_lbl != nullptr) {
+            *out_lbl = lbl;
+        }
+    };
+
+    lv_obj_t* actions_normal = make_row(actions, kActionH, false);
+    make_slot_btn(actions_normal, third_w, kActionH, LangString_WALLPAPER_SET_SHUTDOWN, OnEnableShutdownClicked, false,
+                  &Wallpaper_State().ui.enable_shutdown_btn, &Wallpaper_State().ui.enable_shutdown_lbl);
+    make_slot_btn(actions_normal, third_w, kActionH, LangString_WALLPAPER_SET_STANDBY, OnEnableStandbyClicked, false,
+                  &Wallpaper_State().ui.enable_standby_btn, &Wallpaper_State().ui.enable_standby_lbl);
+    make_slot_btn(actions_normal, third_w, kActionH, LangString_WALLPAPER_ADJUST, OnAdjustClicked, false,
+                  &Wallpaper_State().ui.adjust_btn, &Wallpaper_State().ui.adjust_lbl);
+
+    lv_obj_t* actions_adjust = make_row(actions, kActionH, true);
+    make_slot_btn(actions_adjust, third_w, kActionH, LangString_WALLPAPER_ROTATE_LEFT, OnRotateLeftClicked, false,
+                  &Wallpaper_State().ui.rotate_left_btn, nullptr);
+    make_slot_btn(actions_adjust, third_w, kActionH, LangString_WALLPAPER_ROTATE_RIGHT, OnRotateRightClicked, false,
+                  &Wallpaper_State().ui.rotate_right_btn, nullptr);
+    make_slot_btn(actions_adjust, third_w, kActionH, LangString_WALLPAPER_MIRROR_H, OnMirrorHClicked, false,
+                  &Wallpaper_State().ui.mirror_btn, nullptr);
+    Wallpaper_State().ui.actions_row = actions;
+    Wallpaper_State().ui.actions_normal_row = actions_normal;
+    Wallpaper_State().ui.actions_adjust_row = actions_adjust;
+
+    lv_obj_t* bottom_slot = lv_obj_create(preview_body);
+    lv_obj_remove_style_all(bottom_slot);
+    lv_obj_set_size(bottom_slot, Wallpaper_ContentWidth(), kDeleteH);
+    lv_obj_set_style_bg_opa(bottom_slot, LV_OPA_TRANSP, 0);
+    Wallpaper_DisableScroll(bottom_slot);
+    lv_obj_clear_flag(bottom_slot, LV_OBJ_FLAG_CLICKABLE);
+    Wallpaper_State().ui.bottom_slot = bottom_slot;
+
+    const lv_coord_t bottom_w = (Wallpaper_ContentWidth() - 12) / 2;
+    make_slot_btn(bottom_slot, bottom_w, kDeleteH, LangString_WALLPAPER_SET_READING, OnEnableReadingClicked, false,
+                  &Wallpaper_State().ui.enable_reading_btn, &Wallpaper_State().ui.enable_reading_lbl);
+
+    lv_obj_t* delete_btn = lv_obj_create(bottom_slot);
+    lv_obj_remove_style_all(delete_btn);
+    lv_obj_set_size(delete_btn, bottom_w, kDeleteH);
+    lv_obj_set_pos(delete_btn, Wallpaper_ContentWidth() - bottom_w, 0);
+    lv_obj_set_style_pad_all(delete_btn, 0, 0);
+    lv_obj_set_flex_flow(delete_btn, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(delete_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    Wallpaper_DisableScroll(delete_btn);
+    HapticAttachClick(delete_btn);
+    lv_obj_add_event_cb(delete_btn, Wallpaper_OnDeleteClicked, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* delete_lbl = lv_label_create(delete_btn);
+    lv_obj_set_style_text_font(delete_lbl, Wallpaper_UiFont(), 0);
+    lv_label_set_text(delete_lbl, LangString_WALLPAPER_DELETE_BTN);
+    StyleActionBtn(delete_btn, delete_lbl, false, true);
+    Wallpaper_State().ui.delete_btn = delete_btn;
+    Wallpaper_State().ui.delete_lbl = delete_lbl;
+
+    lv_obj_t* save_row = lv_obj_create(bottom_slot);
+    lv_obj_remove_style_all(save_row);
+    lv_obj_set_size(save_row, Wallpaper_ContentWidth(), kDeleteH);
+    lv_obj_set_pos(save_row, 0, 0);
+    lv_obj_set_flex_flow(save_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(save_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(save_row, 12, 0);
+    lv_obj_clear_flag(save_row, LV_OBJ_FLAG_CLICKABLE);
+    Wallpaper_DisableScroll(save_row);
+    lv_obj_add_flag(save_row, LV_OBJ_FLAG_HIDDEN);
+    Wallpaper_State().ui.save_row = save_row;
+
+    const lv_coord_t half_save_w = (Wallpaper_ContentWidth() - 12) / 2;
+    make_slot_btn(save_row, half_save_w, kDeleteH, LangString_COMMON_CANCEL, OnAdjustCancelClicked, false,
+                  &Wallpaper_State().ui.cancel_btn, nullptr);
+    make_slot_btn(save_row, half_save_w, kDeleteH, LangString_WALLPAPER_SAVE, OnSaveClicked, true,
+                  &Wallpaper_State().ui.save_btn, &Wallpaper_State().ui.save_lbl);
+}

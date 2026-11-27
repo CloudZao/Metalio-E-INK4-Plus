@@ -1,13 +1,12 @@
-#include "board.h"
-#include "system_info.h"
-#include "settings.h"
-#include "display/display.h"
-#include "assets/lang_config.h"
-
+#include <esp_chip_info.h>
 #include <esp_log.h>
 #include <esp_ota_ops.h>
-#include <esp_chip_info.h>
 #include <esp_random.h>
+#include "board.h"
+#include "assets/lang_config.h"
+#include "infra/storage/settings.h"
+#include "infra/platform/system_info.h"
+#include "ui/common/drawing/display.h"
 
 #define TAG "Board"
 
@@ -16,7 +15,9 @@ Board::Board() {
     uuid_ = settings.GetString("uuid");
     if (uuid_.empty()) {
         uuid_ = GenerateUuid();
-        settings.SetString("uuid", uuid_);
+        if (!settings.SetString("uuid", uuid_) || !settings.Commit()) {
+            ESP_LOGE(TAG, "operation=save_device_identity result=storage_error; RAM retained");
+        }
     }
     ESP_LOGI(TAG, "UUID=%s SKU=%s", uuid_.c_str(), BOARD_NAME);
 }
@@ -24,31 +25,24 @@ Board::Board() {
 std::string Board::GenerateUuid() {
     // UUID v4 需要 16 字节的随机数据
     uint8_t uuid[16];
-    
+
     // 使用 ESP32 的硬件随机数生成器
     esp_fill_random(uuid, sizeof(uuid));
-    
+
     // 设置版本 (版本 4) 和变体位
-    uuid[6] = (uuid[6] & 0x0F) | 0x40;    // 版本 4
-    uuid[8] = (uuid[8] & 0x3F) | 0x80;    // 变体 1
-    
+    uuid[6] = (uuid[6] & 0x0F) | 0x40;  // 版本 4
+    uuid[8] = (uuid[8] & 0x3F) | 0x80;  // 变体 1
+
     // 将字节转换为标准的 UUID 字符串格式
     char uuid_str[37];
-    snprintf(uuid_str, sizeof(uuid_str),
-        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-        uuid[0], uuid[1], uuid[2], uuid[3],
-        uuid[4], uuid[5], uuid[6], uuid[7],
-        uuid[8], uuid[9], uuid[10], uuid[11],
-        uuid[12], uuid[13], uuid[14], uuid[15]);
-    
+    snprintf(uuid_str, sizeof(uuid_str), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+             uuid[0], uuid[1], uuid[2], uuid[3], uuid[4], uuid[5], uuid[6], uuid[7], uuid[8], uuid[9], uuid[10],
+             uuid[11], uuid[12], uuid[13], uuid[14], uuid[15]);
+
     return std::string(uuid_str);
 }
 
-bool Board::GetBatteryLevel(int &level, bool& charging, bool& discharging) {
-    return false;
-}
-
-bool Board::GetTemperature(float& esp32temp){
+bool Board::GetTemperature(float& esp32temp) {
     return false;
 }
 
@@ -61,8 +55,12 @@ Camera* Board::GetCamera() {
     return nullptr;
 }
 
+bool Board::GetBatteryLevel(int& level, bool& charging, bool& discharging) {
+    return false;
+}
+
 std::string Board::GetSystemInfoJson() {
-    /* 
+    /*
         {
             "version": 2,
             "flash_size": 4194304,
@@ -101,7 +99,7 @@ std::string Board::GetSystemInfoJson() {
             }
         }
     */
-    std::string json = R"({"version":2,"language":")" + std::string(Lang::CODE) + R"(",)";
+    std::string json = R"({"version":2,"language":")" + std::string(LangCode) + R"(",)";
     json += R"("flash_size":)" + std::to_string(SystemInfo::GetFlashSize()) + R"(,)";
     json += R"("minimum_free_heap_size":")" + std::to_string(SystemInfo::GetMinimumFreeHeapSize()) + R"(",)";
     json += R"("mac_address":")" + SystemInfo::GetMacAddress() + R"(",)";
@@ -132,16 +130,17 @@ std::string Board::GetSystemInfoJson() {
     json += R"("partition_table": [)";
     esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
     while (it) {
-        const esp_partition_t *partition = esp_partition_get(it);
+        const esp_partition_t* partition = esp_partition_get(it);
         json += R"({)";
         json += R"("label":")" + std::string(partition->label) + R"(",)";
         json += R"("type":)" + std::to_string(partition->type) + R"(,)";
         json += R"("subtype":)" + std::to_string(partition->subtype) + R"(,)";
         json += R"("address":)" + std::to_string(partition->address) + R"(,)";
-        json += R"("size":)" + std::to_string(partition->size) + R"(},)";;
+        json += R"("size":)" + std::to_string(partition->size) + R"(},)";
+        ;
         it = esp_partition_next(it);
     }
-    json.pop_back(); // Remove the last comma
+    json.pop_back();  // Remove the last comma
     json += R"(],)";
 
     json += R"("ota":{)";
@@ -157,11 +156,15 @@ std::string Board::GetSystemInfoJson() {
         json += R"("monochrome":true,)";
         json += R"("width":)" + std::to_string(display->width()) + R"(,)";
         json += R"("height":)" + std::to_string(display->height()) + R"(,)";
-        json.pop_back(); // Remove the last comma
+        json.pop_back();  // Remove the last comma
     }
     json += R"(},)";
 
-    json += R"("board":)" + GetBoardJson();
+    const std::string board_json = GetBoardJson();
+    if (board_json.empty()) {
+        return {};
+    }
+    json += R"("board":)" + board_json;
 
     // Close the JSON object
     json += R"(})";

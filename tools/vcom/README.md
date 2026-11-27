@@ -43,7 +43,7 @@ Writes execute `AT+WDATA=470,...`, `AT+FLUSHDATA=1`, then `AT+RDATA=470`. Exampl
 
 `vcom_mv` is the last confirmed ble_chip value. `applied_mv` is the display worker's configuration, not a measured voltage. Applying it is asynchronous after the current waveform, so the two may briefly differ. Device identity uses the host Wi-Fi STA MAC. This interface is intended for controlled local factory connections.
 
-Failures include `code` and `stage`, distinguishing `ready`, `write`, `flush`, `readback`, `apply`. Examples include `BH_TIMEOUT`, `BH_FLUSH_REJECTED` and `BH_VERIFY_MISMATCH`. Local failures do not start a cloud request. After a timeout or failed write, scan again or write manually to retry, or read the device to check. Failed device writes are retried up to three additional times, one second apart, using the original parameters. Disconnecting cancels pending retries. Cloud failures do not rewrite the device.
+Failures include `code` and `stage`, distinguishing `ready`, `write`, `flush`, `readback`, `apply`. Errors identify Bluetooth chip response timeouts, save failures and readback mismatches. Local failures do not start a cloud request. After a timeout or failed write, scan again or write manually to retry, or read the device to check. Failed device writes are retried up to three additional times, one second apart, using the original parameters. Disconnecting cancels pending retries. Cloud failures do not rewrite the device.
 
 ## Cloud interface
 
@@ -57,7 +57,7 @@ Success requires HTTP 200, JSON `code=0` and matching model, case-insensitive MA
 
 
 - Use only the panel label's calibration value. Both the page and firmware require a magnitude of 1.0–3.0V (-3000 to -1000mv, inclusive), in 10mv steps. Out-of-range values report “Abnormal value” and are neither written nor applied. Automatic calibration is not provided.
-- An unavailable or invalid boot record retains the board's default driver value and displays “Unknown”. Runtime failures retain the last confirmed driver configuration while black depth displays “Unknown”. Defaults or historical values are never represented as the current read result. Legacy black-depth presets are no longer loaded.
+- An unavailable boot record enables the saved black-depth level (Default / Medium / Strong, −1200 / −1600 / −2000 mV). The screen shows a reading status until that read finishes, then uses a valid calibration and hides the levels. A later failure keeps the last confirmed calibration and does not present a fallback level as a new read result.
 - Readback follows write and Flash acknowledgements. Power-cycle and read again to verify actual persistence. The ble_chip protocol does not define transaction IDs, all error responses or Flash atomicity. A timeout can mean an unknown result rather than a failed save.
 - The applied value describes software configuration. TPS register writes and physical voltage still require hardware verification. If another feature changes the USB role, or the port is removed or occupied, restore the native serial interface and reconnect.
 - A cloud failure retains the locally saved driver calibration. “Retry sync” only uploads again and does not rewrite ble_chip Flash. Sync state is kept in RAM; there is no persistent pending queue or automatic retry. After reboot, read the local record before manually syncing.

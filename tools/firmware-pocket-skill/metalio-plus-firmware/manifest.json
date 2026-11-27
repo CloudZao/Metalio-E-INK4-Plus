@@ -121,8 +121,8 @@
     },
     {
       "path": "skills/app-capabilities/assets/plus_services/media_helpers.h",
-      "bytes": 3626,
-      "sha256": "799b7f25fbf1b9fa088c0903c9886b19662f29b797fab48d8471f19f969137f4"
+      "bytes": 3633,
+      "sha256": "9233def15bf4980b7a479acb9c48b259696a6afc82801abf6148e7a2e2a1abd9"
     },
     {
       "path": "skills/app-capabilities/assets/plus_services/plus_services.h",
@@ -156,8 +156,8 @@
     },
     {
       "path": "skills/app-capabilities/examples/shared_audio_reset.cc",
-      "bytes": 913,
-      "sha256": "f25f448ab4819f9bf068906d54a3ecd1bd870efc7890b7cdfdb2f15125be1dce"
+      "bytes": 920,
+      "sha256": "ca77494f20c5a338f580151eeffaa0c7fe0bc3a024c36cac54241577a75b0c31"
     },
     {
       "path": "skills/app-capabilities/MODULE.md",
@@ -171,8 +171,8 @@
     },
     {
       "path": "skills/app-capabilities/references/media.md",
-      "bytes": 3036,
-      "sha256": "8cff8e8e3fe77780116592bb4686d8c28ef0e295384e725616eaee1f5001d0c5"
+      "bytes": 3040,
+      "sha256": "d2b98d9edc40ed859ee23429419699583b272f4214b96c0017aaca39c19b3af3"
     },
     {
       "path": "skills/app-capabilities/references/network.md",
@@ -291,8 +291,8 @@
     },
     {
       "path": "skills/device-interaction/references/audio-animation.md",
-      "bytes": 9243,
-      "sha256": "3232163a7ffe25d71c24f9ff89cbecfaa84eb249cf03e9e6c8d9206bcf67c542"
+      "bytes": 9248,
+      "sha256": "9ca86014cf74608875fccd42555677c5d302d887218d47123f533de47c73f25d"
     },
     {
       "path": "skills/device-interaction/references/display-assets.md",
@@ -301,8 +301,8 @@
     },
     {
       "path": "skills/device-interaction/references/plus-hardware.md",
-      "bytes": 3115,
-      "sha256": "32a890c42f4653d9c725226dd0c699bcdd6293e3d4dbf31bae33ba0d57ffb9a5"
+      "bytes": 3120,
+      "sha256": "6fe9cccda345715494068fefd12cb0da3179b82c8dc885a623d77aaf75144341"
     },
     {
       "path": "skills/device-interaction/references/storage-network.md",
@@ -338,11 +338,6 @@
       "path": "skills/device-interaction/scripts/verify_native_ui.ps1",
       "bytes": 2709,
       "sha256": "e48128ca750af31e366633fea204e0bf527cb01e32e9b589ba0f07e68518f582"
-    },
-    {
-      "path": "skills/firmware-build/assets/official-build-fixes/dependencies.lock",
-      "bytes": 9923,
-      "sha256": "c7174533067a093fcd80519487fec96859f41d6212ceac261930f90f55503107"
     },
     {
       "path": "skills/firmware-build/assets/official-build-fixes/p02_build_dependencies/CMakeLists.txt",
@@ -421,8 +416,8 @@
     },
     {
       "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/config.h",
-      "bytes": 6585,
-      "sha256": "859777adc4eda6d7d17ad6483d54ab22633e991d463ea8389f71a9b43cdd466f"
+      "bytes": 6592,
+      "sha256": "7721884131ec27edf37a866e0ff145df71ed5cedec22e9e666668e38bbefdfad"
     },
     {
       "path": "skills/firmware-build/assets/plus-app-base/components/epdiy/displays.c",
@@ -856,8 +851,8 @@
     },
     {
       "path": "skills/firmware-build/assets/plus-app-base/main/main.cc",
-      "bytes": 8406,
-      "sha256": "88832cc27528a4fb2b6265f0276796056107555114ff7261f116b52b50471e42"
+      "bytes": 8550,
+      "sha256": "4af16dcdedc9bc5fa6a546d51b7e929f80aa6b3c40ec20a2a145f81f7f0ae29b"
     },
     {
       "path": "skills/firmware-build/assets/plus-app-base/main/plus_canvas.h",
@@ -881,8 +876,8 @@
     },
     {
       "path": "skills/firmware-build/MODULE.md",
-      "bytes": 2973,
-      "sha256": "2dfa194378a65b6d37ca2b1f64d38fcfc4486f15e6cb78d32db85aa3e13fca73"
+      "bytes": 3057,
+      "sha256": "b2dcc2e3103817cafb4ced61855ff741354eab9151eb111edbada03d208ebf77"
     },
     {
       "path": "skills/firmware-build/references/build-failures.md",
@@ -891,8 +886,8 @@
     },
     {
       "path": "skills/firmware-build/references/official-preparation.md",
-      "bytes": 1886,
-      "sha256": "e0badc18841ee43e7cb54960b4812f22728f616d6d7cf19ddfd9c36d2e111bc0"
+      "bytes": 2174,
+      "sha256": "f3a8d72871e2ad45471140fa576b41db5c6c6e13b2d0310223ec5d57c26005e7"
     },
     {
       "path": "skills/firmware-build/references/plus-app-base.md",
@@ -931,8 +926,8 @@
     },
     {
       "path": "skills/firmware-build/scripts/prepare_official_project.py",
-      "bytes": 5001,
-      "sha256": "403901e5a3023fb25ada0f3f0546f8503bb129e6cf92e0e674267e56aa487610"
+      "bytes": 5540,
+      "sha256": "c5e57c42d22e8010412aaeb0343a9b98d8f1175d1931cd59d4913aac1d41258c"
     },
     {
       "path": "skills/firmware-build/scripts/prepare_posters.py",
@@ -1771,7 +1766,7 @@
     }
   ],
   "predecessor_version": "0.3.0",
-  "revision": "windows-codex-demand-acquisition",
+  "revision": "windows-codex-demand-acquisition-repository",
   "documentation_patch": {
     "id": "audio-startup-test006-1",
     "date": "2026-11-02",

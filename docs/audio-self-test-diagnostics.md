@@ -2,7 +2,7 @@
 
 设置中的录音测试走本地链路：I2S 麦克风 → 16 kHz PCM → 取左声道 → Opus → 测试队列 → Opus 解码 → 输出重采样 → I2S → PA/喇叭。不经过网络发送，也不经过 AFE 降噪。
 
-串口保留一次正常和一次异常测试从 `audio-test begin` 到 `playback finished` 的完整日志，另保留 `BTAudioCodec`、`MetalioAudio`、`AudioCodec` 错误。每次按住约 5 秒，先保持安静，再说话或拍手，松开听回放。
+串口保留一次正常和一次异常测试从 `audio-test begin` 到 `playback finished` 的完整日志，另保留 `BTAudioCodec`、`BluetoothAudio`、`AudioCodec` 错误。每次按住约 5 秒，先保持安静，再说话或拍手，松开听回放。
 
 - `begin`：输入/输出采样率、通道、参考输入、增益和音量。
 - `capture-mic` / `capture-reference`：读取并重采样后的左右声道。当前测试取左声道作为麦克风。

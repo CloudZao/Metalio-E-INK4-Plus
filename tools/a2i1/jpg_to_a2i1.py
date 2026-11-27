@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Convert a photo/illustration to A2I1 for e-ink / LVGL I1.
 
-Same binary format as A2UI network images (main/display/a2ui).
+Same binary format as A2UI network images (main/ui/common/drawing/a2ui).
 See a2i1_core.py for layout details.
 """
 

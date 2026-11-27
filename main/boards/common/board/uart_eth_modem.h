@@ -8,7 +8,6 @@
 #include <memory>
 #include <mutex>
 #include <string>
-
 #include "driver/gpio.h"
 #include "driver/uart.h"
 #include "uart_uhci.h"
@@ -24,181 +23,142 @@
 #include "iot_eth_types.h"
 
 /**
-* @brief UART Ethernet Modem driver for 4G modules (EC801E, NT26K, etc.)
-*
-* This class encapsulates the UART-based Ethernet communication with 4G modules,
-* providing a simple interface for network connectivity. It handles:
-* - UART communication with frame protocol
-* - AT command processing
-* - Network state management
-* - Integration with ESP-IDF's iot_eth and esp_netif
-*
-* MRDY/SRDY Protocol:
-*   - MRDY (Master Busy): AP -> Modem, low = busy/working, high = idle/can sleep
-*   - SRDY (Slave Busy): Modem -> AP, low = busy/has data, high = idle/can sleep
-*   - After sending a frame, wait for receiver's 50us high pulse as ACK
-*   - Idle timeout triggers PendingIdle state, then Idle when both are high
-*
-*/
+ * @brief 管理 4G 模组的 UART 以太网通信、AT 命令与网络状态
+ * @note MRDY/SRDY 握手与帧格式由本驱动维护，配置中的引脚由板级装配传入。
+ */
 class UartEthModem {
 public:
-    // Working state machine for low-power management
     enum class WorkingState {
-        Idle,           // Both sides idle, DMA stopped
-        PendingActive,  // Master wants to send, waiting for slave to wake up (SRDY low)
-        Active,         // Active communication, DMA running
-        PendingIdle,    // Master idle, waiting for slave to idle (SRDY high)
+        Idle,           // 双方空闲，DMA 已停止
+        PendingActive,  // 等待模组唤醒并拉低 SRDY
+        Active,         // 正在通信，DMA 运行中
+        PendingIdle,    // 等待模组空闲并拉高 SRDY
     };
 
-    // MRDY signal levels
     enum class MrdyLevel {
-        Low,
-        High,
+        Low,   // 主机忙碌
+        High,  // 主机空闲，允许模组休眠
     };
 
-    // Event types for the main task queue
     enum class EventType : uint8_t {
-        None = 0,
-        TxRequest,
-        SrdyLow,
-        SrdyHigh,
-        RxData,
-        Stop,
+        None = 0,   // 无事件
+        TxRequest,  // 请求发送
+        SrdyLow,    // 模组进入忙碌状态
+        SrdyHigh,   // 模组进入空闲状态
+        RxData,     // 接收到数据
+        Stop,       // 请求停止
     };
 
-    // Event structure for the unified event queue
     struct Event {
-        EventType type;
-        UartUhci::RxBuffer* rx_buffer;  // For RxData events
+        EventType type;                 // 主任务事件类型
+        UartUhci::RxBuffer* rx_buffer;  // 仅接收事件携带的 DMA 缓冲
     };
 
-    // Network event enumeration (aligned with NetworkModemEvent)
     enum class UartEthModemEvent {
-        Connecting,              // Network is connecting/searching (LinkUp, Searching)
-        Connected,               // Network connected successfully (Ready, got IP address)
-        Disconnected,            // Network disconnected (LinkDown)
-
-        ErrorNoSim,              // No SIM card detected
-        ErrorRegistrationDenied, // Network registration denied (CEREG=3)
-        ErrorInitFailed,         // Modem initialization failed (general error)
-
+        Connecting,               // 正在搜索或连接网络
+        Connected,                // 已取得网络地址
+        Disconnected,             // 网络链路已断开
+        ErrorNoSim,               // 未检测到 SIM 卡
+        ErrorRegistrationDenied,  // 网络注册被拒绝
+        ErrorInitFailed,          // 模组初始化失败
     };
 
-    // Cell information from CEREG
     struct CellInfo {
-        int stat = 0;
-        std::string tac;
-        std::string ci;
-        int act = 0;
+        int stat = 0;     // 网络注册状态
+        std::string tac;  // 跟踪区代码
+        std::string ci;   // 小区标识
+        int act = 0;      // 无线接入技术
     };
 
-    // Configuration
     struct Config {
-        uart_port_t uart_num = UART_NUM_1;
-        int baud_rate = 3000000;
-        gpio_num_t tx_pin = GPIO_NUM_NC;
-        gpio_num_t rx_pin = GPIO_NUM_NC;
-        gpio_num_t mrdy_pin = GPIO_NUM_NC;   // Master Ready (DTR, low=busy)
-        gpio_num_t srdy_pin = GPIO_NUM_NC;   // Slave Ready (RI, low=busy)
-        size_t rx_buffer_count = 4;          // Number of DMA RX buffers
-        size_t rx_buffer_size = 1600;        // Size of each DMA RX buffer
+        uart_port_t uart_num = UART_NUM_1;  // UART 控制器
+        int baud_rate = 3000000;            // UART 波特率
+        gpio_num_t tx_pin = GPIO_NUM_NC;    // 主机发送引脚
+        gpio_num_t rx_pin = GPIO_NUM_NC;    // 主机接收引脚
+        gpio_num_t mrdy_pin = GPIO_NUM_NC;  // 主机握手引脚
+        gpio_num_t srdy_pin = GPIO_NUM_NC;  // 模组握手引脚
+        size_t rx_buffer_count = 4;         // DMA 接收缓冲数量
+        size_t rx_buffer_size = 1600;       // 单个 DMA 接收缓冲字节数
     };
 
-    // Callback types
-    // detail carries a human-readable reason for the event (mainly for error
-    // events like ErrorInitFailed), so the upper layer can surface the concrete
-    // failure cause instead of only a generic message. May be empty.
-    using UartEthModemEventCallback =
-            std::function<void(UartEthModemEvent event, const std::string& detail)>;
+    // 回调中的 detail 为可选原因说明，可能为空；不得未经检查直接记录上游响应。
+    using UartEthModemEventCallback = std::function<void(UartEthModemEvent event, const std::string& detail)>;
 
+    /** @brief 使用板级配置创建模组管理对象，尚不启动通信 */
     explicit UartEthModem(const Config& config);
-    ~UartEthModem();
 
-    // Non-copyable
+    /** @brief 停止模组并释放通信资源 */
+    ~UartEthModem();
     UartEthModem(const UartEthModem&) = delete;
     UartEthModem& operator=(const UartEthModem&) = delete;
 
     /**
-    * @brief Start the modem
-    *
-    * This will:
-    * 1. Initialize UART and GPIO
-    * 2. Create TX/RX tasks
-    * 3. Run initialization sequence (AT commands)
-    * 4. Establish handshake with modem
-    * 5. Install iot_eth driver and create netif
-    *
-    * @return ESP_OK on success
-    */
+     * @brief 初始化通信、启动工作任务并注册以太网接口
+     * @return 成功返回 ESP_OK，失败返回初始化阶段的错误码
+     */
     esp_err_t Start();
 
-    /**
-    * @brief Stop the modem
-    *
-    * This will stop all tasks and release resources.
-    *
-    * @return ESP_OK on success
-    */
+    /** @brief 停止工作任务并释放通信资源，成功返回 ESP_OK */
     esp_err_t Stop();
 
     /**
-    * @brief Send AT command synchronously (thread-safe)
-    *
-    * @param cmd AT command string (without trailing \r)
-    * @param response Output response string
-    * @param timeout_ms Timeout in milliseconds
-    * @return ESP_OK on success, ESP_ERR_TIMEOUT on timeout
-    */
+     * @brief 同步发送 AT 命令，内部串行化并发请求
+     * @param cmd 不带末尾回车的 AT 命令
+     * @param response 接收命令响应
+     * @param timeout_ms 超时时间，单位毫秒
+     * @return 成功返回 ESP_OK，超时返回 ESP_ERR_TIMEOUT
+     */
     esp_err_t SendAt(const std::string& cmd, std::string& response, uint32_t timeout_ms = 1000);
 
     /**
-     * @brief Send AT command and keep collecting URCs until a marker appears.
-     *
-     * Used for commands like
-     * AT+ECPING that return OK first, then async URCs.
-     *
-     * @param done_marker Substring that marks completion (e.g. "+ECPING: DONE")
+     * @brief 同步发送 AT 命令并收集后续通知，直到出现完成标记
+     * @param done_marker 标记操作完成的响应子串
+     * @note 适用于先返回 OK、再异步上报执行结果的命令。
      */
-    esp_err_t SendAtCollectUntil(const std::string& cmd, std::string& response,
-                                 uint32_t timeout_ms,
+    esp_err_t SendAtCollectUntil(const std::string& cmd, std::string& response, uint32_t timeout_ms,
                                  const char* done_marker);
 
-    /**
-     * @brief Check if network is initialized
-     *
-     * @return true if initialized, false otherwise
-     */
-    bool IsInitialized() const { return initialized_.load(); }
+    /** @brief 查询网络初始化是否完成 */
+    bool IsInitialized() const {
+        return initialized_.load();
+    }
 
-    /**
-     * @brief Set callback for network event changes
-     *
-     * This callback is only triggered when network is initialized.
-     * It reports network event changes.
-     */
+    /** @brief 设置网络状态回调，接收初始化后的连接变化与错误原因 */
     void SetNetworkEventCallback(UartEthModemEventCallback callback);
 
-    // Modem information getters
+    /** @brief 查询模组设备标识 */
     std::string GetImei();
+
+    /** @brief 查询移动用户标识 */
     std::string GetImsi();
+
+    /** @brief 查询 SIM 卡标识 */
     std::string GetIccid();
+
     /** @brief 返回开机联网已缓存的 ICCID，不发送 AT */
-    std::string CachedIccid() const { return iccid_; }
+    std::string CachedIccid() const {
+        std::lock_guard<std::mutex> lock(iccid_mutex_);
+        return iccid_;
+    }
+
+    /** @brief 查询运营商名称 */
     std::string GetCarrierName();
+
+    /** @brief 查询模组固件版本 */
     std::string GetModuleRevision();
-    int GetSignalStrength();  // CSQ value (0-31, 99=unknown)
+
+    /** @brief 查询 CSQ 信号强度，0–31 为有效值，99 表示未知 */
+    int GetSignalStrength();
+
+    /** @brief 查询网络注册状态及小区信息 */
     CellInfo GetCellInfo();
-    /**
-     * @brief Get network event name for logging
-     */
+
+    /** @brief 获取网络事件的固定名称，用于诊断 */
     static const char* GetNetworkEventName(UartEthModemEvent event);
 
 private:
     // Frame type
-    enum class FrameType : uint8_t {
-        kEthernet = 0,
-        kAtCommand = 1
-    };
+    enum class FrameType : uint8_t { kEthernet = 0, kAtCommand = 1 };
 
     // Frame header structure (4 bytes, compatible with original protocol)
     // Layout:
@@ -233,8 +193,12 @@ private:
             raw[2] = (raw[2] & 0xF3) | ((static_cast<uint8_t>(type) & 0x03) << 2);
         }
 
-        uint8_t GetChecksum() const { return raw[3]; }
-        void SetChecksum(uint8_t sum) { raw[3] = sum; }
+        uint8_t GetChecksum() const {
+            return raw[3];
+        }
+        void SetChecksum(uint8_t sum) {
+            raw[3] = sum;
+        }
 
         uint8_t CalculateChecksum() const {
             uint32_t sum = raw[0] + raw[1] + raw[2];
@@ -244,7 +208,9 @@ private:
         bool ValidateChecksum() const {
             return GetChecksum() == CalculateChecksum();
         }
-        void UpdateChecksum() { SetChecksum(CalculateChecksum()); }
+        void UpdateChecksum() {
+            SetChecksum(CalculateChecksum());
+        }
     } __attribute__((packed));
 
     static_assert(sizeof(FrameHeader) == 4, "FrameHeader must be 4 bytes");
@@ -261,9 +227,9 @@ private:
 
     // TX frame structure (for queue)
     struct TxFrame {
-        uint8_t* data;               // Header + payload, allocated with malloc
-        size_t length;               // Total length including header
-        TxCompletion* completion;   // nullptr for asynchronous Ethernet frames
+        uint8_t* data;             // Header + payload, allocated with malloc
+        size_t length;             // Total length including header
+        TxCompletion* completion;  // nullptr for asynchronous Ethernet frames
     };
 
     // Initialization and cleanup
@@ -330,8 +296,7 @@ private:
     void CleanupResources(bool cleanup_iot_eth = true);
 
     // IP event handler
-    static void IpEventHandler(void* arg, esp_event_base_t event_base,
-                               int32_t event_id, void* event_data);
+    static void IpEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 
     // Configuration
     Config config_;
@@ -384,6 +349,7 @@ private:
 
     // Modem information (cached)
     std::string imei_;
+    mutable std::mutex iccid_mutex_; // 保护联网任务与界面共享的 ICCID 缓存
     std::string iccid_;
     std::string imsi_;
     std::string carrier_name_;
@@ -421,22 +387,20 @@ private:
     static constexpr uint32_t kEventInitTaskDone = (1 << 10);
     static constexpr uint32_t kEventTxTaskDone = (1 << 12);
 
-    static constexpr uint32_t kEventAllTasksDone =
-            kEventMainTaskDone | kEventInitTaskDone | kEventTxTaskDone;
+    static constexpr uint32_t kEventAllTasksDone = kEventMainTaskDone | kEventInitTaskDone | kEventTxTaskDone;
 
     // Timing constants
     static constexpr uint32_t kHandshakeTimeoutMs = 5000;
     static constexpr uint32_t kModemSleepTimeoutS = 3;
 
     // SRDY interrupt configuration constants
-    static constexpr bool kSrdyInterruptForWakeup = true;   // Low level trigger for light sleep wakeup
+    static constexpr bool kSrdyInterruptForWakeup = true;  // Low level trigger for light sleep wakeup
     static constexpr bool kSrdyInterruptForAck = false;    // Edge detection for SRDY high (ACK)
 
     // Handshake magic bytes
-    static constexpr uint8_t kHandshakeRequest[] = {
-            0x53, 0x50, 0x49, 0x43, 0x02, 0x04, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00};
-    static constexpr uint8_t kHandshakeAck[] = {0x53, 0x50, 0x49, 0x43, 0x01,
-                                                                                            0x80};
+    static constexpr uint8_t kHandshakeRequest[] = {0x53, 0x50, 0x49, 0x43, 0x02, 0x04,
+                                                    0x0C, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static constexpr uint8_t kHandshakeAck[] = {0x53, 0x50, 0x49, 0x43, 0x01, 0x80};
 
     static constexpr const char* kTag = "UartEthModem";
 };

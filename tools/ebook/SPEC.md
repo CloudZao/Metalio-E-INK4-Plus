@@ -255,4 +255,4 @@ for (n = 0; n < chapter[i].block_count; n++) {
 | SD `.ef` 字体 | 仍由设备加载；本格式不嵌字体 |
 | A2I1 | 推荐插图/封面格式（`tools/a2i1`） |
 
-固件解析器可后续落在 `main/reader/`；本目录仅规范 + 桌面转换工具。
+固件解析器可后续落在 `main/business/reader/`；本目录仅规范 + 桌面转换工具。

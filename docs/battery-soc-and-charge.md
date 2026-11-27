@@ -4,9 +4,9 @@
 
 | 模块 | 芯片 | 代码 | 职责 |
 |------|------|------|------|
-| 电量计 | TI BQ27220 | `main/boards/common/power/bq27220_gauge.{h,cc}` | 电压/电流采样、SOC 显示、UI 充电标志 |
-| 充电 IC | CX25601N | `main/boards/common/power/cx25601n.{h,cc}` | VREG/ICHG/ITERM、EN_CHG/EN_TERM、再充 kick、欠压 BATFET |
-| 板级接入 | — | `metalio_power.cc` | I2C1 + 总线锁上挂两芯片；默认 ICHG 1000mA |
+| 电量计 | TI BQ27220 | `main/boards/common/power/bq27220/bq27220_gauge.{h,cc}` | 电压/电流采样、SOC 显示、UI 充电标志 |
+| 充电 IC | CX25601N | `main/boards/common/power/cx25601n/cx25601n.{h,cc}` | VREG/ICHG/ITERM、EN_CHG/EN_TERM、再充 kick、欠压 BATFET |
+| 板级接入 | — | `charger_control.cc` | I2C1 + 总线锁上挂两芯片；默认 ICHG 1000mA |
 | 状态栏 | — | `Board::GetBatteryLevel()` | 电量图标 / 闪电图标（UI 就绪后接） |
 
 ---
@@ -36,15 +36,15 @@ USB 5V ──► CX25601N ──► 电池（BAT）
 | 名称 | 值 | 用途 |
 |------|-----|------|
 | 充电截止 VREG | **4400 mV** | CX25601N 恒压目标，硬件停充参考 |
-| 显示满电 | **4300 mV** | 充电线性估算的 100%，同时用于满电确认 |
+| 显示满电 | `BOARD_BATTERY_FULL_MV` | 充电线性估算的 100%，同时用于满电确认 |
 | 空电 | **3300 mV** | 充放电估算的 0% |
-| 满电确认 | ≥4300 mV 连续 **30 s** | 才允许目标/显示到 100% |
-| 满电退出滞回 | **4280 mV** | 已显示 100% 后，电压未跌破此值前保持 100% |
+| 满电确认 | 达到板级满电电压并持续 **30 s** | 才允许目标/显示到 100% |
+| 满电退出滞回 | `BOARD_BATTERY_FULL_EXIT_MV` | 已显示 100% 后，电压未跌破此值前保持 100% |
 | 电流死区 | ±5 mA** | 判定充电 / 放电 / 空载 |
 
-充电显示按 3300～4300 mV 线性估算；有效采样电压持续 ≥4300 mV 满 30 s 后确认满电，并按正常步进升至 100%。满电退出阈值为 4280 mV，充电 IC 的恒压目标仍为 4400 mV。
+充电显示在空电电压与 `BOARD_BATTERY_FULL_MV` 之间线性估算；有效采样电压达到满电确认阈值并持续 30 s 后，允许按正常步进升至 100%。电压低于 `BOARD_BATTERY_FULL_EXIT_MV` 时退出满电显示。两项阈值在所选板型的 `config.h` 中成对维护，退出值必须低于确认值；充电 IC 的恒压目标仍为 4400 mV。
 
-While charging, the voltage estimate maps 3300–4300 mV linearly to 0–100%. Valid samples at or above 4300 mV for 30 s confirm full charge, allowing the display to reach 100% through normal steps. Full-charge retention ends below 4280 mV; the charger IC's constant-voltage target remains 4400 mV.
+While charging, voltage maps linearly between the empty-battery voltage and `BOARD_BATTERY_FULL_MV`. Valid samples at or above the confirmation threshold for 30 s allow the display to reach 100% through normal steps. Full-display retention ends below `BOARD_BATTERY_FULL_EXIT_MV`. Both thresholds are maintained together in the selected board config.h; exit voltage must be lower than confirmation voltage. The charger IC's constant-voltage target remains 4400 mV.
 
 ---
 
@@ -58,9 +58,9 @@ The system monitor samples approximately once per second and publishes an atomic
 
 **不用芯片 SOC 寄存器**（未标定易失真），按电流方向选择电压估算曲线。开机或退出待机后等待 **3 s**，首次有效调用才读取显示所需的电压、电流并初始化电量；等待期间隐藏电量图标和百分比，并清除旧显示缓存，不用 0% 代替。底层采样仍供充电控制和欠压保护使用。
 
-未充电时采用 424860-2000 测试表的工步 6：约 1000mA 放电至 3.3V，以实际放出容量 1870.7mAh 归一化为 0～100%，每 10% 提取电压点并分段线性插值。权威取点表维护在 `bq27220_gauge.cc`，电池测试页复用同一换算函数。该曲线对应本次测试的带载可用容量，不等同于静置开路曲线；不同负载、温度及电芯差异仍需整机校准。
+未充电时采用 424860-2000 测试表的工步 6：约 1000mA 放电至 3.3V，以实际放出容量 1870.7mAh 归一化为 0～100%，每 10% 提取电压点并分段线性插值。权威取点表维护在所选板型 `config.h` 的 `BOARD_BATTERY_DISCHARGE_MV`，电池测试页复用同一换算函数。该曲线对应本次测试的带载可用容量，不等同于静置开路曲线；不同负载、温度及电芯差异仍需整机校准。
 
-充电时采用 3.30～4.30V 的线性估算。测试表充电上限为 4.3V，而当前充电控制目标为 4.4V，不能直接据此建立完整充电百分比曲线；恒压尾充阶段仍由满电确认限制 100%。工步 2 的非满电放电和工步 8 的充至 4.0V 数据不参与本次映射。
+充电时采用空电电压至板级满电确认电压的线性估算。测试表充电上限为 4.3V，而当前充电控制目标为 4.4V，不能直接据此建立完整充电百分比曲线；恒压尾充阶段仍由满电确认限制 100%。工步 2 的非满电放电和工步 8 的充至 4.0V 数据不参与本次映射。
 
 ### 3.1 流水线
 
@@ -68,13 +68,13 @@ The system monitor samples approximately once per second and publishes an atomic
 开机满 3s 后的瞬时电压、电流
     │
     ▼
-未充电：实测放电曲线插值；充电：3.30～4.30V 线性估算
+未充电：实测放电曲线插值；充电：空电至板级满电电压线性估算
     │
     ▼
 60 点滑动平均（同一曲线每秒最多采纳一个样本）→「目标电量」target
     │
-    ├─ 未满 30s@≥4300：target 封顶 95
-    ├─ 已显示 100% 且 mv≥4280：强制 target=100
+    ├─ 未满 30s@满电确认电压：target 封顶 95
+    ├─ 已显示 100% 且 mv≥满电退出电压：强制 target=100
     │
     ▼
 向下量化至 5% 档位 → 单向步进 →「显示电量」（每 30s ±5%）
@@ -103,9 +103,9 @@ The system monitor samples approximately once per second and publishes an atomic
 
 | 条件 | 行为 |
 |------|------|
-| 有效采样电压持续 ≥4300 mV 满 **30 s** | 目标设为 100%，即使尾充终止、电流归零，也允许按正常步进升至 100% |
-| 已显示 100%，且电压 ≥4280 mV | 保持 100%，不因满电确认阈值附近的电压波动掉到 95% |
-| 电压跌破 4280 mV 且未在充（或步进允许降） | 可按 30 s 步进下降 |
+| 有效采样电压达到板级满电确认阈值并持续 **30 s** | 目标设为 100%，即使尾充终止、电流归零，也允许按正常步进升至 100% |
+| 已显示 100%，且电压不低于板级满电退出阈值 | 保持 100%，不因满电确认阈值附近的电压波动掉到 95% |
+| 电压跌破板级满电退出阈值且未在充（或步进允许降） | 可按 30 s 步进下降 |
 
 电压/电流读取失败、电压超出有效范围，或相邻有效采样间隔超过 2s 时，重新开始满电确认，避免将未观测时段计入连续高电压时间。读取失败期间各电量显示入口清除百分比，不把默认零值显示为真实电量。
 
@@ -180,19 +180,20 @@ The system monitor samples approximately once per second and publishes an atomic
 
 | 参数 | 位置 |
 |------|------|
-| 开机延迟、实测曲线、5% 档位、滤波长度、步进及满电计时、满电退出阈值 | `bq27220_gauge.h` / `.cc` |
+| 开机延迟、滤波长度、步进及满电计时 | `bq27220_gauge.h` / `.cc` |
+| 满电确认/退出电压、显示步长及放电曲线 | 所选板型 `config.h` 的 `BOARD_BATTERY_*` |
 | VREG 4400、ITERM、再充 kick、EN_TERM、欠压 BATFET | `cx25601n.cc` |
-| 板级默认 ICHG | `metalio_power.cc`（设置 → 充电，默认 1000mA） |
+| 充电电流选项与默认值 | 所选板型 `config.h` 的 `BOARD_CHARGE_CURRENT_OPTIONS_MA` / `BOARD_CHARGE_CURRENT_DEFAULT_MA` |
 | 状态栏闪电图标 | `GetBatteryLevel` 的 `charging` |
 
 ---
 
 ## 7. 相关文件
 
-- `main/boards/common/power/bq27220_gauge.h`
-- `main/boards/common/power/bq27220_gauge.cc`
-- `main/boards/common/power/cx25601n.h`
-- `main/boards/common/power/cx25601n.cc`
-- `main/boards/common/power/power_i2c.h`
-- `main/boards/metalio-e-ink4-plus/periph/metalio_power.cc`
+- `main/boards/common/power/bq27220/bq27220_gauge.h`
+- `main/boards/common/power/bq27220/bq27220_gauge.cc`
+- `main/boards/common/power/cx25601n/cx25601n.h`
+- `main/boards/common/power/cx25601n/cx25601n.cc`
+- `main/boards/common/bus/i2c/power_i2c.h`
+- `main/boards/common/power/cx25601n/charger_control.cc`
 - `main/boards/metalio-e-ink4-plus/metalio_e_ink4_plus_board.cc`

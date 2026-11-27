@@ -11,4 +11,5 @@ idf_component_register(
         "nvs_flash"
     PRIV_REQUIRES
         "espressif__cjson"
+        "esp_driver_gpio"
 )

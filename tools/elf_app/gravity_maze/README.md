@@ -38,14 +38,24 @@ Gameplay inhibits automatic idle standby while allowing power-button standby. Th
 
 When music is enabled, opening the app loops the menu track. Entering a level, restarting, advancing to the next level or returning from a level to the menu restarts the corresponding track. Opening Settings, entering language selection, changing language and returning from these screens preserve the current playback position. Pause and retry confirmation suspend music; Continue resumes it. Completion, timeout and exit stop it. Back controls in Settings and Language use the same rounded corners and border style as the other buttons.
 
-The music toggle affects only this app and does not change system volume. Music uses the system volume: mute, system settings and volume keys apply directly, without a separate music volume. Audio failure shows a notice while gameplay remains available. The shared interface and SD playback are documented in the [audio developer guide](../DEVELOPMENT.md#audio-xz_app_cap_audio).
+The music toggle affects only this app and does not change system volume. Music uses the system volume: mute, system settings and volume keys apply directly, without a separate music volume. Audio failure shows a notice while gameplay remains available. The shared interface and SD playback are documented in the [audio developer guide](../README.md#audio-playback-xz_app_cap_audio).
 
 ## Build and installation
 
-Configure the toolchain as described in the [developer guide](../DEVELOPMENT.md), then run:
+Configure the toolchain as described in the [developer guide](../README.md), then run:
 
 ```powershell
 ./tools/elf_app/build_app.ps1 -Compiler $compiler -AppDirectory ./tools/elf_app/gravity_maze
 ```
 
 The build script produces `gravity_maze.elf` with a 128×128 monochrome icon. For manual SD installation, the delivered filename is `重力迷宫.elf`; place it with `manifest.json` under `metalio/e-ink/apps/重力迷宫/`. The manifest `installedName` must be `重力迷宫`, and its size and SHA256 must match the copied ELF. Rebuilds require an updated manifest. The existing App Store upload and installation flow is also available. Updating host firmware does not replace the app on SD automatically.
+
+
+### Gravity Maze: combined capabilities and compatibility failures
+
+[Gravity Maze](README.md) checks the ABI, the boundary of `audio_get_status`, required capability bits and function pointers in `app_main` before querying audio formats, sources, sample rate and channels. Missing requirements return `XZ_APP_ERR_UNSUPPORTED` before callbacks are registered or the UI is created. Optional features may degrade gracefully, but apps must never read an absent tail field.
+
+In the sample, `DrawMaze` combines drawing commands, `Tick` reads acceleration and uses `foreground_ms` for game timing, and `Back` handles in-app navigation. Screen changes request a white wipe; completion feedback calls `vibrate(..., 500)`. `MusicStart` loops five Ogg/Opus regions using offsets generated with the resources by `build_content.py`. Pause/resume retains the audio session, and returning from Settings preserves playback position. Private storage saves language, music preferences, scores and completion times. The host manages exit and standby lifecycles for resources, sampling and audio. Refer to each capability section above for parameters and limits.
+
+
+The current entry requires a portrait content area at least 500 pixels wide and no taller than 1600. The current 397 area is too narrow; an Xtensa build does not provide layout compatibility.

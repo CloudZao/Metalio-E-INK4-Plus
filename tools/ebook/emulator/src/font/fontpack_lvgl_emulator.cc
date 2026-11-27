@@ -1,34 +1,29 @@
-#include "fontpack_lvgl.h"
-
-#include "font_loader.h"
-
 #include <cstring>
 #include <string>
-
 #include "esp_log.h"
+#include "font_loader.h"
+#include "fontpack_lvgl.h"
 
-namespace {
+static constexpr const char* TAG = "fontpack_lv";
 
-constexpr const char* TAG = "fontpack_lv";
-
-struct FontpackLvFont {
+struct FontpackLvglEmulatorFontpackLvFont {
     lv_font_t lv{};
     uint16_t size = 0;
     uint16_t bpp = 0;
     bool inited = false;
 };
 
-constexpr int kMaxFonts = 12;
-FontpackLvFont s_fonts[kMaxFonts];
+static constexpr int kMaxFonts = 12;
+static FontpackLvglEmulatorFontpackLvFont s_fonts[kMaxFonts];
 static std::string s_fontpack_path;
 static bool s_ready = false;
 
 static const uint8_t kOpa2Table[4] = {0, 85, 170, 255};
-static const uint8_t kOpa4Table[16] = {0,  17, 34,  51,  68,  85,  102, 119,
-                                      136, 153, 170, 187, 204, 221, 238, 255};
+static const uint8_t kOpa4Table[16] = {0,   17,  34,  51,  68,  85,  102, 119,
+                                       136, 153, 170, 187, 204, 221, 238, 255};
 
-void UnpackToA8(const uint8_t* src, uint8_t bpp, uint16_t box_w, uint16_t box_h, uint8_t* dst,
-                uint32_t stride_out) {
+static void UnpackToA8(const uint8_t* src, uint8_t bpp, uint16_t box_w, uint16_t box_h, uint8_t* dst,
+                       uint32_t stride_out) {
     if (bpp == 1) {
         for (uint16_t y = 0; y < box_h; ++y) {
             uint8_t* row = dst + static_cast<size_t>(y) * stride_out;
@@ -66,7 +61,7 @@ void UnpackToA8(const uint8_t* src, uint8_t bpp, uint16_t box_w, uint16_t box_h,
     }
 }
 
-lv_font_glyph_format_t FormatForBpp(uint16_t bpp) {
+static lv_font_glyph_format_t FormatForBpp(uint16_t bpp) {
     if (bpp <= 1) {
         return LV_FONT_GLYPH_FORMAT_A1;
     }
@@ -76,9 +71,9 @@ lv_font_glyph_format_t FormatForBpp(uint16_t bpp) {
     return LV_FONT_GLYPH_FORMAT_A4;
 }
 
-bool GetGlyphDscCb(const lv_font_t* font, lv_font_glyph_dsc_t* dsc_out, uint32_t letter,
-                   uint32_t /*letter_next*/) {
-    auto* f = static_cast<FontpackLvFont*>(const_cast<void*>(font->dsc));
+static bool GetGlyphDscCb(const lv_font_t* font, lv_font_glyph_dsc_t* dsc_out, uint32_t letter,
+                          uint32_t /*letter_next*/) {
+    auto* f = static_cast<FontpackLvglEmulatorFontpackLvFont*>(const_cast<void*>(font->dsc));
     if (f == nullptr || dsc_out == nullptr || !font_loader_is_ready()) {
         return false;
     }
@@ -106,11 +101,11 @@ bool GetGlyphDscCb(const lv_font_t* font, lv_font_glyph_dsc_t* dsc_out, uint32_t
     return true;
 }
 
-const void* GetGlyphBitmapCb(lv_font_glyph_dsc_t* g_dsc, lv_draw_buf_t* draw_buf) {
+static const void* GetGlyphBitmapCb(lv_font_glyph_dsc_t* g_dsc, lv_draw_buf_t* draw_buf) {
     if (g_dsc == nullptr || g_dsc->resolved_font == nullptr) {
         return nullptr;
     }
-    auto* f = static_cast<FontpackLvFont*>(const_cast<void*>(g_dsc->resolved_font->dsc));
+    auto* f = static_cast<FontpackLvglEmulatorFontpackLvFont*>(const_cast<void*>(g_dsc->resolved_font->dsc));
     if (f == nullptr || g_dsc->gid.index == 0) {
         return nullptr;
     }
@@ -128,13 +123,12 @@ const void* GetGlyphBitmapCb(lv_font_glyph_dsc_t* g_dsc, lv_draw_buf_t* draw_buf
         return nullptr;
     }
     const uint32_t stride_out = lv_draw_buf_width_to_stride(g.width, LV_COLOR_FORMAT_A8);
-    UnpackToA8(g.bitmap, static_cast<uint8_t>(f->bpp), g.width, g.height, draw_buf->data,
-               stride_out);
+    UnpackToA8(g.bitmap, static_cast<uint8_t>(f->bpp), g.width, g.height, draw_buf->data, stride_out);
     lv_draw_buf_flush_cache(draw_buf, nullptr);
     return draw_buf;
 }
 
-void EstimateMetrics(FontpackLvFont* f) {
+static void EstimateMetrics(FontpackLvglEmulatorFontpackLvFont* f) {
     int16_t max_ascent = 0;
     int16_t max_descent = 0;
     const uint32_t probes[] = {0x0048u, 0x0067u, 0x4F60u, 0x56FDu, 0x0041u, 0x0079u};
@@ -161,13 +155,13 @@ void EstimateMetrics(FontpackLvFont* f) {
     f->lv.base_line = static_cast<int16_t>(-max_descent + 1);
 }
 
-FontpackLvFont* FindOrCreate(uint16_t size, uint16_t bpp) {
+static FontpackLvglEmulatorFontpackLvFont* FindOrCreate(uint16_t size, uint16_t bpp) {
     for (int i = 0; i < kMaxFonts; ++i) {
         if (s_fonts[i].inited && s_fonts[i].size == size && s_fonts[i].bpp == bpp) {
             return &s_fonts[i];
         }
     }
-    FontpackLvFont* slot = nullptr;
+    FontpackLvglEmulatorFontpackLvFont* slot = nullptr;
     for (int i = 0; i < kMaxFonts; ++i) {
         if (!s_fonts[i].inited) {
             slot = &s_fonts[i];
@@ -193,8 +187,6 @@ FontpackLvFont* FindOrCreate(uint16_t size, uint16_t bpp) {
     slot->inited = true;
     return slot;
 }
-
-}  // namespace
 
 extern "C" void fontpack_emulator_set_path(const char* path) {
     if (path == nullptr) {
@@ -228,7 +220,7 @@ const lv_font_t* fontpack_lv_font_get(uint16_t size, uint16_t bpp) {
     if (!get_glyph(0x4E2Du, size, bpp, &g) && !get_glyph(0x0041u, size, bpp, &g)) {
         return nullptr;
     }
-    FontpackLvFont* slot = FindOrCreate(size, bpp);
+    FontpackLvglEmulatorFontpackLvFont* slot = FindOrCreate(size, bpp);
     return slot != nullptr ? &slot->lv : nullptr;
 }
 

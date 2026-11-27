@@ -1,8 +1,0 @@
-#pragma once
-
-#include "lvgl.h"
-
-/** @brief 构建设置→关于页（系统信息列表与固件更新检测） */
-void SettingsAboutTab_Build(lv_obj_t* page);
-/** @brief 重置关于页 */
-void SettingsAboutTab_Reset();

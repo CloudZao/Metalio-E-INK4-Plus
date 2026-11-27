@@ -3,7 +3,7 @@
 # 本仓：tools/ebook/emulator → ../../../main
 set(ESP_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/../../../main" CACHE PATH "ESP32 main 源码根")
 
-if(NOT EXISTS "${ESP_MAIN}/reader/book_session.cc")
+if(NOT EXISTS "${ESP_MAIN}/business/reader/book_session.cc")
     message(FATAL_ERROR "ESP_MAIN 无效: ${ESP_MAIN}")
 endif()
 
@@ -11,28 +11,34 @@ set(EBOOK_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/esp_compat
     ${CMAKE_CURRENT_SOURCE_DIR}/src/font
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emulator
-    ${ESP_MAIN}/reader
+    ${ESP_MAIN}
+    ${ESP_MAIN}/business/reader
+    ${ESP_MAIN}/ui/common/drawing/font
     ${ESP_MAIN}/boards/common
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 set(EBOOK_READER_SRC
-    ${ESP_MAIN}/reader/book_session.cc
-    ${ESP_MAIN}/reader/book_session_nav.cc
-    ${ESP_MAIN}/reader/book_disk_cache.cc
-    ${ESP_MAIN}/reader/book_bookmarks.cc
-    ${ESP_MAIN}/reader/ebook_document.cc
-    ${ESP_MAIN}/reader/epub_document.cc
-    ${ESP_MAIN}/reader/html_content.cc
-    ${ESP_MAIN}/reader/image_geometry.cc
-    ${ESP_MAIN}/reader/image_tone.cc
-    ${ESP_MAIN}/reader/text_encoding.cc
-    ${ESP_MAIN}/reader/txt_chapter.cc
-    ${ESP_MAIN}/reader/zip_reader.cc
+    ${ESP_MAIN}/business/reader/book_session.cc
+    ${ESP_MAIN}/business/reader/book_session_nav.cc
+    ${ESP_MAIN}/business/reader/book_session_structure_cache.cc
+    ${ESP_MAIN}/business/reader/book_disk_cache.cc
+    ${ESP_MAIN}/business/reader/book_bookmarks.cc
+    ${ESP_MAIN}/business/reader/ebook_document.cc
+    ${ESP_MAIN}/business/reader/epub_document.cc
+    ${ESP_MAIN}/business/reader/html_content.cc
+    ${ESP_MAIN}/infra/image/image_geometry.cc
+    ${ESP_MAIN}/infra/image/image_tone.cc
+    ${ESP_MAIN}/infra/storage/file_write.cc
+    ${ESP_MAIN}/infra/storage/storage_error.cc
+    ${ESP_MAIN}/infra/storage/sd_file_commit.cc
+    ${ESP_MAIN}/business/reader/text_encoding.cc
+    ${ESP_MAIN}/business/reader/txt_chapter.cc
+    ${ESP_MAIN}/business/reader/zip_reader.cc
 )
 
 set(EBOOK_FONT_SRC
-    ${ESP_MAIN}/display/font/epdfont.cc
+    ${ESP_MAIN}/ui/common/drawing/font/epdfont.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/src/font/font_loader_emulator.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/font/fontpack_lvgl_emulator.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/src/font/epdfont_emulator.cc
@@ -40,7 +46,7 @@ set(EBOOK_FONT_SRC
 
 set(EBOOK_EMULATOR_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emulator/book_reader_emulator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/emulator/image_util_emulator.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/emulator/image_decode_emulator.cc
 )
 
 function(ebook_emulator_target target_name main_src)

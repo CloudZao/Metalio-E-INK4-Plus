@@ -1,12 +1,9 @@
 // Copyright 2025 Terrence
 // SPDX-License-Identifier: Apache-2.0
 
-#include "uart_eth_modem.h"
-
 #include <cstdio>
 #include <cstring>
 #include <new>
-
 #include <esp_check.h>
 #include <esp_log.h>
 #include <esp_mac.h>
@@ -15,6 +12,8 @@
 #include <hal/gpio_ll.h>
 #include <lwip/dns.h>
 #include <lwip/tcpip.h>
+#include "infra/tasks/task_create.h"
+#include "uart_eth_modem.h"
 
 // Static member definitions
 constexpr uint8_t UartEthModem::kHandshakeRequest[];
@@ -38,17 +37,11 @@ UartEthModem::UartEthModem(const Config& config) : config_(config) {
         // Already initialized
         return ESP_OK;
     };
-    driver_.deinit = [](iot_eth_driver_t* driver) -> esp_err_t {
-        return ESP_OK;
-    };
-    driver_.start = [](iot_eth_driver_t* driver) -> esp_err_t {
-        return ESP_OK;
-    };
-    driver_.stop = [](iot_eth_driver_t* driver) -> esp_err_t {
-        return ESP_OK;
-    };
+    driver_.deinit = [](iot_eth_driver_t* driver) -> esp_err_t { return ESP_OK; };
+    driver_.start = [](iot_eth_driver_t* driver) -> esp_err_t { return ESP_OK; };
+    driver_.stop = [](iot_eth_driver_t* driver) -> esp_err_t { return ESP_OK; };
     driver_.transmit = [](iot_eth_driver_t* driver, uint8_t* buf, size_t len) -> esp_err_t {
-        // Get UartEthModem instance using container_of pattern
+    // Get UartEthModem instance using container_of pattern
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
         auto* self = reinterpret_cast<UartEthModem*>(reinterpret_cast<char*>(driver) - offsetof(UartEthModem, driver_));
@@ -148,10 +141,11 @@ esp_err_t UartEthModem::Start() {
     UartUhci::Config uhci_cfg = {
         .uart_port = config_.uart_num,
         .dma_burst_size = 32,
-        .rx_pool = {
-            .buffer_count = config_.rx_buffer_count,
-            .buffer_size = config_.rx_buffer_size,
-        },
+        .rx_pool =
+            {
+                .buffer_count = config_.rx_buffer_count,
+                .buffer_size = config_.rx_buffer_size,
+            },
     };
 
     ret = uart_uhci_.Init(uhci_cfg);
@@ -167,29 +161,41 @@ esp_err_t UartEthModem::Start() {
     // Note: Don't start DMA receive here, will be started when entering Active state
 
     // Create main task (handles all events, no blocking operations)
-    xTaskCreate([](void* arg) {
-        static_cast<UartEthModem*>(arg)->MainTaskRun();
-        vTaskDelete(nullptr);
-    }, "uart_eth_main", 4096, this, 10, &main_task_);
+    FirmwareCreateTask(
+        [](void* arg) {
+            static_cast<UartEthModem*>(arg)->MainTaskRun();
+            vTaskDelete(nullptr);
+        },
+        "uart_eth_main", 4096, this, 10, &main_task_, tskNO_AFFINITY, 0);
 
     // Create init task
-    xTaskCreate([](void* arg) {
-        static_cast<UartEthModem*>(arg)->InitTaskRun();
-        vTaskDelete(nullptr);
-    }, "uart_eth_init", 4096, this, 4, &init_task_);
+    FirmwareCreateTask(
+        [](void* arg) {
+            static_cast<UartEthModem*>(arg)->InitTaskRun();
+            vTaskDelete(nullptr);
+        },
+        "uart_eth_init", 4096, this, 4, &init_task_, tskNO_AFFINITY, 0);
 
     // Create TX task (dedicated for non-blocking transmit from LWIP)
-    xTaskCreate([](void* arg) {
-        static_cast<UartEthModem*>(arg)->TxTaskRun();
-        vTaskDelete(nullptr);
-    }, "uart_eth_tx", 3072, this, 9, &tx_task_);  // Priority slightly lower than main
+    FirmwareCreateTask(
+        [](void* arg) {
+            static_cast<UartEthModem*>(arg)->TxTaskRun();
+            vTaskDelete(nullptr);
+        },
+        "uart_eth_tx", 3072, this, 9, &tx_task_, tskNO_AFFINITY, 0);  // Priority slightly lower than main
 
     if (!main_task_ || !init_task_ || !tx_task_) {
         ESP_LOGE(kTag, "Failed to create tasks");
         EventBits_t missing = 0;
-        if (!main_task_) missing |= kEventMainTaskDone;
-        if (!init_task_) missing |= kEventInitTaskDone;
-        if (!tx_task_) missing |= kEventTxTaskDone;
+        if (!main_task_) {
+            missing |= kEventMainTaskDone;
+        }
+        if (!init_task_) {
+            missing |= kEventInitTaskDone;
+        }
+        if (!tx_task_) {
+            missing |= kEventTxTaskDone;
+        }
         xEventGroupSetBits(event_group_, missing);
         Stop();
         return ESP_ERR_NO_MEM;
@@ -237,8 +243,11 @@ esp_err_t UartEthModem::Stop() {
     // Wait for tasks to finish
     if (event_group_) {
         for (;;) {
-            const auto bits = xEventGroupWaitBits(event_group_, kEventAllTasksDone, pdFALSE, pdTRUE, pdMS_TO_TICKS(10000));
-            if ((bits & kEventAllTasksDone) == kEventAllTasksDone) break;
+            const auto bits =
+                xEventGroupWaitBits(event_group_, kEventAllTasksDone, pdFALSE, pdTRUE, pdMS_TO_TICKS(10000));
+            if ((bits & kEventAllTasksDone) == kEventAllTasksDone) {
+                break;
+            }
             // 未退出的任务仍引用队列和 DMA，不能按部分完成位提前释放。
             ESP_LOGE(kTag, "Waiting for modem tasks to stop: missing=0x%lx",
                      static_cast<unsigned long>(kEventAllTasksDone & ~bits));
@@ -286,7 +295,8 @@ esp_err_t UartEthModem::SendAt(const std::string& cmd, std::string& response, ui
     }
 
     // Send AT command frame
-    esp_err_t ret = SendFrame(reinterpret_cast<const uint8_t*>(cmd_with_cr.c_str()), cmd_with_cr.size(), FrameType::kAtCommand);
+    esp_err_t ret =
+        SendFrame(reinterpret_cast<const uint8_t*>(cmd_with_cr.c_str()), cmd_with_cr.size(), FrameType::kAtCommand);
     if (ret != ESP_OK) {
         waiting_for_at_response_ = false;
         at_collect_until_done_ = false;
@@ -295,13 +305,10 @@ esp_err_t UartEthModem::SendAt(const std::string& cmd, std::string& response, ui
     }
 
     // Wait for response
-    EventBits_t bits = xEventGroupWaitBits(
-        event_group_,
-        kEventAtResponse | kEventStop,
-        pdTRUE,   // Clear on exit
-        pdFALSE,  // Wait for any bit
-        pdMS_TO_TICKS(timeout_ms)
-    );
+    EventBits_t bits = xEventGroupWaitBits(event_group_, kEventAtResponse | kEventStop,
+                                           pdTRUE,   // Clear on exit
+                                           pdFALSE,  // Wait for any bit
+                                           pdMS_TO_TICKS(timeout_ms));
     if (bits & kEventStop) {
         waiting_for_at_response_ = false;
         at_collect_until_done_ = false;
@@ -332,10 +339,8 @@ esp_err_t UartEthModem::SendAt(const std::string& cmd, std::string& response, ui
     return ESP_FAIL;
 }
 
-esp_err_t UartEthModem::SendAtCollectUntil(const std::string& cmd,
-                                            std::string& response,
-                                            uint32_t timeout_ms,
-                                            const char* done_marker) {
+esp_err_t UartEthModem::SendAtCollectUntil(const std::string& cmd, std::string& response, uint32_t timeout_ms,
+                                           const char* done_marker) {
     std::lock_guard<std::mutex> lock(at_mutex_);
 
     if (stop_flag_.load()) {
@@ -360,9 +365,8 @@ esp_err_t UartEthModem::SendAtCollectUntil(const std::string& cmd,
         cmd_with_cr += '\r';
     }
 
-    esp_err_t ret = SendFrame(
-        reinterpret_cast<const uint8_t*>(cmd_with_cr.c_str()),
-        cmd_with_cr.size(), FrameType::kAtCommand);
+    esp_err_t ret =
+        SendFrame(reinterpret_cast<const uint8_t*>(cmd_with_cr.c_str()), cmd_with_cr.size(), FrameType::kAtCommand);
     if (ret != ESP_OK) {
         waiting_for_at_response_ = false;
         at_collect_until_done_ = false;
@@ -370,9 +374,8 @@ esp_err_t UartEthModem::SendAtCollectUntil(const std::string& cmd,
         return ret;
     }
 
-    EventBits_t bits = xEventGroupWaitBits(
-        event_group_, kEventAtResponse | kEventStop, pdTRUE, pdFALSE,
-        pdMS_TO_TICKS(timeout_ms));
+    EventBits_t bits =
+        xEventGroupWaitBits(event_group_, kEventAtResponse | kEventStop, pdTRUE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
     if (bits & kEventStop) {
         waiting_for_at_response_ = false;
         at_collect_until_done_ = false;
@@ -390,10 +393,8 @@ esp_err_t UartEthModem::SendAtCollectUntil(const std::string& cmd,
         return ESP_ERR_TIMEOUT;
     }
 
-    if (response.find("+CME ERROR") != std::string::npos ||
-        response.find("+CMS ERROR") != std::string::npos ||
-        (response.find("ERROR") != std::string::npos &&
-         response.find("OK") == std::string::npos)) {
+    if (response.find("+CME ERROR") != std::string::npos || response.find("+CMS ERROR") != std::string::npos ||
+        (response.find("ERROR") != std::string::npos && response.find("OK") == std::string::npos)) {
         return ESP_FAIL;
     }
     return ESP_OK;
@@ -432,17 +433,19 @@ std::string UartEthModem::GetImsi() {
 }
 
 std::string UartEthModem::GetIccid() {
-    if (iccid_.empty()) {
+    const std::string cached = CachedIccid();
+    if (cached.empty()) {
         std::string resp;
         if (SendAt("AT+ECICCID", resp) == ESP_OK) {
             // Parse +ECICCID: ICCID using sscanf, consistent with C implementation
             char iccid[21] = {0};
             if (sscanf(resp.c_str(), "\r\n+ECICCID: %20s", iccid) == 1) {
+                std::lock_guard<std::mutex> lock(iccid_mutex_);
                 iccid_ = iccid;
             }
         }
     }
-    return iccid_;
+    return CachedIccid();
 }
 
 std::string UartEthModem::GetCarrierName() {
@@ -511,13 +514,20 @@ UartEthModem::CellInfo UartEthModem::GetCellInfo() {
 
 const char* UartEthModem::GetNetworkEventName(UartEthModemEvent event) {
     switch (event) {
-        case UartEthModemEvent::Connecting: return "Connecting";
-        case UartEthModemEvent::Connected: return "Connected";
-        case UartEthModemEvent::Disconnected: return "Disconnected";
-        case UartEthModemEvent::ErrorNoSim: return "ErrorNoSim";
-        case UartEthModemEvent::ErrorRegistrationDenied: return "ErrorRegistrationDenied";
-        case UartEthModemEvent::ErrorInitFailed: return "ErrorInitFailed";
-        default: return "Unknown";
+        case UartEthModemEvent::Connecting:
+            return "Connecting";
+        case UartEthModemEvent::Connected:
+            return "Connected";
+        case UartEthModemEvent::Disconnected:
+            return "Disconnected";
+        case UartEthModemEvent::ErrorNoSim:
+            return "ErrorNoSim";
+        case UartEthModemEvent::ErrorRegistrationDenied:
+            return "ErrorRegistrationDenied";
+        case UartEthModemEvent::ErrorInitFailed:
+            return "ErrorInitFailed";
+        default:
+            return "Unknown";
     }
 }
 
@@ -639,8 +649,7 @@ esp_err_t UartEthModem::InitIotEth() {
     }
 
     // Register IP event handler to detect when we get an IP address
-    ret = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_ETH_GOT_IP,
-                                              &IpEventHandler, this,
+    ret = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &IpEventHandler, this,
                                               &ip_event_handler_instance_);
     if (ret != ESP_OK) {
         ESP_LOGE(kTag, "Failed to register IP event handler");
@@ -664,9 +673,7 @@ esp_err_t UartEthModem::InitIotEth() {
     }
 
     // Clear DNS cache
-    tcpip_callback([](void* arg) -> void {
-        dns_clear_cache();
-    }, nullptr);
+    tcpip_callback([](void* arg) -> void { dns_clear_cache(); }, nullptr);
 
     return ESP_OK;
 }
@@ -674,8 +681,7 @@ esp_err_t UartEthModem::InitIotEth() {
 void UartEthModem::DeinitUart() {
     // UHCI mode: UART driver is not installed, just disconnect pins and reset GPIO
     // Disconnect UART pins (set to UART_PIN_NO_CHANGE disconnects the signal)
-    uart_set_pin(config_.uart_num, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
-                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    uart_set_pin(config_.uart_num, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     // Reset GPIO pins to default state (input, no pull) to save power
     gpio_reset_pin(config_.tx_pin);
     gpio_reset_pin(config_.rx_pin);
@@ -696,8 +702,7 @@ void UartEthModem::DeinitGpio() {
 void UartEthModem::DeinitIotEth() {
     // Unregister IP event handler first
     if (ip_event_handler_instance_) {
-        esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_ETH_GOT_IP,
-                                              ip_event_handler_instance_);
+        esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_ETH_GOT_IP, ip_event_handler_instance_);
         ip_event_handler_instance_ = nullptr;
     }
     if (eth_handle_) {
@@ -729,7 +734,9 @@ void UartEthModem::ReleaseTxCompletion(TxCompletion* completion) {
 }
 
 void UartEthModem::CompleteTxFrame(TxCompletion* completion, esp_err_t result) {
-    if (!completion) return;
+    if (!completion) {
+        return;
+    }
     completion->result = result;
     xSemaphoreGive(completion->done);
     ReleaseTxCompletion(completion);
@@ -763,12 +770,8 @@ void UartEthModem::TxTaskRun() {
                 xQueueSend(event_queue_, &event, pdMS_TO_TICKS(10));
 
                 // Wait for active state
-                EventBits_t bits = xEventGroupWaitBits(
-                    event_group_,
-                    kEventActiveState | kEventStop,
-                    pdFALSE,
-                    pdFALSE,
-                    pdMS_TO_TICKS(200) // Increased from 50ms for slow wakeup
+                EventBits_t bits = xEventGroupWaitBits(event_group_, kEventActiveState | kEventStop, pdFALSE, pdFALSE,
+                                                       pdMS_TO_TICKS(200)  // Increased from 50ms for slow wakeup
                 );
 
                 if (bits & kEventStop) {
@@ -800,13 +803,10 @@ void UartEthModem::TxTaskRun() {
 
             // Wait for ACK (SRDY high)
             {
-                EventBits_t bits = xEventGroupWaitBits(
-                    event_group_,
-                    kEventSrdyHigh | kEventStop,
-                    pdTRUE,   // clear on exit
-                    pdFALSE,  // wait for any bit
-                    pdMS_TO_TICKS(kAckTimeoutMs)
-                );
+                EventBits_t bits = xEventGroupWaitBits(event_group_, kEventSrdyHigh | kEventStop,
+                                                       pdTRUE,   // clear on exit
+                                                       pdFALSE,  // wait for any bit
+                                                       pdMS_TO_TICKS(kAckTimeoutMs));
 
                 if (bits & kEventStop) {
                     ret = ESP_ERR_INVALID_STATE;
@@ -815,11 +815,12 @@ void UartEthModem::TxTaskRun() {
 
                 if (!(bits & kEventSrdyHigh)) {
                     // ACK timeout - assume data was received
-                    ESP_LOGW(kTag, "TX task: ACK timeout in %ld us", (long)(esp_timer_get_time() - last_activity_time_us_));
+                    ESP_LOGW(kTag, "TX task: ACK timeout in %ld us",
+                             (long)(esp_timer_get_time() - last_activity_time_us_));
                 }
             }
 
-done:
+        done:
             ConfigureSrdyInterrupt(kSrdyInterruptForAck);
             // Cleanup and notify
             free(frame.data);
@@ -1262,7 +1263,6 @@ void UartEthModem::InitTaskRun() {
 
         ESP_LOGD(kTag, "Initialization complete");
         initializing_ = false;
-
     }
 
 exit:
@@ -1293,11 +1293,7 @@ esp_err_t UartEthModem::EnqueueTxFrame(const uint8_t* buf, size_t len) {
     memcpy(buffer + sizeof(FrameHeader), buf, len);
 
     // Enqueue frame (non-blocking, no completion notification)
-    TxFrame frame = {
-        .data = buffer,
-        .length = total_len,
-        .completion = nullptr
-    };
+    TxFrame frame = {.data = buffer, .length = total_len, .completion = nullptr};
     if (xQueueSend(tx_queue_, &frame, 0) != pdTRUE) {
         ESP_LOGW(kTag, "TX queue full, dropping frame");
         free(buffer);
@@ -1366,15 +1362,14 @@ void UartEthModem::ProcessReceivedFrame(uint8_t* data, size_t size) {
 
     // Validate checksum
     if (!header->ValidateChecksum()) {
-        ESP_LOGW(kTag, "Invalid checksum, raw: %02x %02x %02x %02x",
-                 header->raw[0], header->raw[1], header->raw[2], header->raw[3]);
+        ESP_LOGW(kTag, "Invalid checksum, raw: %02x %02x %02x %02x", header->raw[0], header->raw[1], header->raw[2],
+                 header->raw[3]);
         return;
     }
 
     uint16_t payload_len = header->GetPayloadLength();
     if (sizeof(FrameHeader) + payload_len > size) {
-        ESP_LOGW(kTag, "Incomplete frame: expected %d, got %d",
-                 sizeof(FrameHeader) + payload_len, size);
+        ESP_LOGW(kTag, "Incomplete frame: expected %d, got %d", sizeof(FrameHeader) + payload_len, size);
         return;
     }
 
@@ -1433,10 +1428,8 @@ void UartEthModem::HandleAtResponse(const char* data, size_t length) {
     // Local SendAtCollectUntil: keep accumulating until done_marker / ERROR
     if (at_collect_until_done_ && !at_until_marker_.empty()) {
         at_command_response_ += response;
-        if (response.find("+CME ERROR") != std::string::npos ||
-            response.find("+CMS ERROR") != std::string::npos ||
-            (response.find("ERROR") != std::string::npos &&
-             response.find("OK") == std::string::npos)) {
+        if (response.find("+CME ERROR") != std::string::npos || response.find("+CMS ERROR") != std::string::npos ||
+            (response.find("ERROR") != std::string::npos && response.find("OK") == std::string::npos)) {
             xEventGroupSetBits(event_group_, kEventAtResponse);
             return;
         }
@@ -1453,7 +1446,8 @@ void UartEthModem::HandleAtResponse(const char* data, size_t length) {
     }
 }
 
-esp_err_t UartEthModem::SendAtWithRetry(const std::string& cmd, std::string& response, uint32_t timeout_ms, int max_retries) {
+esp_err_t UartEthModem::SendAtWithRetry(const std::string& cmd, std::string& response, uint32_t timeout_ms,
+                                        int max_retries) {
     esp_err_t ret = ESP_FAIL;
     for (int i = 0; i < max_retries; i++) {
         // Check stop flag before each retry
@@ -1480,14 +1474,16 @@ void UartEthModem::ParseAtResponse(const std::string& response) {
         int act = 0;
 
         // Try format 1: +CEREG: n,stat,"tac","ci",act (with n parameter)
-        if (sscanf(response.c_str() + cereg_pos, "+CEREG: %d,%d,\"%15[^\"]\",\"%15[^\"]\",%d", &n, &stat, tac, ci, &act) == 5) {
+        if (sscanf(response.c_str() + cereg_pos, "+CEREG: %d,%d,\"%15[^\"]\",\"%15[^\"]\",%d", &n, &stat, tac, ci,
+                   &act) == 5) {
             cell_info_.stat = stat;
             cell_info_.tac = tac;
             cell_info_.ci = ci;
             cell_info_.act = act;
         }
         // Try format 2: +CEREG: stat,"tac","ci",act (without n parameter)
-        else if (sscanf(response.c_str() + cereg_pos, "+CEREG: %d,\"%15[^\"]\",\"%15[^\"]\",%d", &stat, tac, ci, &act) == 4) {
+        else if (sscanf(response.c_str() + cereg_pos, "+CEREG: %d,\"%15[^\"]\",\"%15[^\"]\",%d", &stat, tac, ci,
+                        &act) == 4) {
             cell_info_.stat = stat;
             cell_info_.tac = tac;
             cell_info_.ci = ci;
@@ -1529,7 +1525,7 @@ esp_err_t UartEthModem::AtDetect() {
         detect_baud_rate_ = config_.baud_rate;
         return ESP_OK;
     }
-    for (size_t i = 0; i < sizeof(baud_rates) / sizeof(baud_rates[0]); i++){
+    for (size_t i = 0; i < sizeof(baud_rates) / sizeof(baud_rates[0]); i++) {
         uart_set_baudrate(config_.uart_num, baud_rates[i]);
         ESP_LOGI(kTag, "Trying baud rate: %d", baud_rates[i]);
         ret = SendAtWithRetry("AT", resp, 500, 4);
@@ -1633,11 +1629,11 @@ esp_err_t UartEthModem::RunNormalModeInitSequence() {
         return ESP_OK;
     }
 
-    int state=0;
+    int state = 0;
     if (SendAt("AT+ECNETDEVCTL?", resp, 1000) == ESP_OK) {
         sscanf(resp.c_str(), "\r\n+ECNETDEVCTL: %*d,%*d,%*d,%d", &state);
     }
-    if(state == 1){
+    if (state == 1) {
         ESP_LOGI(kTag, "Network device already started");
         handshake_done_ = true;
         xEventGroupSetBits(event_group_, kEventHandshakeDone);
@@ -1662,7 +1658,8 @@ esp_err_t UartEthModem::RunNormalModeInitSequence() {
     }
 
     // Wait for handshake ACK
-    auto bits = xEventGroupWaitBits(event_group_, kEventHandshakeDone | kEventStop, pdFALSE, pdFALSE, pdMS_TO_TICKS(kHandshakeTimeoutMs));
+    auto bits = xEventGroupWaitBits(event_group_, kEventHandshakeDone | kEventStop, pdFALSE, pdFALSE,
+                                    pdMS_TO_TICKS(kHandshakeTimeoutMs));
     if (bits & kEventStop) {
         ESP_LOGW(kTag, "Stop event received in WaitForHandshake");
         return ESP_ERR_INVALID_STATE;
@@ -1743,8 +1740,7 @@ void UartEthModem::QueryModemInfo() {
     GetIccid();
     GetModuleRevision();
     GetImsi();
-    ESP_LOGI(kTag, "Modem Info - IMEI: %s, ICCID: %s, IMSI: %s, Rev: %s",
-             imei_.c_str(), iccid_.c_str(), imsi_.c_str(), module_revision_.c_str());
+    ESP_LOGI(kTag, "Modem information queries completed");
 }
 
 // Set MRDY level
@@ -1763,7 +1759,7 @@ void UartEthModem::SendAckPulse() {
     // MRDY: low -> high (50us) -> low
     SetMrdy(MrdyLevel::High);  // High
     esp_rom_delay_us(kAckPulseUs);
-    SetMrdy(MrdyLevel::Low);   // Low (back to busy)
+    SetMrdy(MrdyLevel::Low);  // Low (back to busy)
 }
 
 // Configure SRDY interrupt type
@@ -1817,8 +1813,8 @@ void UartEthModem::SetNetworkEvent(UartEthModemEvent event, const std::string& d
         if (detail.empty()) {
             ESP_LOGI(kTag, "Network event: %s -> %s", GetNetworkEventName(old_event), GetNetworkEventName(event));
         } else {
-            ESP_LOGI(kTag, "Network event: %s -> %s (%s)", GetNetworkEventName(old_event),
-                     GetNetworkEventName(event), detail.c_str());
+            ESP_LOGI(kTag, "Network event: %s -> %s (%s)", GetNetworkEventName(old_event), GetNetworkEventName(event),
+                     detail.c_str());
         }
         if (network_event_callback_) {
             network_event_callback_(event, detail);
@@ -1826,8 +1822,7 @@ void UartEthModem::SetNetworkEvent(UartEthModemEvent event, const std::string& d
     }
 }
 
-void UartEthModem::IpEventHandler(void* arg, esp_event_base_t event_base,
-                                  int32_t event_id, void* event_data) {
+void UartEthModem::IpEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     auto* self = static_cast<UartEthModem*>(arg);
 
     if (event_base == IP_EVENT && event_id == IP_EVENT_ETH_GOT_IP) {
@@ -1859,7 +1854,9 @@ void UartEthModem::CleanupResources(bool cleanup_iot_eth) {
     if (tx_queue_) {
         TxFrame frame;
         while (xQueueReceive(tx_queue_, &frame, 0) == pdTRUE) {
-            if (frame.data) free(frame.data);
+            if (frame.data) {
+                free(frame.data);
+            }
             CompleteTxFrame(frame.completion, ESP_ERR_INVALID_STATE);
         }
         vQueueDelete(tx_queue_);

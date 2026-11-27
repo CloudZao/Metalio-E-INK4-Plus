@@ -1,0 +1,11 @@
+# Vendored from espressif/esp_lvgl_port 2.6.3
+# (https://github.com/espressif/esp-bsp/tree/master/components/esp_lvgl_port).
+# 本目录由项目维护，不再走 Component Manager。
+# 已注释 monochrome 路径下对 CONFIG_LV_COLOR_DEPTH_1 的 #error，以支持墨水屏 I1。
+dependencies:
+  idf: '>=5.1'
+  lvgl/lvgl:
+    public: true
+    version: '>=8,<10'
+description: ESP LVGL port (vendored)
+version: 2.6.3

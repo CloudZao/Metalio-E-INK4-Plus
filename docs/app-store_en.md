@@ -2,21 +2,21 @@
 
 [简体中文](app-store.md)
 
+The App Store entry is hidden on the 3.97-inch home screen and remains available on the 4.7-inch model.
+
 The App Store connects to the cloud app store and installs ELF apps in `metalio/e-ink/apps/` on the SD card. The home app grid lists App Store after built-in apps, followed by installed apps, continuing onto subsequent pages when necessary. The Store displays all apps in a single-column horizontal list with icons, names, versions, package sizes and Install or Open actions. Tap a row for details. Information stays above the fixed bottom actions. Pages have no on-screen back arrows. A short HOME or Back press closes one level at a time; holding HOME returns to the home screen. Returning from an app opened in details restores those details. Loading, refresh and operation results appear over the header without reserving list space or covering app rows. Download percentage appears inside the corresponding row action, which cancels on tap. Details use the bottom primary action for the same status.
 
 ## Usage
 
 1. The platform must confirm that the device's fixed MAC has a valid binding, its board and chip are registered, and a published app supports the current firmware and ABI. The deployed API and storage service must be available.
-2. The store URL is managed by `cloudzao_app_store_url` in `main/cloudzao_endpoints.c`.
+2. The store URL is managed by `cloudzao_app_store_url` in `main/infra/network/endpoints/cloudzao_endpoints.c`.
 3. The toolbar above the list shows the filter and app count on the left and an icon-only refresh action on the right. Entry and refresh first read installed apps from SD, then fetch the store catalog. Refresh retains existing apps, filters and the scroll position within the available content range. A failed request keeps local apps and the existing catalog; installed apps remain runnable. Empty states are hidden while loading, and result notices dismiss automatically. Filter opens a bordered floating panel with All / Not installed / Installed / Downloading without moving the app list. Selecting an option immediately filters and closes the panel. Check for updates in app details fetches the latest catalog. A newer compatible version opens a centered dialog showing its version number; installation starts only after confirmation. Cancel or tap outside the dialog to keep the installed version. Otherwise, the Store reports Already up to date. Tap anywhere outside the installation filter panel to dismiss it. Installed apps run offline, and unpublishing does not remove local copies.
 
-The store and details hold the same foreground network requirement as the assistant. Ordinary idle power saving does not disconnect them, while normal inactivity standby remains available outside installation. Leaving or entering standby releases the page requirement and cancels in-flight requests with file cleanup; waking restores it. Manually disabled Wi-Fi remains disabled.
+The store and details hold a foreground soft network requirement. Ordinary idle power saving does not disconnect them, while normal inactivity standby remains available outside installation. Leaving or entering standby releases the page requirement and cancels in-flight requests with file cleanup; waking restores it. Manually disabled Wi-Fi remains disabled.
 
 ## Files and updates
 
-Each installation contains `metalio/e-ink/apps/<app-name>/manifest.json` and `<app-name>.elf`, for example `metalio/e-ink/apps/计算器/计算器.elf`. The server-provided Chinese app name is used. Chinese characters and spaces are preserved; FAT-invalid characters, leading dots and trailing dots/spaces are handled, and length is limited at UTF-8 boundaries. Different app IDs cannot overwrite the same name. The local manifest field `installedName` fixes the directory and ELF name across updates and language changes. App IDs and SHA256 remain the identity and integrity checks. Download length, SHA256 and ELF structure must pass verification, and launch verifies the file again. The manifest changes only after the new ELF has been written and verified, using the existing file commit and backup recovery mechanism. Old ELF files are cleaned after the switch. The online catalog displays at most 16 apps per page, with Previous / Next navigation and one online page retained at a time. There is no fixed cumulative app-count limit; each ELF is limited to 32 MiB. SD access follows the existing lifecycle permissions during USB export and standby.
-
-The server package `size` field must be a decimal integer string, such as `"1076"`; JSON numbers are rejected. Catalogs, details, update checks and download manifests use the same rule, with a range of 1 to 33554432 bytes. Chunk digest `offset` values also require decimal integer strings, including `"0"`; `index`, `length` and `chunkSize` remain JSON numbers. Local installation manifests and resume checkpoints continue to store numeric lengths.
+Each installation contains `metalio/e-ink/apps/<app-name>/manifest.json` and `<app-name>.elf`. The server-provided Chinese app name is used. Chinese characters and spaces are preserved; FAT-invalid characters, leading dots and trailing dots/spaces are handled, and length is limited at UTF-8 boundaries. Different app IDs cannot overwrite the same name. The local manifest field `installedName` fixes the directory and ELF name across updates and language changes. App IDs and SHA256 remain the identity and integrity checks. Download length, SHA256 and ELF structure must pass verification, and launch verifies the file again. The manifest changes only after the new ELF has been written and verified, using the existing file commit and backup recovery mechanism. Old ELF files are cleaned after the switch. The online catalog displays at most 16 apps per page, with Previous / Next navigation and one online page retained at a time. There is no fixed cumulative app-count limit; each ELF is limited to 32 MiB. SD access follows the existing lifecycle permissions during USB export and standby.
 
 ### Temporary files and recovery
 
@@ -28,44 +28,19 @@ Store work files live in `metalio/e-ink/temp/app_store/<app-name>--<appId>/`. Na
 - `download.part.json.cloud-backup`: checkpoint replacement backup, restored or cleaned when downloading again.
 - `manifest.json.part`: installation manifest awaiting commit.
 
-Failure, cancellation and leaving the page retain resumable data. Retrying verifies complete blocks again. Successful installation or app removal cleans these work files and the empty directory, leaving unknown files untouched. Delete work directories manually only when no installation is active and the related app is not recording or writing data. Removing download staging files requires downloading the data again.
+Failure, cancellation and leaving the page retain resumable data. Retrying verifies complete blocks again. Successful installation or app removal cleans these work files and the empty directory, leaving unknown files untouched. Work directories can be deleted manually while no installation is active; subsequent installation downloads the data again.
 
-`manifest.json.cloud-backup` provides manifest recovery. During an update, the previous ELF is retained as `<old-sha256>.elf` until the new manifest commits. Failure or cancellation before commit restores the previous version and retains the new package for resuming. Recovery after a power interruption uses the manifest digest to select the matching ELF rather than relying only on file size. Private state and recovery backups live in `metalio/e-ink/settings/apps/<app-name>--<appId>/`, with write staging files in the Store work directory. Updates retain persistent state. Uninstall deletes the app's state, recovery backups and write staging files, so reinstalling starts with fresh state. State cleanup failure reports a storage error and retains the installation manifest so removal can be retried. File formats and read, write, recovery and cleanup rules are documented in the [private storage interface](../tools/elf_app/DEVELOPMENT.md#private-storage-xz_app_cap_storage).
+`manifest.json.cloud-backup` provides manifest recovery. During an update, the previous ELF is retained as `<old-sha256>.elf` until the new manifest commits. Failure or cancellation before commit restores the previous version and retains the new package for resuming. Recovery after a power interruption uses the manifest digest to select the matching ELF rather than relying only on file size. Private state and recovery backups live in `metalio/e-ink/settings/apps/<app-name>--<appId>/`, with write staging files in the Store work directory. Updates retain persistent state. Uninstall deletes the app's state, recovery backups and write staging files, so reinstalling starts with fresh state. State cleanup failure reports a storage error and retains the installation manifest so removal can be retried. File formats and read, write, recovery and cleanup rules are documented in the [private storage interface](../tools/elf_app/README.md#private-storage-xz_app_cap_storage).
 
-## App icons
-
-Icons are uploaded, verified and updated with the ELF and shared by home, Store and details. Encoding, source requirements and builds are documented in the [ELF developer guide](../tools/elf_app/DEVELOPMENT.md#6-icons-and-content-assets).
-
-## App ABI
-
-App entry, compatibility checks, coding rules, builds, publishing, resources and runtime limits are maintained in [ELF app developer guide](../tools/elf_app/DEVELOPMENT.md). [app_api.h](../main/app_store/app_api.h) is authoritative for signatures.
-
-### Available capabilities
-
-- UI and interaction: text, buttons, containers, inputs, the system keyboard, progress bars and monochrome geometric drawing, with in-app Back and white-wipe transitions.
-- Time and data: local time, monotonic timing, accumulated foreground time, hosted timers and app-private storage.
-- Device feedback: three-axis acceleration, timed vibration and button haptics that follow system settings. Gyroscope angular velocity is not exposed.
-- Audio playback: embedded ELF resources or SD files containing Ogg/Opus or PCM WAV, with looping, pause, resume, stop and progress queries. Volume follows the system.
-- Recording and playback: a single recording slot with start, pause, resume, stop/save and status queries. Files use 16kHz mono 16-bit PCM WAV and can be played through the audio interface. A new recording replaces the previous file only after saving succeeds; failed or empty takes preserve it.
-- Lifecycle: exit cleanup, notifications, idle-standby inhibition and foreground resource management. App business resumes after the wake target frame physically succeeds. Active standby or leaving the foreground stops and saves recording without automatically starting another take.
-
-Playback output is fixed to 16kHz mono 16-bit PCM. Recording and app playback are mutually exclusive; system audio has priority. Saved recordings share app-private data with settings and usage records, while pending files use the matching temporary directory. Updates preserve data; uninstall removes it. Parameters, paths, results and limits are maintained in [capability interfaces](../tools/elf_app/DEVELOPMENT.md#5-capability-interfaces).
-
-[Gravity Maze](../tools/elf_app/gravity_maze/README.md) demonstrates drawing, acceleration, foreground timing, vibration and looping music. [Recorder](../tools/elf_app/recorder/README.md) demonstrates single-file recording, saving and playback progress.
-
-## Installation queue and resources
+## Installation queue
 
 Apps install in selection order, with one queue entry per app. Waiting apps show Queued. Cancel removes a waiting entry or stops the active download; the next app starts after cleanup. Download percentage appears inside the app action at most once per second. Queued, verifying and cancelling states use the same button. Tapping cancels a waiting or active download; the bottom primary action in details behaves identically. A failed item does not stop the queue and can be selected again. Active and queued installations pause inactivity standby. Leaving the Store clears waiting entries and cancels the active download, retaining verifiable partial files and checkpoints while preserving completed installations. Cancellation waits for the current network wait or SD block operation to return. Cancellation before manifest switching preserves the previous version; after the manifest commits, installation cleanup completes without rolling back the installed version. Downloads use 256 KiB HTTP ranges. After interruption, existing complete blocks are verified again and reused; unverified tails are downloaded again.
 
-App content can be read on demand from the ELF. See [developer resource documentation](../tools/elf_app/DEVELOPMENT.md#6-icons-and-content-assets) for formats, builds and memory limits.
-
-See [sample apps](../tools/elf_app/README.md) for sources and build instructions.
-
 The Downloading filter includes active downloads, queued apps and verification. Completed or cancelled tasks leave the list automatically.
 
-## App launch
+## Brief ELF loading flow
 
-Launch centers the ELF icon, app name and loading message, with 16px between the icon and name and 40px between the name and message. App content appears only after the loading page has reached the display and ELF initialization succeeds. On failure, the loading page remains with an error. An unsupported-capability entry result displays an incompatibility message with firmware upgrade guidance. Other nonzero entry results display a startup failure; partially created widgets and hosted resources are cleaned up. Matching ABI versions do not guarantee matching capabilities: apps must check table size, capability bits and function pointers. Native ELF apps share firmware address space; error handling does not isolate arbitrary out-of-bounds access. Apps use the full area below the status bar. The host adds no app-name heading; apps decide whether to draw their own title.
+On launch, the host rechecks the manifest, size, digest, target and ABI, loads the ELF, resolves imports and invokes its entry. Successful initialization shows app content. Failure leaves a returnable error page, cleans managed services and partial widgets, and releases the ELF. Leaving and standby follow host resource lifecycles; activity resumes once the foreground display is ready. See [ELF apps and development](../tools/elf_app/README.md) for loader, ABI and public interfaces.
 
 ## App information
 
@@ -76,6 +51,10 @@ Summaries and categories can be edited on the server without uploading the ELF a
 The toolbar above the list contains filtering, the app count for the active filter and an icon-only refresh action. The toolbar, list and details use outlined surfaces with a subtle offset shadow; app icons remain 128×128. Details share one outer frame for information and fixed actions, separated by a single-pixel line inset on both sides.
 
 The store retrieves the catalog, app details and updates, and downloads app packages. The server checks device binding and compatibility. Installation state stays local; installation lists and results are not synchronized.
+
+## Cloud communication
+
+The Store fetches catalogs, details and updates and downloads packages. The service verifies binding and compatibility. Installation status is local and is not synchronized to the service.
 
 ## Diagnostic logging
 

@@ -13,7 +13,7 @@
 | 触摸 | FT6336U，I2C 地址 `0x38`，共享 I2C1；SDA GPIO0、SCL GPIO1、IRQ GPIO5，复位 TCA P1.2 | 保留总线互斥、暂停代次、可信松手和屏外盖板键分类；不能把盖板越界坐标夹到屏幕边缘。 |
 | TF | SDMMC 4-bit；D0–D3 GPIO20–23，CLK24，CMD25 | 保留对齐及 INTERNAL/DMA bounce buffer；挂载和 USB 所有权另见存储文档。 |
 | USB | GPIO36 ANA_SW；高为普通串口/调试，低为 HS UTMI MSC | S31 的 UTMI 与 USJ 是不同硬件 PHY；不套旧 S3 切换序列。 |
-| 声音 | BH1098G；BCLK42、WS43、DOUT44、DIN45；UART1 TX39/RX38，115200 | ESP 为 I2S 从机；只有需要声音时才加载音频文档。 |
+| 声音 | 蓝牙芯片；BCLK42、WS43、DOUT44、DIN45；UART1 TX39/RX38，115200 | ESP 为 I2S 从机；只有需要声音时才加载音频文档。 |
 | 实体键 | AI 为 GPIO61 低有效；音量+/− 为 TCA P10/P11；电源为 P17 | TCA 端口号不是同号 ESP GPIO。 |
 | 共享控制 | PA=P04；P14 为共享电源/复位；Port0 同时涉及马达与显示供电 | 不能整字节写死或用陈旧影子覆盖其他位；普通停录不切低 P14。 |
 

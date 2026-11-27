@@ -1,25 +1,31 @@
 /**
- * @brief Metalio-E-Ink4-Plus：NVS → Application::Start（网络/激活/OTA/MainEventLoop）
- * @note 显示 Tick 在 LvAdapterEpdiy::Init 后由 lv_epdiy_tick 任务跑，保证开机联网/激活期间顶栏能刷
+ * @file app_main.cc
+ * @brief 初始化公共运行环境并启动应用
  */
-#include "application.h"
-#include "ntp_server.h"
-#include "epd_board_metalio_eink4_plus.h"
-#include "power_hw.h"
-#include "ble_page_turner.h"
-#include "pager_key_handler.h"
-
 #include <esp_event.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
+#include "business/conversation/activation_polling.h"
+#include "boards/common/bluetooth/ble_page_turner.h"
+#include "boards/common/power/power_hw.h"
+#include "boards/common/storage/sd_access.h"
+#include "business/reader/list_thumbnail_cache.h"
+#include "infra/network/http/http_download_file.h"
+#include "infra/network/time/ntp_server.h"
+#include "sysmgmt/application.h"
+#include "sysmgmt/power/power_lifecycle.h"
+#include "ui/common/runtime/input/pager_key_handler.h"
 
-#define TAG "eink4p_main"
+#define TAG "Main"
 
 extern "C" void app_main(void) {
     // SDK 调频配置会随屏幕刷新频繁打印，默认仅保留该模块的告警和错误。
     esp_log_level_set("pm", ESP_LOG_WARN);
-    power_hw_log_sleep_reset();
-    epd_board_metalio_eink4_plus_boot_release_holds();
+    SdAccessConfigureCacheRelease(ClearListThumbnailCache);
+    PowerLifecycleInit();
+    HttpDownloadConfigureActivity([] { ActivationPolling::GetInstance().Pause(); },
+                                  [] { ActivationPolling::GetInstance().Resume(); });
+    power_hw_boot_prepare();
 
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
@@ -31,9 +37,11 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(ret);
     NtpServer::GetInstance().Initialize();
 
-    ESP_LOGI(TAG, "Metalio-E-Ink4-Plus bring-up");
-    BlePageTurner::Init(PagerKey_Receive);
-    Application::GetInstance().Start();
+    ESP_LOGI(TAG, "Board bring-up");
+    BlePageTurnerInit(PagerKey_Receive);
+    if (!Application::GetInstance().Start()) {
+        ESP_LOGW(TAG, "startup incomplete");
+    }
 
     // 运行期由消息调度与显示任务接管；返回后 SDK 回收启动任务的栈。
 }

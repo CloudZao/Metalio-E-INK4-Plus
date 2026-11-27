@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <limits>
 namespace plus_services {
-// Plus BH1098G reference conversion: 32-bit microphone slot, shift12, clamp.
+// Plus Bluetooth chip reference conversion: 32-bit microphone slot, shift12, clamp.
 // Floor division explicitly preserves the arithmetic-shift result for negatives.
 inline std::int16_t MicSlotToPcm16(std::int32_t slot) {
     const std::int64_t x = slot;

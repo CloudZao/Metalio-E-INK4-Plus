@@ -12,6 +12,7 @@
 #include "nvs_flash.h"
 #include <esp_netif.h>
 #include <esp_system.h>
+#include "config.h"
 #include "ssid_manager.h"
 #include "wifi_scan_lease.h"
 
@@ -67,9 +68,9 @@ WifiStation::WifiStation() {
     } else if (err != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGE(TAG, "Failed to open NVS: %d", err);
     }
-    #if CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS || CONFIG_BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
-    max_tx_power_ = kMetalioWifiMaxTxPower;
-    #endif
+    if (BOARD_WIFI_MAX_TX_POWER > 0) {
+        max_tx_power_ = BOARD_WIFI_MAX_TX_POWER;
+    }
 }
 
 WifiStation::~WifiStation() {

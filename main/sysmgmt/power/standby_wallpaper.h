@@ -1,0 +1,42 @@
+#pragma once
+
+#include <vector>
+#include "lvgl.h"
+
+struct RasterImage;
+
+// 待机壁纸：解码 NVS「standby」指向的图片，Park 时复用关机图的可绘区帧缓冲绘制。
+// 仅由 StandbyScreen 入口在缓存判定有可用待机壁纸时调用。
+
+/** @brief 将 root 设为透明，加载期间保留底层页面；不创建图片控件，不读 NVS。 */
+void StandbyWallpaper_Build(lv_obj_t* root);
+
+/**
+ * @brief 后台解析待机壁纸路径并解码，由公共UI完成交付接收像素供Park绘制。
+ * 须在 Build 之后调用；Dismiss/Teardown 后结果按 epoch 丢弃。
+ */
+void StandbyWallpaper_StartLoad();
+
+/** @brief 解码完成（成功或失败）；Park 前查询，勿固定等 settle。 */
+bool StandbyWallpaper_IsContentReady();
+
+/** @brief 待机壁纸仍在解码且已耗时至少 1 秒；仅在 LVGL 任务查询。 */
+bool StandbyWallpaper_IsLoadingSlow();
+
+/** @brief LVGL 任务在 Park 时读取；像素由本模块持有，直到 Teardown。 */
+const RasterImage* StandbyWallpaper_DecodedImage();
+
+/** @brief 当前待机壁纸是否使用进入待机前的界面作为底图。 */
+bool StandbyWallpaper_IsOverlay();
+
+/** @brief 获取待机叠图自身的透明度；无透明度时为空。 */
+const std::vector<uint8_t>& StandbyWallpaper_DecodedAlpha();
+
+/** @brief 目标帧准备完成后释放解码像素；不改变加载完成状态。 */
+void StandbyWallpaper_ReleasePixels();
+
+/** @brief 拆掉图片引用并释放像素；可重复调用。 */
+void StandbyWallpaper_Teardown();
+
+/** @brief 丢弃已解码像素；下次 StartLoad 必重读文件（壁纸覆盖后调用）。 */
+void StandbyWallpaper_InvalidateDecoded();

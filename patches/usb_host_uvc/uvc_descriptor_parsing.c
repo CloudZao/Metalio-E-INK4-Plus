@@ -1,0 +1,628 @@
+/*
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <inttypes.h>
+#include <stddef.h>
+#include <string.h> // strncmp for guid format parsing
+#include <math.h>   // fabsf for float comparison
+#include <sys/param.h> // MIN
+#include "esp_log.h"
+#include "usb/usb_helpers.h"
+#include "usb/uvc_host.h"
+#include "uvc_check_priv.h"
+#include "uvc_descriptors_priv.h"
+#include "usb/usb_types_uvc.h"
+
+#define FLOAT_EQUAL(a, b) (fabsf(a - b) < 0.0001f) // For comparing float values with acceptable difference (epsilon value)
+
+static const char *TAG = "uvc";
+
+/**
+ * @brief 获取帧描述符中帧间隔数组的字节偏移
+ */
+static size_t uvc_desc_frame_interval_array_offset(const uvc_frame_desc_t *frame_desc)
+{
+    switch (frame_desc->bDescriptorSubType) {
+    case UVC_VS_DESC_SUBTYPE_FRAME_FRAME_BASED:
+        return offsetof(uvc_frame_desc_t, frame_based.dwFrameInterval);
+    case UVC_VS_DESC_SUBTYPE_FRAME_UNCOMPRESSED:
+    case UVC_VS_DESC_SUBTYPE_FRAME_MJPEG:
+        return offsetof(uvc_frame_desc_t, mjpeg_uncompressed.dwFrameInterval);
+    default:
+        return 0;
+    }
+}
+
+/**
+ * @brief 检查描述符是否包含连续帧间隔的最小值、最大值和步长
+ */
+static bool uvc_desc_frame_has_continuous_intervals(const uvc_frame_desc_t *frame_desc)
+{
+    const size_t offset = uvc_desc_frame_interval_array_offset(frame_desc);
+    return offset > 0 && frame_desc->bLength >= offset + (3 * sizeof(uint32_t));
+}
+
+/**
+ * @brief 按描述符实际长度限制离散帧间隔数量
+ */
+static uint8_t uvc_desc_frame_discrete_interval_count(const uvc_frame_desc_t *frame_desc, uint8_t declared)
+{
+    if (declared == 0) {
+        return 0;
+    }
+    const size_t offset = uvc_desc_frame_interval_array_offset(frame_desc);
+    if (offset == 0 || frame_desc->bLength <= offset) {
+        return 0;
+    }
+    const size_t avail = (frame_desc->bLength - offset) / sizeof(uint32_t);
+    return (uint8_t)MIN((size_t)declared, avail);
+}
+
+/**
+ * @brief 将视频流描述符总长度限制在配置描述符的有效范围内
+ * @param cfg_desc 配置描述符
+ * @param header 视频流输入头描述符
+ * @return 可安全遍历的描述符总长度
+ */
+static inline uint16_t uvc_desc_get_safe_wTotalLength(const usb_config_desc_t *cfg_desc, const uvc_vs_input_header_desc_t *header)
+{
+    uintptr_t cfg_start = (uintptr_t)cfg_desc;
+    uintptr_t header_start = (uintptr_t)header;
+    if (header_start <= cfg_start) {
+        return 0;
+    }
+    const size_t offset = (size_t)(header_start - cfg_start);
+    if (offset >= cfg_desc->wTotalLength) {
+        return 0;
+    }
+    size_t remaining = cfg_desc->wTotalLength - offset;
+    if (header->wTotalLength > remaining) {
+        return remaining;
+    }
+    return header->wTotalLength;
+}
+
+static const uvc_vs_input_header_desc_t *uvc_desc_get_streaming_input_header(const usb_config_desc_t *cfg_desc, uint8_t bInterfaceNumber)
+{
+    UVC_CHECK(cfg_desc, NULL);
+
+    // Find Interface with alternate settings = 0. All Video Streaming descriptors should be after this descriptor.
+    int offset = 0;
+    const usb_intf_desc_t *intf_desc = usb_parse_interface_descriptor(cfg_desc, bInterfaceNumber, 0, &offset);
+    UVC_CHECK(intf_desc, NULL);
+    UVC_CHECK(intf_desc->bInterfaceClass == USB_CLASS_VIDEO, NULL);
+    UVC_CHECK(intf_desc->bInterfaceSubClass == UVC_SC_VIDEOSTREAMING, NULL);
+
+    // Find Video Input Header Descriptor
+    const usb_standard_desc_t *std_desc = usb_parse_next_descriptor_of_type((const usb_standard_desc_t *)intf_desc, cfg_desc->wTotalLength, UVC_CS_INTERFACE, &offset);
+    const uvc_vs_input_header_desc_t *input_header = (uvc_vs_input_header_desc_t *)std_desc;
+    UVC_CHECK(input_header, NULL);
+    UVC_CHECK(input_header->bDescriptorSubType == UVC_VS_DESC_SUBTYPE_INPUT_HEADER, NULL);
+    return input_header;
+}
+
+esp_err_t uvc_desc_get_streaming_intf_and_ep(
+    const usb_config_desc_t *cfg_desc,
+    uint8_t bInterfaceNumber,
+    uint16_t dwMaxPayloadTransferSize,
+    const usb_intf_desc_t **intf_desc_ret,
+    const usb_ep_desc_t **ep_desc_ret)
+{
+    UVC_CHECK(cfg_desc && intf_desc_ret && ep_desc_ret, ESP_ERR_INVALID_ARG);
+
+    // Keep scanning every alternate setting. The old loop aborted on the first
+    // endpoint above MAX_MPS_IN, so a later smaller alt, or an IN endpoint that
+    // was not index 0, never got selected.
+    esp_err_t ret = ESP_ERR_NOT_FOUND;
+    const int num_of_alternate = usb_parse_interface_number_of_alternate(cfg_desc, bInterfaceNumber);
+    if (num_of_alternate < 0) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    uint16_t best_mps = 0;
+    uint8_t best_mult = UINT8_MAX;
+    bool saw_oversize = false;
+
+    for (int alt = 0; alt <= num_of_alternate; alt++) {
+        int intf_offset = 0;
+        const usb_intf_desc_t *intf_desc = usb_parse_interface_descriptor(
+                                               cfg_desc, bInterfaceNumber, (uint8_t)alt, &intf_offset);
+        if (intf_desc == NULL ||
+                intf_desc->bInterfaceClass != USB_CLASS_VIDEO ||
+                intf_desc->bInterfaceSubClass != UVC_SC_VIDEOSTREAMING ||
+                intf_desc->bNumEndpoints == 0) {
+            continue;
+        }
+
+        for (int ep_i = 0; ep_i < intf_desc->bNumEndpoints; ep_i++) {
+            int ep_offset = intf_offset;
+            const usb_ep_desc_t *ep_desc = usb_parse_endpoint_descriptor_by_index(
+                                               intf_desc, ep_i, cfg_desc->wTotalLength, &ep_offset);
+            if (ep_desc == NULL || !USB_EP_DESC_GET_EP_DIR(ep_desc)) {
+                continue;
+            }
+            const usb_transfer_type_t xfer = USB_EP_DESC_GET_XFERTYPE(ep_desc);
+            if (xfer != USB_TRANSFER_TYPE_ISOCHRONOUS && xfer != USB_TRANSFER_TYPE_BULK) {
+                continue;
+            }
+
+            const uint16_t current_mps = USB_EP_DESC_GET_MPS(ep_desc);
+            const uint8_t current_mult = USB_EP_DESC_GET_MULT(ep_desc);
+            ESP_LOGI(TAG, "intf %u alt %d ep %d mps=%u limit=%u",
+                     bInterfaceNumber, alt, ep_i, current_mps, dwMaxPayloadTransferSize);
+            if (current_mps == 0 || current_mps > dwMaxPayloadTransferSize) {
+                saw_oversize = true;
+                ESP_LOGW(TAG, "skip intf %u alt %d mps=%u limit=%u",
+                         bInterfaceNumber, alt, current_mps, dwMaxPayloadTransferSize);
+                continue;
+            }
+            if (current_mps > best_mps || (current_mps == best_mps && current_mult < best_mult)) {
+                best_mps = current_mps;
+                best_mult = current_mult;
+                *intf_desc_ret = intf_desc;
+                *ep_desc_ret = ep_desc;
+                ret = ESP_OK;
+            }
+        }
+    }
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "streaming intf %u alt %u mps=%u",
+                 bInterfaceNumber, (*intf_desc_ret)->bAlternateSetting, best_mps);
+    } else if (saw_oversize) {
+        ret = ESP_ERR_NOT_SUPPORTED;
+    }
+    return ret;
+}
+
+/**
+ * @brief 检查是否为格式描述符
+ *
+ * @param[in] _desc USB 描述符
+ * @return true 是格式描述符
+ * @return false 不是格式描述符
+ */
+static bool uvc_desc_is_format_desc(const usb_standard_desc_t *_desc)
+{
+    assert(_desc);
+    const uvc_format_desc_t *desc = (const uvc_format_desc_t *)_desc;
+    const bool is_format_desc = desc->bDescriptorType == UVC_CS_INTERFACE && (
+                                    desc->bDescriptorSubType == UVC_VS_DESC_SUBTYPE_FORMAT_UNCOMPRESSED ||
+                                    desc->bDescriptorSubType == UVC_VS_DESC_SUBTYPE_FORMAT_MJPEG ||
+                                    desc->bDescriptorSubType == UVC_VS_DESC_SUBTYPE_FORMAT_MPEG2TS ||
+                                    desc->bDescriptorSubType == UVC_VS_DESC_SUBTYPE_FORMAT_DV ||
+                                    desc->bDescriptorSubType == UVC_VS_DESC_SUBTYPE_FORMAT_FRAME_BASED ||
+                                    desc->bDescriptorSubType == UVC_VS_DESC_SUBTYPE_FORMAT_STREAM_BASED
+                                );
+
+    return is_format_desc;
+}
+
+/**
+ * @brief 检查是否为帧描述符
+ *
+ * @param[in] _desc USB 描述符
+ * @return true 是帧描述符
+ * @return false 不是帧描述符
+ */
+static bool uvc_desc_is_frame_desc(const usb_standard_desc_t *_desc)
+{
+    assert(_desc);
+    const uvc_frame_desc_t *desc = (const uvc_frame_desc_t *)_desc;
+    const bool is_frame_desc = desc->bDescriptorType == UVC_CS_INTERFACE && (
+                                   desc->bDescriptorSubType == UVC_VS_DESC_SUBTYPE_FRAME_UNCOMPRESSED ||
+                                   desc->bDescriptorSubType == UVC_VS_DESC_SUBTYPE_FRAME_MJPEG ||
+                                   desc->bDescriptorSubType == UVC_VS_DESC_SUBTYPE_FRAME_FRAME_BASED
+                               );
+
+    return is_frame_desc;
+}
+
+int uvc_desc_parse_format(const uvc_format_desc_t *format_desc)
+{
+    // Input checks
+    assert(format_desc);
+    UVC_CHECK(uvc_desc_is_format_desc((const usb_standard_desc_t *)format_desc), -1);
+
+    int ret = -1;
+    switch (format_desc->bDescriptorSubType) {
+    case UVC_VS_DESC_SUBTYPE_FORMAT_UNCOMPRESSED: {
+        const char *guid = (const char *)(format_desc->uncompressed_frame_based.guidFormat);
+        // We do not check full guid, but only the first 4 characters that show human readable format
+        if (strncmp(guid, "YUY2", 4) == 0) {
+            ret = UVC_VS_FORMAT_YUY2;
+        }
+        break;
+    }
+    case UVC_VS_DESC_SUBTYPE_FORMAT_MJPEG:
+        ret = UVC_VS_FORMAT_MJPEG;
+        break;
+    case UVC_VS_DESC_SUBTYPE_FORMAT_FRAME_BASED: {
+        const char *guid = (const char *)(format_desc->uncompressed_frame_based.guidFormat);
+        // We do not check full guid, but only the first 4 characters that show human readable format
+        if (strncmp(guid, "H265", 4) == 0) {
+            ret = UVC_VS_FORMAT_H265;
+        } else if (strncmp(guid, "H264", 4) == 0) {
+            ret = UVC_VS_FORMAT_H264;
+        }
+        break;
+    }
+    case UVC_VS_DESC_SUBTYPE_UNDEFINED:
+    default: break;
+    }
+    return ret;
+}
+
+static bool uvc_desc_format_is_equal(const uvc_frame_desc_t *frame_desc, const uvc_host_stream_format_t *vs_format)
+{
+    assert(frame_desc && vs_format);
+    UVC_CHECK(uvc_desc_is_frame_desc((const usb_standard_desc_t *)frame_desc), false);
+
+    if (frame_desc->wWidth == vs_format->h_res && frame_desc->wHeight == vs_format->v_res) {
+        if (vs_format->fps == 0) {
+            return true; // Default FPS requested
+        }
+
+        // Check if this frame descriptor supports requested FPS
+        uint8_t bFrameIntervalType;
+        uint32_t dwMinFrameInterval, dwMaxFrameInterval, dwFrameIntervalStep;
+
+        switch (frame_desc->bDescriptorSubType) {
+        case UVC_VS_DESC_SUBTYPE_FRAME_FRAME_BASED:
+            bFrameIntervalType = frame_desc->frame_based.bFrameIntervalType;
+            if (bFrameIntervalType == 0) {
+                if (!uvc_desc_frame_has_continuous_intervals(frame_desc)) {
+                    return false;
+                }
+
+                dwMinFrameInterval = frame_desc->frame_based.dwMinFrameInterval;
+                dwMaxFrameInterval = frame_desc->frame_based.dwMaxFrameInterval;
+                dwFrameIntervalStep = frame_desc->frame_based.dwFrameIntervalStep;
+                // This stream does not support discrete Frame Interval. Check all supported intervals
+                uint32_t current_frame_interval = dwMinFrameInterval;
+                while (current_frame_interval <= dwMaxFrameInterval) {
+                    if (FLOAT_EQUAL(vs_format->fps, UVC_DESC_DWFRAMEINTERVAL_TO_FPS(current_frame_interval))) {
+                        return true;
+                    }
+                    if (dwFrameIntervalStep == 0) {
+                        break;
+                    }
+                    current_frame_interval += dwFrameIntervalStep;
+                }
+            } else {
+                // This stream support discrete Frame Intervals. Check supported intervals
+                const uint8_t interval_count = uvc_desc_frame_discrete_interval_count(frame_desc, bFrameIntervalType);
+                for (int i = 0; i < interval_count; i++) {
+                    if (FLOAT_EQUAL(vs_format->fps, UVC_DESC_DWFRAMEINTERVAL_TO_FPS(frame_desc->frame_based.dwFrameInterval[i]))) {
+                        return true;
+                    }
+                }
+            }
+            break;
+        case UVC_VS_DESC_SUBTYPE_FRAME_UNCOMPRESSED:
+        case UVC_VS_DESC_SUBTYPE_FRAME_MJPEG:
+            bFrameIntervalType = frame_desc->mjpeg_uncompressed.bFrameIntervalType;
+            if (bFrameIntervalType == 0) {
+                if (!uvc_desc_frame_has_continuous_intervals(frame_desc)) {
+                    return false;
+                }
+
+                dwMinFrameInterval = frame_desc->mjpeg_uncompressed.dwMinFrameInterval;
+                dwMaxFrameInterval = frame_desc->mjpeg_uncompressed.dwMaxFrameInterval;
+                dwFrameIntervalStep = frame_desc->mjpeg_uncompressed.dwFrameIntervalStep;
+                // This stream does not support discrete Frame Interval. Check all supported intervals
+                uint32_t current_frame_interval = dwMinFrameInterval;
+                while (current_frame_interval <= dwMaxFrameInterval) {
+                    if (FLOAT_EQUAL(vs_format->fps, UVC_DESC_DWFRAMEINTERVAL_TO_FPS(current_frame_interval))) {
+                        return true;
+                    }
+                    if (dwFrameIntervalStep == 0) {
+                        break;
+                    }
+                    current_frame_interval += dwFrameIntervalStep;
+                }
+            } else {
+                // This stream support discrete Frame Intervals. Check supported intervals
+                const uint8_t interval_count = uvc_desc_frame_discrete_interval_count(frame_desc, bFrameIntervalType);
+                for (int i = 0; i < interval_count; i++) {
+                    if (FLOAT_EQUAL(vs_format->fps, UVC_DESC_DWFRAMEINTERVAL_TO_FPS(frame_desc->mjpeg_uncompressed.dwFrameInterval[i]))) {
+                        return true;
+                    }
+                }
+            }
+            break;
+        default:
+            return true; // Unknown frame type, assume it is equal;
+        }
+    }
+    return false;
+}
+
+esp_err_t uvc_desc_get_frame_format_by_format(
+    const usb_config_desc_t *cfg_desc,
+    uint8_t bInterfaceNumber,
+    const uvc_host_stream_format_t *vs_format,
+    const uvc_format_desc_t **format_desc_ret,
+    const uvc_frame_desc_t **frame_desc_ret)
+{
+    UVC_CHECK(cfg_desc && vs_format, ESP_ERR_INVALID_ARG);
+
+    const uvc_vs_input_header_desc_t *input_header = uvc_desc_get_streaming_input_header(cfg_desc, bInterfaceNumber);
+    UVC_CHECK(input_header, ESP_ERR_NOT_FOUND);
+    const uint16_t safe_wTotalLength = uvc_desc_get_safe_wTotalLength(cfg_desc, input_header);
+
+    // Find requested Format descriptors
+    esp_err_t ret = ESP_ERR_NOT_FOUND;
+    int format_offset = 0;
+    const usb_standard_desc_t *current_desc = (const usb_standard_desc_t *) input_header;
+    while ((current_desc = usb_parse_next_descriptor_of_type(current_desc, safe_wTotalLength, UVC_CS_INTERFACE, &format_offset))) {
+        if (uvc_desc_is_format_desc(current_desc)) {
+            const uvc_format_desc_t *this_format = (const uvc_format_desc_t *)(current_desc);
+            if (vs_format->format == uvc_desc_parse_format(this_format)) {
+                if (format_desc_ret) {
+                    *format_desc_ret = this_format;
+                }
+                // We found required Format Descriptor
+                // Now we look for correct Frame Descriptors which should be directly after Format
+                while ((current_desc = usb_parse_next_descriptor_of_type(current_desc, safe_wTotalLength, UVC_CS_INTERFACE, &format_offset))) {
+                    uvc_frame_desc_t *this_frame = (uvc_frame_desc_t *)current_desc;
+                    if (uvc_desc_format_is_equal(this_frame, vs_format)) {
+                        if (frame_desc_ret) {
+                            *frame_desc_ret = this_frame;
+                        }
+                        ret = ESP_OK;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    return ret;
+}
+
+static inline bool uvc_desc_is_format_supported(
+    const usb_config_desc_t *cfg_desc,
+    uint8_t bInterfaceNumber,
+    const uvc_host_stream_format_t *vs_format)
+{
+    if (vs_format->format == UVC_VS_FORMAT_DEFAULT ||
+            ESP_OK == uvc_desc_get_frame_format_by_format(cfg_desc, bInterfaceNumber, vs_format, NULL, NULL)) {
+        return true;
+    }
+    return false;
+}
+
+const uvc_vc_header_desc_t *uvc_desc_get_control_interface_header(const usb_config_desc_t *cfg_desc, uint8_t uvc_idx, uint8_t *vc_intf_num_ret)
+{
+    UVC_CHECK(cfg_desc, NULL);
+
+    // Find IAD UVC descriptor with desired index
+    const uvc_vc_header_desc_t *header_desc_ret = NULL;
+    int offset = 0;
+    int uvc_iad_idx = 0;
+    const usb_standard_desc_t *current_desc = (const usb_standard_desc_t *)cfg_desc;
+    while ((current_desc = usb_parse_next_descriptor_of_type(current_desc, cfg_desc->wTotalLength, USB_B_DESCRIPTOR_TYPE_INTERFACE_ASSOCIATION, &offset))) {
+        const usb_iad_desc_t *iad_desc = (usb_iad_desc_t *)current_desc;
+        if (iad_desc->bFunctionClass == USB_CLASS_VIDEO && iad_desc->bFunctionSubClass == UVC_SC_VIDEO_INTERFACE_COLLECTION) {
+            if (uvc_idx == uvc_iad_idx) {
+                // This is the IAD that we are looking for. Find its first Video Control interface header descriptor
+                if (vc_intf_num_ret) {
+                    *vc_intf_num_ret = iad_desc->bFirstInterface;
+                }
+                header_desc_ret = (const uvc_vc_header_desc_t *)usb_parse_next_descriptor_of_type(current_desc, cfg_desc->wTotalLength, UVC_CS_INTERFACE, &offset);
+                // Peer may omit the class header after a Video IAD (BBP 573 NULL deref).
+                UVC_CHECK(header_desc_ret, NULL);
+                UVC_CHECK(header_desc_ret->bLength >= offsetof(uvc_vc_header_desc_t, baInterfaceNr), NULL);
+                UVC_CHECK(header_desc_ret->bDescriptorSubType == UVC_VC_DESC_SUBTYPE_HEADER, NULL);
+                break;
+            } else {
+                // The user requires next UVC function
+                uvc_iad_idx++;
+            }
+        }
+    }
+    return header_desc_ret;
+}
+
+esp_err_t uvc_desc_get_frame_format_by_index(
+    const usb_config_desc_t *cfg_desc,
+    uint8_t bInterfaceNumber,
+    uint8_t bFormatIndex,
+    uint8_t bFrameIndex,
+    const uvc_format_desc_t **format_desc_ret,
+    const uvc_frame_desc_t **frame_desc_ret)
+{
+    UVC_CHECK(bFormatIndex > 0, ESP_ERR_INVALID_ARG); // Formats are indexed from 1
+    UVC_CHECK(bFrameIndex > 0, ESP_ERR_INVALID_ARG); // Frames are indexed from 1
+    UVC_CHECK(format_desc_ret && frame_desc_ret && cfg_desc, ESP_ERR_INVALID_ARG);
+
+    const uvc_vs_input_header_desc_t *input_header = uvc_desc_get_streaming_input_header(cfg_desc, bInterfaceNumber);
+    UVC_CHECK(input_header, ESP_ERR_NOT_FOUND);
+    const uint16_t safe_wTotalLength = uvc_desc_get_safe_wTotalLength(cfg_desc, input_header);
+
+    // Find requested Format and Frame descriptors
+    esp_err_t ret = ESP_ERR_NOT_FOUND;
+    int format_offset = 0;
+    const usb_standard_desc_t *current_desc = (const usb_standard_desc_t *) input_header;
+    while ((current_desc = usb_parse_next_descriptor_of_type(current_desc, safe_wTotalLength, UVC_CS_INTERFACE, &format_offset))) {
+        if (uvc_desc_is_format_desc(current_desc)) {
+            const uvc_format_desc_t *this_format = (const uvc_format_desc_t *)current_desc;
+            if (this_format->bFormatIndex == bFormatIndex) {
+                UVC_CHECK(this_format->bNumFrameDescriptors >= bFrameIndex, ESP_ERR_NOT_FOUND);
+                *format_desc_ret = (const uvc_format_desc_t *)this_format;
+                // We found required Format Descriptor
+                // Now we look for correct Frame Descriptors which should be directly after Format
+                while ((current_desc = usb_parse_next_descriptor_of_type(current_desc, safe_wTotalLength, UVC_CS_INTERFACE, &format_offset))) {
+                    uvc_frame_desc_t *this_frame = (uvc_frame_desc_t *)current_desc;
+                    if (this_frame->bFrameIndex == bFrameIndex) {
+                        *frame_desc_ret = this_frame;
+                        ret = ESP_OK;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    return ret;
+}
+
+esp_err_t uvc_desc_get_streaming_interface_num(
+    const usb_config_desc_t *cfg_desc,
+    uint8_t uvc_index,
+    const uvc_host_stream_format_t *vs_format,
+    uint16_t *bcdUVC,
+    uint8_t *bInterfaceNumber)
+{
+    UVC_CHECK(cfg_desc && vs_format && bcdUVC && bInterfaceNumber, ESP_ERR_INVALID_ARG);
+
+    esp_err_t ret = ESP_ERR_NOT_FOUND;
+
+    // Get Interface header with uvc_index
+    const uvc_vc_header_desc_t *vc_header_desc = uvc_desc_get_control_interface_header(cfg_desc, uvc_index, NULL);
+    if (!vc_header_desc) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    *bcdUVC = vc_header_desc->bcdUVC;
+
+    // Find video streaming interface that offers the requested format
+    for (int streaming_if = 0; streaming_if < vc_header_desc->bInCollection; streaming_if++) {
+        uint8_t current_bInterfaceNumber = vc_header_desc->baInterfaceNr[streaming_if];
+        if (uvc_desc_is_format_supported(cfg_desc, current_bInterfaceNumber, vs_format)) {
+            *bInterfaceNumber = current_bInterfaceNumber;
+            ret = ESP_OK;
+            break;
+        }
+    }
+    return ret;
+}
+
+bool uvc_desc_is_uvc_device(const usb_config_desc_t *cfg_desc)
+{
+    assert(cfg_desc);
+    int offset = 0;
+    int total_len = cfg_desc->wTotalLength;
+
+    const usb_standard_desc_t *current_desc = (const usb_standard_desc_t *)cfg_desc;
+    while ((current_desc = usb_parse_next_descriptor_of_type((const usb_standard_desc_t *)current_desc, total_len, USB_B_DESCRIPTOR_TYPE_INTERFACE, &offset))) {
+        const usb_intf_desc_t *iface_desc = (const usb_intf_desc_t *)current_desc;
+        if (USB_CLASS_VIDEO == iface_desc->bInterfaceClass) {
+            return true;
+        }
+    }
+    return false;
+}
+
+esp_err_t uvc_desc_get_frame_list(const usb_config_desc_t *config_desc, uint8_t uvc_index, uvc_host_frame_info_t (*frame_info_list)[], size_t *list_size)
+{
+    esp_err_t ret = ESP_OK;
+    UVC_CHECK(config_desc && list_size, ESP_ERR_INVALID_ARG);
+    size_t frame_index = 0;
+    // Support frame number for VS Interface Header
+    size_t num_frame = 0;
+
+    const uvc_vc_header_desc_t *vc_header = uvc_desc_get_control_interface_header(config_desc, uvc_index, NULL);
+    UVC_CHECK(vc_header, ESP_ERR_NOT_FOUND);
+    UVC_CHECK(vc_header->bInCollection > 0, ESP_ERR_NOT_FOUND);
+
+    // Find requested Format descriptors
+    const usb_standard_desc_t *current_desc = (const usb_standard_desc_t *)vc_header;
+    // Skip VC Interface Header and VC Interface Descriptor
+    int format_offset = 0;
+    const uvc_vs_input_header_desc_t *vs_header = uvc_desc_get_streaming_input_header(config_desc, vc_header->baInterfaceNr[0]);
+    UVC_CHECK(vs_header, ESP_ERR_NOT_FOUND);
+    const uint16_t safe_wTotalLength = uvc_desc_get_safe_wTotalLength(config_desc, vs_header);
+    current_desc = (const usb_standard_desc_t *)vs_header;
+
+    while ((current_desc = usb_parse_next_descriptor_of_type(current_desc, safe_wTotalLength, UVC_CS_INTERFACE, &format_offset))) {
+        if (!uvc_desc_is_format_desc(current_desc)) {
+            continue;
+        }
+
+        const uvc_format_desc_t *this_format = (const uvc_format_desc_t *)(current_desc);
+        int parsed_format = uvc_desc_parse_format(this_format);
+        if (parsed_format < 0) { // Undefined format
+            continue;
+        }
+        enum uvc_host_stream_format format_type = parsed_format;
+
+        num_frame += this_format->bNumFrameDescriptors;
+
+        /*!< Just Skip Skip populating `frame_info_list`. */
+        if (!frame_info_list) {
+            continue;
+        }
+
+        // We found required Format Descriptor
+        // Now we look for correct Frame Descriptors which should be directly after Format
+        while ((current_desc = usb_parse_next_descriptor_of_type(current_desc, safe_wTotalLength, UVC_CS_INTERFACE, &format_offset))) {
+            if (!uvc_desc_is_frame_desc(current_desc)) {
+                break;
+            }
+            uvc_frame_desc_t *this_frame = (uvc_frame_desc_t *)current_desc;
+
+            if (frame_index > *list_size - 1) {
+                break;
+            }
+            uvc_host_frame_info_t *frame_info = &(*frame_info_list)[frame_index];
+            frame_info->format = format_type;
+            frame_info->h_res = this_frame->wWidth;
+            frame_info->v_res = this_frame->wHeight;
+            switch (format_type) {
+            case UVC_VS_FORMAT_YUY2:
+            case UVC_VS_FORMAT_MJPEG:
+                frame_info->default_interval = this_frame->mjpeg_uncompressed.dwDefaultFrameInterval;
+                frame_info->interval_type = this_frame->mjpeg_uncompressed.bFrameIntervalType;
+                if (frame_info->interval_type == 0) {
+                    if (!uvc_desc_frame_has_continuous_intervals(this_frame)) {
+                        break;
+                    }
+                    frame_info->interval_min = this_frame->mjpeg_uncompressed.dwMinFrameInterval;
+                    frame_info->interval_max = this_frame->mjpeg_uncompressed.dwMaxFrameInterval;
+                    frame_info->interval_step = this_frame->mjpeg_uncompressed.dwFrameIntervalStep;
+                } else {
+                    const uint8_t interval_count = uvc_desc_frame_discrete_interval_count(this_frame, frame_info->interval_type);
+                    frame_info->interval_type = interval_count;
+                    for (int i = 0; i < MIN(interval_count, CONFIG_UVC_INTERVAL_ARRAY_SIZE); i++) {
+                        frame_info->interval[i] = this_frame->mjpeg_uncompressed.dwFrameInterval[i];
+                    }
+                }
+                break;
+            case UVC_VS_FORMAT_H265:
+            case UVC_VS_FORMAT_H264:
+                frame_info->default_interval = this_frame->frame_based.dwDefaultFrameInterval;
+                frame_info->interval_type = this_frame->frame_based.bFrameIntervalType;
+                if (frame_info->interval_type == 0) {
+                    if (!uvc_desc_frame_has_continuous_intervals(this_frame)) {
+                        break;
+                    }
+                    frame_info->interval_min = this_frame->frame_based.dwMinFrameInterval;
+                    frame_info->interval_max = this_frame->frame_based.dwMaxFrameInterval;
+                    frame_info->interval_step = this_frame->frame_based.dwFrameIntervalStep;
+                } else {
+                    const uint8_t interval_count = uvc_desc_frame_discrete_interval_count(this_frame, frame_info->interval_type);
+                    frame_info->interval_type = interval_count;
+                    for (int i = 0; i < MIN(interval_count, CONFIG_UVC_INTERVAL_ARRAY_SIZE); i++) {
+                        frame_info->interval[i] = this_frame->frame_based.dwFrameInterval[i];
+                    }
+                }
+                break;
+            default:
+                break;
+            }
+
+            frame_index++;
+        }
+
+        if (!current_desc) {
+            break;
+        }
+    }
+
+    *list_size = frame_info_list ? frame_index : num_frame;
+    return ret;
+}

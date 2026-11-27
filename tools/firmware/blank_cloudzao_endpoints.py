@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Blank all string literals in main/cloudzao_endpoints.c (CI open release)."""
+"""Blank all string literals in main/infra/network/endpoints/cloudzao_endpoints.c (CI open release)."""
 from __future__ import annotations
 
 import re
@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PATH = ROOT / "main" / "cloudzao_endpoints.c"
+PATH = ROOT / "main" / "infra" / "network" / "endpoints" / "cloudzao_endpoints.c"
 
 
 def main() -> int:

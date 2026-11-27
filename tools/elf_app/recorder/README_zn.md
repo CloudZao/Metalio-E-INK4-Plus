@@ -12,7 +12,7 @@
 
 ## 构建与安装
 
-按[开发手册](../DEVELOPMENT_zn.md)配置工具链后执行：
+按[开发手册](../README_zn.md)配置工具链后执行：
 
 ```powershell
 ./tools/elf_app/build_app.ps1 -Compiler $compiler -AppDirectory ./tools/elf_app/recorder
@@ -20,4 +20,4 @@
 
 输出 `recorder.elf`，手动安装时使用交付文件名 `录音机.elf`，与匹配的 `manifest.json` 放在 `metalio/e-ink/apps/录音机/`。重建后同步清单大小与 SHA256，或通过应用商店发布。先升级支持 `XZ_APP_CAP_RECORDING` 与 WAV 播放的固件；旧固件能力不足时入口返回 `XZ_APP_ERR_UNSUPPORTED`。
 
-宿主参数、返回值及生命周期约定见[录音开发说明](../DEVELOPMENT_zn.md#录音xz_app_cap_recording)。
+宿主参数、返回值及生命周期约定见[录音开发说明](../README_zn.md#单槽录音)。

@@ -1,18 +1,17 @@
-#include "esp_tcp.h"
-
-#include <esp_log.h>
-#include <esp_timer.h>
 #include <algorithm>
-#include <unistd.h>
+#include <cerrno>
 #include <cstring>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <sys/select.h>
 #include <functional>
 #include <mutex>
+#include <arpa/inet.h>
+#include <esp_log.h>
+#include <esp_timer.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include "esp_tcp.h"
 
 static const char *TAG = "EspTcp";
 constexpr int kConnectTimeoutSec = 15;
@@ -38,6 +37,11 @@ EspTcp::~EspTcp() {
 }
 
 bool EspTcp::Connect(const std::string& host, int port) {
+    if (!event_group_) {
+        last_error_ = ENOMEM;
+        ESP_LOGE(TAG, "operation=connect stage=event_group result=no_memory");
+        return false;
+    }
     bool had_session = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -127,7 +131,14 @@ bool EspTcp::Connect(const std::string& host, int port) {
     xEventGroupClearBits(event_group_, ESP_TCP_EVENT_RECEIVE_TASK_EXIT);
     const auto task_result = xTaskCreate([](void* arg) {
         EspTcp* tcp = (EspTcp*)arg;
-        tcp->ReceiveTask();
+        try {
+            tcp->ReceiveTask();
+        } catch (...) {
+            tcp->last_error_ = ENOMEM;
+            tcp->connected_.store(false);
+            tcp->NotifyDisconnected();
+            ESP_LOGE(TAG, "operation=receive result=no_memory");
+        }
         xEventGroupSetBits(tcp->event_group_, ESP_TCP_EVENT_RECEIVE_TASK_EXIT);
         vTaskDelete(NULL);
     }, "tcp_receive", 4096, this, 1, &receive_task_handle_);
@@ -155,18 +166,24 @@ void EspTcp::ShutdownAndJoin() {
         std::lock_guard<std::mutex> lock(mutex_);
         connected_ = false;
         fd = tcp_fd_;
-        tcp_fd_ = -1;
     }
     if (fd != -1) {
-        close(fd);
+        shutdown(fd, SHUT_RDWR);
     }
 
     if (wait_for_task) {
-        auto bits = xEventGroupWaitBits(event_group_, ESP_TCP_EVENT_RECEIVE_TASK_EXIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(10000));
-        if (!(bits & ESP_TCP_EVENT_RECEIVE_TASK_EXIT)) {
-            ESP_LOGE(TAG, "Failed to wait for receive task exit");
+        while (!(xEventGroupWaitBits(event_group_, ESP_TCP_EVENT_RECEIVE_TASK_EXIT,
+                                    pdFALSE, pdFALSE, pdMS_TO_TICKS(10000)) & ESP_TCP_EVENT_RECEIVE_TASK_EXIT)) {
+            ESP_LOGW(TAG, "operation=disconnect stage=join result=waiting");
         }
         receive_task_handle_ = nullptr;
+    }
+    if (!receive_task_handle_ && fd != -1) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (tcp_fd_ == fd) {
+            tcp_fd_ = -1;
+            close(fd);
+        }
     }
 }
 
@@ -242,10 +259,18 @@ void EspTcp::ReceiveTask() {
         data.resize(1500);
         int ret = recv(fd, data.data(), data.size(), 0);
         if (ret <= 0) {
-            if (ret < 0) {
-                ESP_LOGE(TAG, "TCP receive failed: %d", ret);
+            const int socket_error = ret < 0 ? errno : 0;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (!connected_) {
+                    return;
+                }
+                if (socket_error) {
+                    last_error_ = socket_error;
+                    ESP_LOGW(TAG, "operation=receive result=failed socket_errno=%d", socket_error);
+                }
+                connected_.store(false);
             }
-            ShutdownAndJoin();
             NotifyDisconnected();
             return;
         }

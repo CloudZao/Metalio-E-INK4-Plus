@@ -2,8 +2,10 @@
 
 适用 Plus commit `ad8edf4150a688737c0d7c00cae4413079b262ef` 与 IDF commit `fff9895c82d744c7237be8847347bdd1b07c6643`。`$Raw` 为运维核验后的 PlusRawMirror 根目录；`$Project` 必须是尚不存在的短 ASCII 路径。
 
+当前包不含该固定工程的原始依赖锁；此路线需另行提供原始 `dependencies.lock`，不能使用当前宿主工程的锁替代。脚本在创建工程前校验其大小和 SHA256。默认自包含应用生成器不依赖该材料。
+
 ```powershell
-python "$Skill/skills/firmware-build/scripts/prepare_official_project.py" --mirror $Raw --path $Project
+python "$Skill/skills/firmware-build/scripts/prepare_official_project.py" --mirror $Raw --path $Project --dependency-lock $DependencyLock
 ```
 
 脚本先核验官方归档的固定 SHA，再逐一核验并提取 `assets/official-build-fixes/source-selection.json` 中 798 个文件。随后加入本 Skill 的开发补全：UART UHCI/IOT 组件声明、固定依赖锁、从固定 `lang_home.cc` 机械生成的语言头、资源生成的 CMake 顺序约束。`skill-development-provenance.json` 区分原始选材与新增文件。镜像不修改，已有工程不覆盖。

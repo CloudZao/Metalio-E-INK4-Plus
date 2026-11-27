@@ -21,15 +21,15 @@
 
 ## 2. 源码位置与职责
 
-- [ap_transfer.cc](../main/display/screen/cloud_screen/ap/ap_transfer.cc)：AP/HTTP 启停、路由、WebSocket 会话、数据解压、文件写入和提交。
-- [ap_transfer.h](../main/display/screen/cloud_screen/ap/ap_transfer.h)：传输服务对外入口。
-- [ap_request_worker.cc](../main/display/screen/cloud_screen/ap/ap_request_worker.cc)：内部有界异步请求队列、PSRAM 工作任务及停止屏障。
-- [fileman.html](../main/display/screen/cloud_screen/ap/fileman.html)：文件管理界面、队列、压缩、发送背压、进度与取消。
-- [cloud_chrome.cc](../main/display/screen/cloud_screen/cloud_chrome.cc)：页面无线模式切换与结果回传。
-- [pack_ap_fileman.py](../tools/assets/pack_ap_fileman.py)：内嵌页面图片并生成 gzip 资源。
+- [ap_transfer.cc](../main/business/transfer/ap_transfer.cc)：AP/HTTP 启停、路由、WebSocket 会话、数据解压、文件写入和提交。
+- [ap_transfer.h](../main/business/transfer/ap_transfer.h)：传输服务对外入口。
+- [ap_request_worker.cc](../main/business/transfer/ap_request_worker.cc)：内部有界异步请求队列、PSRAM 工作任务及停止屏障。
+- [fileman.html](../main/ui/apps/cloud/ap/fileman.html)：文件管理界面、队列、压缩、发送背压、进度与取消。
+- [cloud_screen.cc](../main/ui/apps/cloud/cloud_screen.cc)：页面无线模式切换与结果回传。
+- [pack_ap_fileman.py](../tools/assets/pack_ap_fileman.py)：生成公共页面资源与中英文语言入口，分别压缩为 gzip。
 - [SdCardManager.cc](../main/boards/common/storage/SdCardManager.cc)：SD 挂载、总线配置及 DMA 对齐中转缓冲。
 - [wifi_station.cc](../components/esp-wifi-connect/wifi_station.cc)：STA 启停及每次启动时应用功率限制。
-- [wifi_station.h](../components/esp-wifi-connect/include/wifi_station.h)：470 的固定 TX 功率请求上限。
+- [config.h](../main/boards/metalio-e-ink4-plus/config.h)：470 的板级 Wi-Fi TX 功率请求上限。
 - [sdkconfig.defaults.esp32s31](../sdkconfig.defaults.esp32s31)：S31 默认配置；当前构建配置见 [sdkconfig](../sdkconfig)。
 
 引脚和外设参数继续以板型配置为准，本文件不复制引脚表。
@@ -166,7 +166,7 @@ EPUB 按原文件扩展名判断，不区分大小写，使用 `identity`：整�
 
 ### 6.2 与网页压缩及掩码的区别
 
-页面源由构建脚本内嵌标识图片并生成 `ap_fileman.html.gz`，嵌入 Flash；设备直接发送 gzip，浏览器展开，设备不在 RAM 解压页面。打包时图片与页面分别结束 DEFLATE 块，减少内嵌 base64 对压缩率的影响。
+页面布局、样式和业务脚本共用一份 `ap_fileman.js.gz`，中英文入口仅保存语言字典与加载结构；标识图片单独提供，两种语言共用。构建脚本从现有页面源和英文文案生成 gzip 资源并嵌入 Flash。设备按当前语言返回入口，直接发送压缩资源，由浏览器展开和渲染，设备不在 RAM 解压页面。
 
 网页 gzip、上传应用层 zlib、EPUB 内部 ZIP 是不同处理层。上传不启用 WebSocket `permessage-deflate`；客户端掩码由 SDK 解除，属于协议异或处理，不是压缩或加密。
 

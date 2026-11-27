@@ -1,68 +1,44 @@
-menu "Metalio E-Ink4-Plus"
+menu "Hardware configuration / 硬件配置"
 
 choice BOARD_TYPE
-    prompt "Board Type"
+    prompt "Board / 硬件板型"
+    default BOARD_TYPE_METALIO_E_INK_4 if IDF_TARGET_ESP32S3
     default BOARD_TYPE_METALIO_E_INK4_PLUS
     help
-        S31 并行墨水屏 + 百问 AI。
+        Select the board matching the chip, panel and power wiring.
+        选择匹配芯片、屏幕与供电连接的硬件板型，产品版本单独选择。
 
     config BOARD_TYPE_METALIO_E_INK4_PLUS
         bool "Metalio E-Ink4-Plus (4.7 parallel)"
         depends on IDF_TARGET_ESP32S31
 
-    config BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
-        bool "Metalio E-Ink4-Plus Global (4.7 parallel)"
-        depends on IDF_TARGET_ESP32S31
+    config BOARD_TYPE_METALIO_E_INK_4
+        bool "Metalio E-Ink4 (3.97 SPI)"
+        depends on IDF_TARGET_ESP32S3
 endchoice
 
-choice WAKE_WORD_TYPE
-    prompt "Wake word implementation"
-    default WAKE_WORD_DISABLED
-    help
-        百问为 PTT；默认关闭唤醒词。
-
-    config WAKE_WORD_DISABLED
-        bool "Disabled"
-    config USE_ESP_WAKE_WORD
-        bool "ESP Wake Word"
-    config USE_AFE_WAKE_WORD
-        bool "AFE Wake Word"
-        depends on SPIRAM
-    config USE_CUSTOM_WAKE_WORD
-        bool "Custom Wake Word"
+choice PRODUCT_VARIANT
+    prompt "Product variant / 产品版本"
+    default PRODUCT_DOMESTIC
+    config PRODUCT_DOMESTIC
+        bool "Domestic / 国内版"
+    config PRODUCT_GLOBAL
+        bool "International / 国际版"
 endchoice
 
-config USE_AUDIO_PROCESSOR
-    bool "Enable audio processor (AFE)"
-    default n
-    depends on SPIRAM
-    help
-        VAD/AEC 处理；S31 无 esp-sr 时关，走 no_audio_processor。
+# 兼容已有代码使用的国际版板型符号，不再作为独立硬件选项。
+config BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
+    bool
+    default y if BOARD_TYPE_METALIO_E_INK4_PLUS && PRODUCT_GLOBAL
+config BOARD_TYPE_METALIO_E_INK_4_GLOBAL
+    bool
+    default y if BOARD_TYPE_METALIO_E_INK_4 && PRODUCT_GLOBAL
 
-config USE_DEVICE_AEC
-    bool "Device AEC"
-    default n
-    depends on USE_AUDIO_PROCESSOR
-
-config USE_SERVER_AEC
-    bool "Server AEC"
-    default n
-    depends on USE_AUDIO_PROCESSOR
-
-config METALIO_TOUCH_UPGRADE_ON_BOOT
-    bool "Upgrade FT6336U touch firmware to V04 on boot / 启动时升级触摸固件至 V04"
-    default y
-    help
-        Only for the LT0470GF0430M 684x1216 FT6336U panel. Runs before
-        touch/display tasks start, using the embedded supplier app image.
-        Checks chip and bootloader IDs, packet status, XOR and final version.
-        Skips V04; all other versions are updated to V04. Keep power connected throughout the
-        update. Not for other touch panels.
-        仅适用于本板触摸屏；启动时检查版本，非 0x04 时升级到 V04，
-        版本相同时跳过。升级期间保持供电。
-
-config USE_AUDIO_DEBUGGER
-    bool "Audio debugger"
-    default n
+config DISPLAY_BACKEND_EPDIY
+    bool
+    default y if BOARD_TYPE_METALIO_E_INK4_PLUS || BOARD_TYPE_METALIO_E_INK4_PLUS_GLOBAL
+config DISPLAY_BACKEND_SSD1677
+    bool
+    default y if BOARD_TYPE_METALIO_E_INK_4 || BOARD_TYPE_METALIO_E_INK_4_GLOBAL
 
 endmenu

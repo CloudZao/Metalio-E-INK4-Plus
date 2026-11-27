@@ -1,0 +1,99 @@
+#pragma once
+
+#include "lvgl.h"
+
+/** @brief 页面级虚拟键：HOME/PREV/NEXT 与 BOOT 分发及生命周期 */
+typedef enum {
+    VK_SCREEN_LIFECYCLE_LOAD = 0,  // 页面加载：压入返回栈
+    VK_SCREEN_LIFECYCLE_UNLOAD,    // 页面卸载：弹出返回栈
+} vk_screen_lifecycle_t;
+
+using ScreenFactory = lv_obj_t* (*)();                // 返回栈页面工厂；须为无捕获静态函数
+using VkKeyHandler = bool (*)(const char* key_name);  // true=页面已消费，不再走默认策略
+using BootKeyAction = bool (*)();                     // BOOT 回调；true=页面已处理
+
+struct VkKeyScreenDesc {
+    ScreenFactory factory = nullptr;               // 返回栈工厂；如 ResumeDetail 回书详情
+    VkKeyHandler on_key = nullptr;                 // 短按虚拟键
+    BootKeyAction on_boot_click = nullptr;         // BOOT 单击
+    BootKeyAction on_boot_long_press = nullptr;    // BOOT 长按
+    BootKeyAction on_boot_press_down = nullptr;    // BOOT 按下
+    BootKeyAction on_boot_press_up = nullptr;      // BOOT 抬起
+    VkKeyHandler on_key_long_press = nullptr;      // 虚拟键长按
+    VkKeyHandler on_key_press_up = nullptr;        // 虚拟键抬起
+    BootKeyAction on_boot_double_click = nullptr;  // BOOT 双击
+    bool (*volume_keys_turn_pages)() = nullptr; // 查询当前页面状态是否将默认音量键用于翻页
+    bool (*on_page_key)(const char* key, bool long_press) = nullptr; // 纯翻页入口，边界仍返回已消费
+};
+
+/**
+ * @brief 页面生命周期：压栈、出栈
+ * @param name 页面名
+ * @param event LOAD / UNLOAD
+ */
+void VkKey_OnScreenLifecycle(const char* name, vk_screen_lifecycle_t event);
+
+/** @brief 当前前台页面名；无则返回空串或 nullptr（实现约定） */
+const char* VkKey_ActiveScreen();
+
+/** @brief 查询当前页面是否将默认音量键用于翻页；须在 UI 任务调用 */
+bool VkKey_VolumeKeysTurnPages();
+
+/** @brief 查询页面工厂 */
+ScreenFactory VkKey_GetScreenFactory(const char* name);
+
+/** @brief 注册页面工厂 */
+void VkKey_SetScreenFactory(const char* name, ScreenFactory factory);
+
+/** @brief 查询 BOOT 单击回调 */
+BootKeyAction VkKey_GetBootClick(const char* name);
+
+/** @brief 查询 BOOT 长按回调 */
+BootKeyAction VkKey_GetBootLongPress(const char* name);
+
+/** @brief 查询 BOOT 按下回调 */
+BootKeyAction VkKey_GetBootPressDown(const char* name);
+
+/** @brief 查询 BOOT 抬起回调 */
+BootKeyAction VkKey_GetBootPressUp(const char* name);
+
+/** @brief 查询 BOOT 双击回调 */
+BootKeyAction VkKey_GetBootDoubleClick(const char* name);
+
+/** @brief 挂接页面名到虚拟键表（仅生命周期，无自定义回调） */
+void VkKey_AttachScreen(lv_obj_t* scr, const char* name);
+
+/**
+ * @brief 挂接页面并注册按键/BOOT 回调
+ * @note factory=ResumeDetail 时：进百问后可回到当前书详情
+ */
+void VkKey_AttachScreen(lv_obj_t* scr, const char* name, const VkKeyScreenDesc& desc);
+
+/** @brief 在 UI 任务分发虚拟键短按，HOME 默认返回上一页面 */
+void VkKey_Dispatch(const char* key_name);
+
+/** @brief 在 UI 任务分发虚拟键长按，HOME 默认直达系统首页；true=已消费 */
+bool VkKey_OnLongPress(const char* key_name);
+
+/** @brief 在 UI 任务分发虚拟键抬起；true=已消费 */
+bool VkKey_OnPressUp(const char* key_name);
+enum class VkTouchPhase {
+    kDown,  // 按下
+    kLong,  // 达到长按阈值
+    kUp,    // 抬起
+};
+
+/** @brief 触摸采样任务投递盖板键边沿；不访问 LVGL，也不等待 UI。 */
+void VkKey_PostTouch(VkTouchPhase phase, const char* key_name);
+
+/** @brief 在 UI 任务按序处理盖板键边沿，保持长按与抬起配对。 */
+void VkKey_DrainTouch();
+
+/** @brief 获取页面输入代次，用于作废跨页面积压事件；允许跨任务读取 */
+uint32_t VkKey_InputEpoch();
+
+/**
+ * @brief 在当前页分发短按或长按纯翻页，不执行返回导航
+ * @return 页面接管时返回 true，包括首尾边界；不适用时返回 false
+ */
+bool VkKey_DispatchPage(const char* key_name, bool long_press = false);

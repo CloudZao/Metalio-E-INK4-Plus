@@ -17,7 +17,7 @@
 | 内置资源 | `resources` | 400KB @ `0xa80000` | 构建生成的 mmap_assets / SPIFFS 资源镜像 |
 
 - 支持 **分别升级**（两个文件）或 **合并成一个包** 一次升两边。
-- 校验失败不写分区；写入失败可重试；尽量避免因校验硬挂导致无法开机。
+- 校验失败不写分区；写入失败可重试；校验失败应保持现有资源可用。
 
 ### 非目标
 
@@ -226,39 +226,10 @@ Offset  Size   Field
 
 1. `MZPK` 打包/解析工具与设备端流式写入。  
 2. `resources.bin` 写入；策略 A 版本绑定。  
-3. 启动侧：resources 失败降级（至少不 abort），为售后留活路。
+3. 启动侧：resources 失败降级（至少不 abort），保留维护恢复路径。
 
 ### P2
 
 1. 开机自动检测未处理包。  
 2. 云端下发 `metalio_sys.pkg` URL（可选，仍落 SD 再写分区）。  
-3. 双银行式「pending / confirm」降低变砖概率（可选，复杂度高）。
-
----
-
-## 11. 工作量粗估
-
-| 模块 | 内容 |
-|------|------|
-| `partition_updater` | 通用于任意 label：校验回调 + erase/write + 进度 |
-| font 适配 | EFNT 头校验 |
-| resources 适配 | 大小 + 可选 checksum；重启重载 |
-| MZPK | PC pack 脚本 + 设备解析 |
-| UI | 设置页 1 个入口、进度、文案 |
-| 文档 | 用户说明 + 本方案 |
-
----
-
-## 12. 直接回答「能否合并成一个文件」
-
-**能。** 推荐自定义 **`metalio_sys.pkg`（MZPK）** 单文件，内嵌 fontpack 与/或 resources 镜像；设备流式拆写到 `font_data` / `resources`。  
-
-也可用 zip，但 ESP 上要解压库与临时空间，不如 MZPK 干净。
-
----
-
-## 13. 用户侧一句话说明（可写进说明书）
-
-> 将官方提供的 `metalio_sys.pkg`（或 `font.fontpack`）复制到 SD 卡目录 `metalio/e-ink/system/`，在设备「设置」中选择「从 SD 升级系统资源」，保持供电直至完成并自动重启。
-
-产线仍以整包 `merge_firmware` 为准；本方案服务 **已出货设备补字库/补内置图**。
+3. 双区式「pending / confirm」降低变砖概率（可选，复杂度高）。

@@ -1,0 +1,107 @@
+{
+  "exceptions": {
+    "board_assembly": {
+      "reason": "现有板级装配及硬件协调入口；新增接线须单独审查。",
+      "includes": {
+        "boards/common/audio/bluetooth/bluetooth_audio.cc": [
+          "sysmgmt/power/policy/power_policy.h"
+        ],
+        "boards/common/bluetooth/ble_page_turner.cc": [
+          "sysmgmt/tasks/task_executor.h"
+        ],
+        "boards/common/board/board.cc": [
+          "ui/common/drawing/display.h"
+        ],
+        "boards/common/board/dual_network_board.cc": [
+          "sysmgmt/system_control.h",
+          "ui/common/drawing/display.h"
+        ],
+        "boards/common/board/nt26_board.cc": [
+          "sysmgmt/system_state.h",
+          "ui/common/drawing/display.h",
+          "ui/common/drawing/font/font_awesome.h"
+        ],
+        "boards/common/board/wifi_board.cc": [
+          "sysmgmt/power/policy/power_policy.h",
+          "sysmgmt/power/power_lifecycle.h",
+          "ui/common/drawing/display.h",
+          "ui/common/drawing/font/font_awesome.h"
+        ],
+        "boards/common/camera/dvp/dvp_camera.cc": [
+          "sysmgmt/power/policy/power_policy.h"
+        ],
+        "boards/common/camera/uvc/usb_uvc_still.cc": [
+          "sysmgmt/power/policy/power_policy.h"
+        ],
+        "boards/common/display/frontlight.cc": [
+          "sysmgmt/tasks/task_executor.h"
+        ],
+        "boards/common/power/cx25601n/cx25601n.cc": [
+          "sysmgmt/power/policy/power_policy.h",
+          "sysmgmt/power/power_lifecycle.h"
+        ],
+        "boards/common/storage/SdCardManager.cc": [
+          "sysmgmt/tasks/task_executor.h"
+        ],
+        "boards/common/storage/usb_virtual_disk.cc": [
+          "sysmgmt/power/policy/power_policy.h"
+        ],
+        "boards/metalio-e-ink-4/metalio_e_ink_4_board.cc": [
+          "sysmgmt/power/policy/power_policy.h",
+          "ui/common/drawing/adapter/lv_adapter_display.h",
+          "ui/common/drawing/adapter/ssd1677/display_setup.h"
+        ],
+        "boards/metalio-e-ink4-plus/metalio_e_ink4_plus_board.cc": [
+          "business/diagnostics/panel_vcom.h",
+          "business/wallpaper/wallpaper_active.h",
+          "sysmgmt/power/policy/power_policy.h",
+          "ui/common/drawing/adapter/epd_refresh.h",
+          "ui/common/drawing/rendering/panel_vcom_notice.h",
+          "ui/common/drawing/adapter/epdiy/display_setup.h"
+        ]
+      }
+    },
+    "system_presentation": {
+      "reason": "系统启动、电源或升级与现有显示门面的装配边界。",
+      "includes": {
+        "sysmgmt/application.cc": [
+          "ui/application_ui.h",
+          "ui/common/drawing/a2ui/a2ui_img_cache.h",
+          "ui/common/drawing/display.h",
+          "ui/common/drawing/font/fontpack_lvgl.h",
+          "ui/common/drawing/font/ui_fonts.h",
+          "ui/common/runtime/lvgl/ui_dispatch.h",
+          "ui/common/widgets/screen_common.h",
+          "ui/common/widgets/weather_view.h"
+        ],
+        "sysmgmt/power/policy/power_policy.cc": [
+          "ui/common/runtime/lvgl/ui_dispatch.h"
+        ],
+        "sysmgmt/power/policy/power_policy_standby_lp.cc": [
+          "ui/common/runtime/lvgl/ui_dispatch.h"
+        ],
+        "sysmgmt/power/power_lifecycle.cc": [
+          "ui/common/drawing/adapter/epd_refresh.h",
+          "ui/common/drawing/adapter/lv_adapter_display.h",
+          "ui/common/drawing/display.h",
+          "ui/common/drawing/font/ttf_convert.h",
+          "ui/common/runtime/lvgl/ui_dispatch.h"
+        ],
+        "sysmgmt/update/firmware_update.cc": [
+          "ui/common/drawing/display.h"
+        ]
+      }
+    },
+    "common_application": {
+      "reason": "既有显示或输入适配中的应用协作；保留行为，禁止扩大引用范围。",
+      "includes": {
+        "ui/common/drawing/rendering/system_notice.cc": [
+          "ui/apps/assistant/assistant_screen.h"
+        ],
+        "ui/common/runtime/input/boot_key_handler.cc": [
+          "ui/apps/cloud/cloud_screen.h"
+        ]
+      }
+    }
+  }
+}

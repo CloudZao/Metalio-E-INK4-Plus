@@ -7,7 +7,7 @@ Formats:
 
 Usage:
   # From existing LVGL fmt_txt .c (recommended for MiSans already in repo)
-  python fontconvert.py --from-lvgl-c ../../main/display/font/font_misans_regular_25_2.c \\
+  python fontconvert.py --from-lvgl-c ../../main/ui/common/drawing/font/font_misans_regular_25_2.c \\
       -o misans_25.ef
 
   # Optional: downsample 2bpp → 1bpp

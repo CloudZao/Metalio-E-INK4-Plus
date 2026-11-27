@@ -1,13 +1,11 @@
 #ifndef _ESP_TCP_H_
 #define _ESP_TCP_H_
 
-#include "tcp.h"
-
+#include <mutex>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
-
-#include <mutex>
+#include "tcp.h"
 
 #define ESP_TCP_EVENT_RECEIVE_TASK_EXIT 1
 
@@ -26,7 +24,7 @@ private:
     int tcp_fd_ = -1;
     EventGroupHandle_t event_group_ = nullptr;
     TaskHandle_t receive_task_handle_ = nullptr;
-    int last_error_ = 0;
+    std::atomic<int> last_error_{0};
     std::mutex mutex_;
     bool disconnect_notified_ = false;
 

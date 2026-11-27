@@ -1,12 +1,11 @@
-#include "esp_udp.h"
-
-#include <esp_log.h>
-#include <unistd.h>
 #include <cstring>
+#include <cerrno>
 #include <arpa/inet.h>
-#include <sys/socket.h>
+#include <esp_log.h>
 #include <netdb.h>
-#include <errno.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include "esp_udp.h"
 
 static const char *TAG = "EspUdp";
 
@@ -24,10 +23,12 @@ EspUdp::~EspUdp() {
 }
 
 bool EspUdp::Connect(const std::string& host, int port) {
-    // 确保先断开已有连接
-    if (connected_) {
-        Disconnect();
+    if (!event_group_) {
+        last_error_ = ENOMEM;
+        ESP_LOGE(TAG, "operation=connect stage=event_group result=no_memory");
+        return false;
     }
+    Disconnect();
 
     struct sockaddr_in server_addr;
     bzero(&server_addr, sizeof(server_addr));
@@ -58,29 +59,50 @@ bool EspUdp::Connect(const std::string& host, int port) {
         return false;
     }
 
+    timeval timeout{};
+    timeout.tv_usec = 200000;
+    if (setsockopt(udp_fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0 ||
+        setsockopt(udp_fd_, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) != 0) {
+        last_error_ = errno;
+        Disconnect();
+        return false;
+    }
     connected_ = true;
 
     xEventGroupClearBits(event_group_, ESP_UDP_EVENT_RECEIVE_TASK_EXIT);
-    xTaskCreate([](void* arg) {
+    const auto created = xTaskCreate([](void* arg) {
         EspUdp* udp = (EspUdp*)arg;
-        udp->ReceiveTask();
+        try {
+            udp->ReceiveTask();
+        } catch (...) {
+            udp->last_error_ = ENOMEM;
+            udp->connected_.store(false);
+            ESP_LOGE(TAG, "operation=receive result=no_memory");
+        }
         xEventGroupSetBits(udp->event_group_, ESP_UDP_EVENT_RECEIVE_TASK_EXIT);
         vTaskDelete(NULL);
     }, "udp_receive", 2048, this, 1, &receive_task_handle_);
+    if (created != pdPASS) {
+        last_error_ = ENOMEM;
+        ESP_LOGE(TAG, "operation=connect stage=task result=no_memory");
+        Disconnect();
+        return false;
+    }
     return true;
 }
 
 void EspUdp::Disconnect() {
-    connected_ = false;
-
+    connected_.store(false);
+    if (receive_task_handle_) {
+        while (!(xEventGroupWaitBits(event_group_, ESP_UDP_EVENT_RECEIVE_TASK_EXIT,
+                                    pdFALSE, pdFALSE, pdMS_TO_TICKS(1000)) & ESP_UDP_EVENT_RECEIVE_TASK_EXIT)) {
+            ESP_LOGW(TAG, "operation=disconnect stage=join result=waiting");
+        }
+        receive_task_handle_ = nullptr;
+    }
     if (udp_fd_ != -1) {
         close(udp_fd_);
         udp_fd_ = -1;
-
-        auto bits = xEventGroupWaitBits(event_group_, ESP_UDP_EVENT_RECEIVE_TASK_EXIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(10000));
-        if (!(bits & ESP_UDP_EVENT_RECEIVE_TASK_EXIT)) {
-            ESP_LOGE(TAG, "Failed to wait for receive task exit");
-        }
     }
 }
 
@@ -91,24 +113,35 @@ int EspUdp::Send(const std::string& data) {
     }
 
     int ret = send(udp_fd_, data.data(), data.size(), 0);
-    if (ret <= 0) {
-        ESP_LOGE(TAG, "Send failed: ret=%d, errno=%d", ret, errno);
+    if (ret < 0 || ret != static_cast<int>(data.size())) {
+        last_error_ = ret < 0 ? errno : EIO;
+        ESP_LOGE(TAG, "operation=send result=failed code=%d", last_error_.load());
+        return -1;
     }
     return ret;
 }
 
 void EspUdp::ReceiveTask() {
     std::string data;
-    while (connected_) {
-        data.resize(1500);
-        int ret = recv(udp_fd_, data.data(), data.size(), 0);
-        if (ret <= 0) {
-            connected_ = false;
+    while (connected_.load()) {
+        // 多读一字节以识别超长报文，禁止把截断数据伪装成完整消息。
+        data.resize(receive_buffer_size_ + 1);
+        const int received = recv(udp_fd_, data.data(), data.size(), 0);
+        const int code = received < 0 ? errno : 0;
+        if (!connected_.load()) {
             break;
         }
-        
+        if (received < 0 && (code == EAGAIN || code == EWOULDBLOCK || code == EINTR)) {
+            continue;
+        }
+        if (received < 0 || static_cast<size_t>(received) > receive_buffer_size_) {
+            last_error_ = received < 0 ? code : EMSGSIZE;
+            connected_.store(false);
+            ESP_LOGW(TAG, "operation=receive result=failed code=%d", last_error_.load());
+            break;
+        }
         if (message_callback_) {
-            data.resize(ret);
+            data.resize(received);
             message_callback_(data);
         }
     }

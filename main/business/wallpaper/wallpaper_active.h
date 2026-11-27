@@ -1,0 +1,67 @@
+#pragma once
+
+#include <cstddef>
+#include <string>
+
+// 壁纸启用状态：NVS 保存文件名和显示方式，UI 读取内存缓存。
+// 不要在 LVGL 任务中访问 NVS；缓存由 hydrate / Set* 维护。
+
+/** @brief 当前启用的关机壁纸名；未 hydrate 或文件缺失时返回空。 */
+std::string Wallpaper_GetActiveFilename();
+
+/** @brief 当前启用的待机壁纸名；未 hydrate 或文件缺失时返回空。 */
+std::string Wallpaper_GetStandbyFilename();
+
+/** @brief 当前阅读背景文件名；未配置或文件缺失时返回空。 */
+std::string Wallpaper_GetReadingFilename();
+
+/** @brief 设置阅读背景文件；仅在非 LVGL 任务中调用。 */
+bool Wallpaper_SetReadingFromFile(const char* path, std::string& err_out);
+
+/** @brief 清除阅读背景文件选择；仅在非 LVGL 任务中调用。 */
+bool Wallpaper_ClearReadingWallpaper();
+
+/** @brief 解析阅读背景路径；仅在后台任务中调用。 */
+bool Wallpaper_TryResolveReadingWallpaperPath(char* out_path, size_t out_len);
+
+/** @brief 是否配置待机壁纸；SD 尚未挂载时保留选择，挂载后由 hydrate 校验。 */
+bool Wallpaper_HasStandbySelection();
+
+/** @brief 查询指定壁纸是否叠加当前界面；true 表示待机，false 表示关机。 */
+bool Wallpaper_IsOverlay(bool for_standby);
+
+/** @brief 是否为关机壁纸文件名 */
+bool Wallpaper_IsActiveFilename(const char* filename);
+
+/** @brief 是否为待机壁纸文件名 */
+bool Wallpaper_IsStandbyFilename(const char* filename);
+
+/**
+ * @brief 设置关机壁纸；仅在非 LVGL 任务中调用
+ * @param overlay 为 true 时叠加当前界面，否则显示全屏壁纸
+ */
+bool Wallpaper_SetActiveFromFile(const char* path_or_name, std::string& err_out, bool overlay = false);
+
+/**
+ * @brief 设置待机壁纸；仅在非 LVGL 任务中调用
+ * @param overlay 为 true 时叠加当前界面，否则显示全屏壁纸
+ */
+bool Wallpaper_SetStandbyFromFile(const char* path_or_name, std::string& err_out, bool overlay = false);
+
+/** @brief 清除关机壁纸启用状态，并恢复默认关机图。 */
+bool Wallpaper_ClearShutdownWallpaper();
+
+/** @brief 清除待机壁纸启用状态，并恢复默认待机页。 */
+bool Wallpaper_ClearStandbyWallpaper();
+
+/** @brief 删除壁纸时，同步清理所有引用该文件的启用状态。 */
+void Wallpaper_ClearActiveIfMatches(const char* filename);
+
+/** @brief 解析当前启用的关机壁纸路径；文件存在时返回 true。 */
+bool Wallpaper_TryResolveActiveWallpaperPath(char* out_path, size_t out_len);
+
+/** @brief 解析当前启用的待机壁纸路径；文件存在时返回 true。 */
+bool Wallpaper_TryResolveStandbyWallpaperPath(char* out_path, size_t out_len);
+
+/** @brief 同步灌入缓存；仅允许在非 LVGL 任务中调用。 */
+void Wallpaper_HydrateFromNvsNow();

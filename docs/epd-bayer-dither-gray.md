@@ -4,7 +4,7 @@
 
 本文说明首页应用卡片如何用 **Bayer 有序抖动（网点）** 在 **1bpp / I1** 墨水屏链路上模拟浅灰底，而不启用真 4 灰阶 LUT。
 
-实现位置：`main/display/screen/home_screen/home_screen.cc`（`GrayDitherImg()` + `kBayerThreshold`）。
+实现位置：`main/ui/home/home_screen.cc`（`GrayDitherImg()` + `kBayerThreshold`）。
 
 ---
 

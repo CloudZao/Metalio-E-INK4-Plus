@@ -15,8 +15,8 @@ protected:
     std::shared_ptr<UartEthModem> modem_;
     gpio_num_t tx_pin_;
     gpio_num_t rx_pin_;
-    gpio_num_t dtr_pin_; // mrdy_pin
-    gpio_num_t ri_pin_;  // srdy_pin
+    gpio_num_t dtr_pin_;  // mrdy_pin
+    gpio_num_t ri_pin_;   // srdy_pin
 
     NetworkEventCallback network_event_callback_;
     EventGroupHandle_t network_wait_event_ = nullptr;
@@ -53,6 +53,7 @@ protected:
     static void CellularRecoverTask(void* arg);
 
 public:
+    /** @brief 绑定蜂窝握手引脚并准备网络基础设施，尚不启动模组连接 */
     Nt26Board(gpio_num_t tx_pin, gpio_num_t rx_pin, gpio_num_t dtr_pin, gpio_num_t ri_pin);
     virtual ~Nt26Board();
     virtual std::string GetBoardType() override;
@@ -62,47 +63,47 @@ public:
     virtual void SetNetworkEventCallback(NetworkEventCallback callback) override;
     virtual NetworkInterface* GetNetwork() override;
     virtual void SetPowerSaveMode(bool enabled) override;
-    virtual const char* GetNetworkStateIcon() override;
-    const char* GetNetworkBusyStatusText() override;
-    virtual AudioCodec* GetAudioCodec() override { return nullptr; }
+
+    /** @brief 返回当前联网状态与原始信号强度。 */
+    NetworkStatus GetNetworkStatus() override;
+    virtual AudioCodec* GetAudioCodec() override {
+        return nullptr;
+    }
     virtual std::string GetDeviceStatusJson() override;
 
-    // AT+CSQ：0–31 有效，99/-1 未知；modem 未就绪时返回 99。
+    /** @brief 查询 CSQ 信号强度，0–31 为有效值，未就绪时返回 99 */
     int GetSignalStrength();
 
-    // 读取开机联网已缓存的 ICCID，不发 AT；未就绪或未缓存时返回空。
+    /**
+     * @brief 读取开机联网已缓存的 ICCID，不发送 AT
+     * @return 未就绪或未缓存时返回空字符串
+     */
     std::string GetIccid();
 
     /**
-     * P14 掉电前调用（供电仍在）：干净 Stop + 释放 modem，避免掉电后
-     * 软件仍以为已初始化、或 UART/DMA 任务空转。
+     * @brief 在板级蜂窝供电关闭前停止模组、唤醒等待方并释放通信资源
      */
     void PreparePowerOff();
+
+    /** @brief 记录蜂窝供电恢复时间并允许后续重建模组 */
     void OnPowerRestored();
 
     /**
-     * P14 上升沿后异步恢复：未初始化则重新走 Start 流程。
-     * 单飞：重复上升沿不叠任务；与 EnsureNetworkReady 共用 lifecycle_mu_。
+     * @brief 蜂窝供电恢复后异步重建网络，已有恢复任务时不重复创建
      */
     void RecoverAfterPowerOnAsync();
 
-    // 转发到 UartEthModem::SendAt。线程安全（modem 内部用 mutex 串行化）。
-    // 在 modem 还没初始化、或 4G 网络未就绪时返回 ESP_ERR_INVALID_STATE。
-    // bypass_init_check=true: 跳过本地的 IsInitialized() 检查，只要 modem
-    // 实例存在就直接转发到底层 SendAt（UartEthModem 内部仍然有它自己的
-    // handshake / stop_flag 保护）。专门给 SIM 卡切换之类的场景用：外置卡
-    // 没插的时候 modem 不会进入 “initialized” 状态，但 AT 通道本身是通的，
-    // 拒绝下发会让用户永远卡死在没卡的槽位上。
-    esp_err_t SendAtCommand(const std::string& cmd, std::string& response,
-                            uint32_t timeout_ms = 5000,
+    /**
+     * @brief 通过模组串行发送 AT 命令并收集响应
+     * @param bypass_init_check 是否跳过本层初始化检查，仍保留模组底层握手和停止保护
+     * @return 模组不存在或未通过初始化检查时返回 ESP_ERR_INVALID_STATE，否则返回底层结果
+     */
+    esp_err_t SendAtCommand(const std::string& cmd, std::string& response, uint32_t timeout_ms = 5000,
                             bool bypass_init_check = false);
 
-    // 发送 AT 并持续收集 URC，直到出现 done_marker（如 "+ECPING: DONE"）。
-    esp_err_t SendAtCommandCollectUntil(const std::string& cmd,
-                                        std::string& response,
-                                        uint32_t timeout_ms,
-                                        const char* done_marker,
-                                        bool bypass_init_check = false);
+    /** @brief 发送 AT 命令并收集后续通知，直到完成标记出现、超时或底层失败 */
+    esp_err_t SendAtCommandCollectUntil(const std::string& cmd, std::string& response, uint32_t timeout_ms,
+                                        const char* done_marker, bool bypass_init_check = false);
 };
 
-#endif // NT26_BOARD_H
+#endif  // NT26_BOARD_H

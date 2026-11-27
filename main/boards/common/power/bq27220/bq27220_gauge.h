@@ -1,0 +1,123 @@
+#ifndef BQ27220_GAUGE_H
+#define BQ27220_GAUGE_H
+
+#include <cstdint>
+#include <atomic>
+#include <mutex>
+#include "boards/common/bus/i2c/power_i2c.h"
+#include "config.h"
+
+// BQ27220 电量计：单例封装，板级初始化后直接通过 GetInstance() 使用。
+// Begin() 做地址 ACK；设备未挂上只返回 false。GetBatteryLevel() 用电压曲线估算 + 单向步进。
+class Bq27220Gauge {
+public:
+    static constexpr uint8_t kDefaultAddr = 0x55;
+
+    /** @brief 获取板级电量计的常驻实例 */
+    static Bq27220Gauge& GetInstance() {
+        static Bq27220Gauge instance;
+        return instance;
+    }
+
+    /**
+     * @brief 挂到已有旧版 I2C 总线；重复调用且已就绪时直接返回 true
+     * @note probe NACK 时返回 false；GetBatteryLevel 内会节流自愈重试
+     */
+    bool Begin(const power_i2c_t* bus, uint8_t addr = kDefaultAddr);
+
+    /** @brief 是否已探测成功 */
+    bool IsReady() const {
+        return ready_;
+    }
+
+    /** @brief 读取电池电压，单位 mV */
+    bool ReadVoltageMv(uint16_t& mv);
+
+    /** @brief 读取电池电流，单位 mA，正值为充电 */
+    bool ReadCurrentMa(int16_t& current_ma);
+
+    /** @brief 读取电池电压，单位为 mV，底层读取失败时返回 false */
+    bool GetVoltageMv(uint16_t& mv) {
+        return ReadVoltageMv(mv);
+    }
+
+    /**
+     * @brief 电量与充放电状态（对齐 Board::GetBatteryLevel）
+     * @param level 0..100，步长与满电确认电压取自板级配置；持续满足阈值 30s 才允许 100%
+     * @param charging 电流 > +5mA 且 level < 100
+     * @param discharging 电流 < -5mA
+     * @return 开机或重置后未满 3s，或读取失败时返回 false
+     */
+    bool GetBatteryLevel(int& level, bool& charging, bool& discharging);
+
+    /** @brief 返回后台最近一次采样结果，不等待 I²C 或采样锁；未就绪时返回 false。 */
+    bool GetCachedBatteryLevel(int& level, bool& charging, bool& discharging) const;
+
+    /** @brief 按充放电状态换算瞬时电量，未做滤波、阶梯和满电确认 */
+    static float VoltageToPercent(uint16_t mv, bool charging);
+
+    /** @brief 清除显示电量，等待 3s 后重新采样、校准并恢复步进 */
+    void ResetFilter();
+
+private:
+    Bq27220Gauge() = default;
+    Bq27220Gauge(const Bq27220Gauge&) = delete;
+    Bq27220Gauge& operator=(const Bq27220Gauge&) = delete;
+
+    bool ReadU16(uint8_t reg, uint16_t* out);
+    float FilterPush(float sample);
+    int ApplyMonoStep(int target_pct, bool charging);
+
+    static constexpr int kFilterSize = 60;
+    static constexpr int kSocStepPct = BOARD_BATTERY_STEP_PERCENT;
+    static constexpr int64_t kStartupDelayUs = 3LL * 1000 * 1000;
+    static constexpr int64_t kSamplePeriodUs = 1000LL * 1000;
+    static constexpr int64_t kSocStepUs = 30LL * 1000 * 1000;
+    static constexpr int64_t kFullHoldUs = 30LL * 1000 * 1000;
+    static_assert(BOARD_BATTERY_FULL_EXIT_MV > 0 && BOARD_BATTERY_FULL_EXIT_MV < BOARD_BATTERY_FULL_MV &&
+                      BOARD_BATTERY_FULL_MV <= UINT16_MAX,
+                  "Full-display exit voltage must be positive and below the uint16_t confirmation voltage");
+    static constexpr uint16_t kFullConfirmMv = BOARD_BATTERY_FULL_MV;  // 显示满电；充电截止见 CX25601N VREG
+    static constexpr uint16_t kFullExitMv = BOARD_BATTERY_FULL_EXIT_MV;
+
+    power_i2c_t bus_{};
+    bool bus_valid_ = false;
+    uint8_t addr_ = kDefaultAddr;
+    bool ready_ = false;
+
+    int consecutive_err_ = 0;
+    int retry_counter_ = 0;
+
+    float filter_buf_[kFilterSize] = {0};
+    int filter_idx_ = 0;
+    int filter_count_ = 0;
+    float filter_sum_ = 0.0f;
+    bool filter_primed_ = false;
+
+    int displayed_soc_ = -1;
+    std::atomic<uint32_t> battery_snapshot_{0};  // 有效位、电量、充放电状态的原子快照
+    std::mutex soc_mutex_;                       // 串行化显示采样与待机重置
+    int64_t last_sample_us_ = 0;
+    int64_t last_filter_us_ = 0;
+    int64_t sample_ready_at_us_ = kStartupDelayUs;
+    int64_t last_soc_step_us_ = 0;
+    int64_t full_above_since_us_ = 0;
+    bool full_confirmed_ = false;  // 满电滞回状态，唤醒后以新电压校验
+    int last_charge_dir_ = 0;
+};
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/** @brief CX25601N VREG 任务用：电池电压 mV */
+signed int battery_get_bat_voltage(void);
+
+/** @brief CX25601N VREG 任务用：电流 0.1µA 标度（1mA→10000） */
+signed int battery_get_bat_current(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif  // BQ27220_GAUGE_H

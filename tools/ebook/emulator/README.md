@@ -6,7 +6,7 @@
 
 与 ESP32 工程共用阅读核心：
 
-- `BookSession` / `EbookDocument`（`main/reader`）
+- `BookSession` / `EbookDocument`（`main/business/reader`）
 - 与 `book_screen.cc` 对齐的排版：`.ef` 正文、段首两字宽缩进、`PAGE_IMAGES` 全屏铺满等
 - 物理面板 800×480，固件 `ROTATE_270` → LVGL **480×800**
 

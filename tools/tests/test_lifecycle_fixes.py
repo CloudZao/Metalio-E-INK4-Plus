@@ -42,8 +42,11 @@ static SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t*) { retur
 static int xSemaphoreGive(SemaphoreHandle_t) { return 1; }
 '''
 
-wifi = (ROOT / "main/display/screen/settings_screen/settings_test/settings_test_wifi.cc").read_text(encoding="utf-8")
-wifi_functions = wifi[wifi.index("class WifiLifecycleLock"):wifi.index("void CloseWifiPopup()")]
+wifi = (ROOT / "main/business/diagnostics/wifi_diagnostic.cc").read_text(encoding="utf-8")
+wifi_functions = function(wifi, "class WifiLifecycleLock") + ";\n" + "\n".join(
+    function(wifi, signature)
+    for signature in ("static bool WifiTeardownLocked()", "static bool WifiEnsureForScan()")
+)
 wifi_test = COMMON + r'''
 typedef int esp_err_t;
 typedef int wifi_mode_t;
@@ -65,8 +68,8 @@ struct WifiStation {
  static WifiStation& GetInstance() { static WifiStation instance; return instance; }
  bool IsUserEnabled() { return user_enabled; }
 };
-static Ui& SettingsTest_Ui() { return ui; }
-static bool SettingsTest_IsLive() { return live; }
+static Ui& WifiDiagnostic_State() { return ui; }
+static bool WifiDiagnostic_IsLive() { return live; }
 static int xSemaphoreTake(SemaphoreHandle_t, unsigned) { return 1; }
 static int esp_wifi_get_mode(wifi_mode_t* m) { *m=mode; return initialized ? ESP_OK : ESP_ERR_WIFI_NOT_INIT; }
 static int esp_netif_init() { return 0; }
@@ -96,23 +99,23 @@ int main() {
   CHECK(!ui.wifi_stack_owned && !ui.wifi_netif && destroys==1);
   CHECK(deinits==(stage==1 ? 0 : 1));
   failure=0; CHECK(WifiEnsureForScan()); CHECK(ui.wifi_stack_owned);
-  WifiTeardownIfOwned(); CHECK(destroys==2 && !initialized && !ui.wifi_netif);
-  WifiTeardownIfOwned(); CHECK(destroys==2);
+  { WifiLifecycleLock lock; esp_wifi_scan_stop(); WifiTeardownLocked(); } CHECK(destroys==2 && !initialized && !ui.wifi_netif);
+  { WifiLifecycleLock lock; esp_wifi_scan_stop(); WifiTeardownLocked(); } CHECK(destroys==2);
  }
  reset(); initialized=true; mode=1; CHECK(WifiEnsureForScan());
- WifiTeardownIfOwned(); CHECK(initialized && deinits==0 && destroys==0 && creates==0);
+ { WifiLifecycleLock lock; esp_wifi_scan_stop(); WifiTeardownLocked(); } CHECK(initialized && deinits==0 && destroys==0 && creates==0);
  reset(); foreign=true; CHECK(!WifiEnsureForScan()); CHECK(creates==0 && destroys==0);
  reset(); initialized=true; CHECK(!WifiEnsureForScan()); CHECK(init_calls==0 && deinits==0);
  reset(); live=false; CHECK(!WifiEnsureForScan()); CHECK(creates==0);
  reset(); s_scan_generation.value=1; CHECK(!WifiEnsureForScan()); CHECK(creates==0);
- reset(); CHECK(WifiEnsureForScan()); deinit_failed=true; WifiTeardownIfOwned();
+ reset(); CHECK(WifiEnsureForScan()); deinit_failed=true; { WifiLifecycleLock lock; esp_wifi_scan_stop(); WifiTeardownLocked(); }
  CHECK(ui.wifi_stack_owned && ui.wifi_netif && destroys==0);
- deinit_failed=false; WifiTeardownIfOwned(); CHECK(!ui.wifi_netif && destroys==1);
+ deinit_failed=false; { WifiLifecycleLock lock; esp_wifi_scan_stop(); WifiTeardownLocked(); } CHECK(!ui.wifi_netif && destroys==1);
  return 0;
 }
 '''
 
-render = (ROOT / "main/boards/metalio-e-ink4-plus/display/output_lcd/render_lcd.c").read_text(encoding="utf-8")
+render = (ROOT / "main/boards/common/display/epdiy/output_lcd/render_lcd.c").read_text(encoding="utf-8")
 render_functions = "\n".join(function(render, sig) for sig in (
     "static void scan_lock(", "static void cancel_scan(",
     "static bool start_scan(", "static void notify_feeders(", "static bool wait_feeders(", "void lcd_do_update("))

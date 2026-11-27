@@ -1,11 +1,11 @@
-#include "ssid_manager.h"
-
 #include <algorithm>
 #include <cstring>
 #include <memory>
 #include <cJSON.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
+#include "json_format.h"
+#include "ssid_manager.h"
 
 #define TAG "SsidManager"
 
@@ -185,57 +185,34 @@ bool Parse(const std::string& text, std::vector<SsidItem>& list) {
     return true;
 }
 
-// 输入由 cJSON 生成，仅调整字符串外的空白，保留凭据中的转义内容。
-std::string FormatJson(const char* compact) {
-    std::string text;
-    size_t depth = 0;
-    auto newline = [&] { text += '\n'; text.append(depth * 2, ' '); };
-    for (size_t i = 0; compact[i] != '\0'; ++i) {
-        const char c = compact[i];
-        if (c == '"') {
-            text += c;
-            while (compact[++i] != '\0') {
-                text += compact[i];
-                if (compact[i] == '\\') text += compact[++i];
-                else if (compact[i] == '"') break;
-            }
-        } else if (c == '{' || c == '[') {
-            text += c;
-            ++depth;
-            if (compact[i + 1] != '}' && compact[i + 1] != ']') newline();
-        } else if (c == '}' || c == ']') {
-            --depth;
-            if (compact[i - 1] != '{' && compact[i - 1] != '[') newline();
-            text += c;
-        } else if (c == ',') {
-            text += c;
-            newline();
-        } else if (c == ':') {
-            text += ": ";
-        } else {
-            text += c;
-        }
-    }
-    return text;
-}
-
 std::string Serialize(const std::vector<SsidItem>& list, bool formatted = false) {
     Json root(cJSON_CreateObject(), cJSON_Delete);
-    if (!root || !cJSON_AddNumberToObject(root.get(), "version", 1)) return {};
+    if (!root || !cJSON_AddNumberToObject(root.get(), "version", 1)) {
+        return {};
+    }
     auto* entries = cJSON_AddArrayToObject(root.get(), "networks");
-    if (!entries) return {};
+    if (!entries) {
+        return {};
+    }
     for (const auto& item : list) {
         auto* entry = cJSON_CreateObject();
-        if (!entry) return {};
-        if (!cJSON_AddItemToArray(entries, entry)) { cJSON_Delete(entry); return {}; }
+        if (!entry) {
+            return {};
+        }
+        if (!cJSON_AddItemToArray(entries, entry)) {
+            cJSON_Delete(entry);
+            return {};
+        }
         if (!cJSON_AddStringToObject(entry, "ssid", item.ssid.c_str()) ||
-            !cJSON_AddStringToObject(entry, "password", item.password.c_str())) return {};
+            !cJSON_AddStringToObject(entry, "password", item.password.c_str())) {
+            return {};
+        }
     }
-    char* printed = cJSON_PrintUnformatted(root.get());
-    if (!printed) return {};
-    std::string text = formatted ? FormatJson(printed) : std::string(printed);
-    cJSON_free(printed);
-    return text;
+    const std::unique_ptr<char, decltype(&cJSON_free)> printed(cJSON_PrintUnformatted(root.get()), cJSON_free);
+    if (!printed) {
+        return {};
+    }
+    return formatted ? JsonFormatIndented(printed.get()) : std::string(printed.get());
 }
 }
 

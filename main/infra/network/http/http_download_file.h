@@ -1,0 +1,41 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include "download_gate.h"
+#include "infra/storage/storage_error.h"
+
+void HttpDownloadConfigureActivity(void (*begin)(),
+                                   void (*end)());  // 在启动工作任务前绑定下载活动协作，两个回调须成对提供
+
+enum class HttpCacheApp { Transfer, Books, Wallpaper };  // 临时文件所属应用
+
+using HttpDownloadCancelledFn = bool (*)(void* user);
+
+/** @brief 共享 HTTP 磁盘缓存，最后一个引用释放时删除文件 */
+struct HttpTempFile {
+    std::string path;  // 本次缓存的独占路径
+    ~HttpTempFile();
+    HttpTempFile() = default;
+    HttpTempFile(const HttpTempFile&) = delete;
+    HttpTempFile& operator=(const HttpTempFile&) = delete;
+};
+
+/** @brief 分块下载到临时缓存，不在内存中保留完整响应 */
+std::shared_ptr<HttpTempFile> DownloadHttpToCache(const char* url, std::string& err_out, DownloadGate* gate = nullptr,
+                                                  HttpDownloadCancelledFn cancelled = nullptr, void* context = nullptr,
+                                                  HttpCacheApp app = HttpCacheApp::Transfer);
+
+using HttpDownloadProgressFn = void (*)(int percent, void* user);
+
+/**
+ * @brief HTTP 落盘下载（边收边写 SD；PSRAM 大块缓冲）
+ * @param expected_sha256 空或 nullptr 则跳过比较；哈希值不一致仅警告，不阻止保存
+ * @param expected_total 推送长度，仅用于进度与差异警告；HTTP Content-Length 用于长度校验并优先用于进度
+ */
+bool DownloadHttpToFile(const char* url, const char* tmp_path, const char* expected_sha256, uint64_t expected_total,
+                        HttpDownloadProgressFn on_progress, void* progress_user, std::string& err_out,
+                        DownloadGate* gate, HttpDownloadCancelledFn cancelled = nullptr, void* context = nullptr,
+                        StorageError* storage_error = nullptr);

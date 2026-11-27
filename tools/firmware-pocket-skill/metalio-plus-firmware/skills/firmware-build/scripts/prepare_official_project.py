@@ -29,7 +29,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mirror", required=True, type=Path)
     parser.add_argument("--path", required=True, type=Path)
+    parser.add_argument("--dependency-lock", type=Path,
+                        help="Original verified dependency lock, required when absent from the package")
     args = parser.parse_args()
+    fixes = SKILL / "assets/official-build-fixes"
+    lock = args.dependency_lock or fixes / "dependencies.lock"
+    if not lock.is_file():
+        raise FileNotFoundError("Original dependency lock is required; supply --dependency-lock")
+    if (lock.stat().st_size != 9923 or
+            digest(lock) != "c7174533067a093fcd80519487fec96859f41d6212ceac261930f90f55503107"):
+        raise ValueError("Original dependency lock size or SHA256 mismatch")
     target = args.path.resolve()
     mirror = args.mirror.resolve()
     if target.is_relative_to(mirror) or target.is_relative_to(PACKAGE_ROOT):
@@ -73,14 +82,13 @@ def main():
             path = target.joinpath(*relative(source["path"]).parts)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(archive.read(prefix + source["path"]))
-    fixes = SKILL / "assets/official-build-fixes"
     destination = target / "components/p02_build_dependencies"
     if destination.exists():
         raise FileExistsError("Public dependency overlay would overwrite source")
     shutil.copytree(fixes / "p02_build_dependencies", destination)
     if (target / "dependencies.lock").exists():
         raise FileExistsError("Refuse to replace an upstream dependency lock")
-    shutil.copy2(fixes / "dependencies.lock", target / "dependencies.lock")
+    shutil.copy2(lock, target / "dependencies.lock")
     subprocess.run([sys.executable, str(SKILL / "scripts/generate_language_header.py"),
                     "--project", str(target), "--language", "zh-CN"], check=True)
     provenance = {

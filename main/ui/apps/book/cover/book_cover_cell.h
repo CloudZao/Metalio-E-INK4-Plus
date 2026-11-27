@@ -1,0 +1,15 @@
+#pragma once
+
+#include <memory>
+#include <vector>
+#include <lvgl.h>
+#include "business/reader/reader_types.h"
+
+/** @brief 创建封面占位槽并标记后台加载请求 */
+lv_obj_t* CreateCoverSlot(lv_obj_t* parent, const BookInfo& info, lv_coord_t w, lv_coord_t h, RasterImage* cover_out,
+                          bool* need_embed_fill, bool directory = false);
+
+/** @brief 创建带标题的封面格子 */
+lv_obj_t* CreateBookCoverCell(lv_obj_t* parent, const BookInfo& info, int index, lv_coord_t cell_w, lv_coord_t cover_h,
+                              std::vector<std::unique_ptr<RasterImage>>& cover_store, bool long_press_delete,
+                              lv_coord_t title_gap, bool show_title, bool directory = false);

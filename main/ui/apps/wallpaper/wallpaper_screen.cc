@@ -1,0 +1,430 @@
+#include <algorithm>
+#include <cerrno>
+#include <cstring>
+#include <new>
+#include <esp_log.h>
+#include <lvgl.h>
+#include "sysmgmt/tasks/task_executor.h"
+#include "ui/common/runtime/page_lifecycle.h"
+#include "ui/apps/wallpaper/wallpaper_screen.h"
+#include "boards/common/storage/sd_access.h"
+#include "assets/lang_config.h"
+#include "boards/common/storage/SdCardManager.hpp"
+#include "business/wallpaper/wallpaper_active.h"
+#include "ui/common/widgets/screen_common.h"
+#include "ui/common/runtime/input/vk_key_handler.h"
+#include "ui/common/runtime/input/vk_page_repeat.h"
+#include "ui/apps/wallpaper/preview/wallpaper_adjust.h"
+#include "ui/apps/wallpaper/preview/wallpaper_preview.h"
+#include "ui/apps/wallpaper/wallpaper_list.h"
+#include "ui/apps/wallpaper/wallpaper_multi.h"
+#include "ui/apps/wallpaper/wallpaper_screen_priv.h"
+#include "ui/apps/wallpaper/wallpaper_ui_helpers.h"
+#include "ui/common/drawing/ui_theme.h"
+#include "ui/common/runtime/screen_common_nav.h"
+#include "ui/common/runtime/lvgl/ui_dispatch.h"
+
+static UiPageLifecycle s_page;
+
+static bool s_return_to_reading = false;  // 阅读设置入口的退出目标
+static bool s_return_requested = false;   // 保存完成后执行已请求的返回
+
+bool Wallpaper_TrackRequest(WallpaperRequest request, void (*apply)(const WallpaperResult&), int index) {
+    if (!request) {
+        return false;
+    }
+    auto& state = Wallpaper_State();
+    state.request = std::move(request);
+    state.request_epoch = state.epoch.load();
+    state.request_generation = state.decode_generation.load();
+    state.request_index = index;
+    state.apply_request = apply;
+    return true;
+}
+
+bool Wallpaper_OperationPending(WallpaperOperation operation) {
+    const auto& state = Wallpaper_State();
+    return WallpaperIsBusy(operation) || (state.request && state.request->operation == operation);
+}
+
+void Wallpaper_CancelRequest() {
+    const auto& request = Wallpaper_State().request;
+    if (request && (request->operation == WallpaperOperation::Save || request->batch)) {
+        request->cancelled.store(true, std::memory_order_release);
+    }
+}
+
+bool Wallpaper_RequestCurrent(bool image) {
+    const auto& state = Wallpaper_State();
+    return state.screen_alive && state.request_epoch == state.epoch.load() &&
+           (!image || (!state.decode_paused && state.request_generation == state.decode_generation.load()));
+}
+
+bool Wallpaper_ReturnToReading(bool request) {
+    if (!s_return_to_reading) {
+        return false;
+    }
+    s_return_requested |= request;
+    if (s_return_requested && !Wallpaper_OperationPending(WallpaperOperation::Select)) {
+        s_return_requested = false;
+        ScreenNavigateBack();
+    }
+    return true;
+}
+
+static WallpaperUiState s_ui_state;
+
+WallpaperUiState& Wallpaper_State() {
+    return s_ui_state;
+}
+
+void AsyncCloseWallpaperDialog(void* /*user_data*/) {
+    Wallpaper_CloseDialog();
+}
+
+void AsyncExitAdjustMode(void* /*user_data*/) {
+    ExitAdjustMode(true);
+}
+
+void AsyncClosePreview(void* /*user_data*/) {
+    ESP_LOGI(TAG, "async ClosePreview begin");
+    ClosePreview();
+    ESP_LOGI(TAG, "async ClosePreview done");
+}
+
+void ShowMode(UiMode mode) {
+    Wallpaper_State().mode = mode;
+    if (Wallpaper_State().ui.list_body != nullptr) {
+        if (mode == UiMode::kList) {
+            lv_obj_clear_flag(Wallpaper_State().ui.list_body, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(Wallpaper_State().ui.list_body, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (Wallpaper_State().ui.preview_body != nullptr) {
+        if (mode == UiMode::kPreview) {
+            lv_obj_clear_flag(Wallpaper_State().ui.preview_body, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(Wallpaper_State().ui.preview_body, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    RefreshWpFooterMode();
+}
+
+bool WallpaperPageRepeatStep(int page_delta) {
+    if (page_delta == 0 || Wallpaper_State().mode != UiMode::kList) {
+        return false;
+    }
+    const int last = std::max(0, Wallpaper_ListPageCount() - 1);
+    int next = Wallpaper_State().list.list_page + page_delta;
+    if (next < 0) {
+        next = 0;
+    } else if (next > last) {
+        next = last;
+    }
+    if (next == Wallpaper_State().list.list_page) {
+        return false;
+    }
+    Wallpaper_State().list.list_page = next;
+    RequestWallpaperListRebuild(true);
+    return page_delta < 0 ? Wallpaper_State().list.list_page > 0 : Wallpaper_State().list.list_page < last;
+}
+
+static bool CancelWallpaperBatchForKey(const char* key) {
+    if (!key || Wallpaper_State().mode != UiMode::kList ||
+        (!Wallpaper_State().list.multi && !Wallpaper_OperationPending(WallpaperOperation::Delete)) ||
+        (std::strcmp(key, "vk_prev") != 0 && std::strcmp(key, "vk_home") != 0)) {
+        return false;
+    }
+    if (!ScreenLvAsync([](void*) { OnWpMultiCancel(nullptr); })) {
+        ESP_LOGW(TAG, "batch cancel UI delivery unavailable");
+    }
+    return true;
+}
+
+static bool Wallpaper_OnPageKey(const char* key, bool long_press) {
+    if (Wallpaper_State().mode != UiMode::kList) {
+        return false;
+    }
+    if (long_press) {
+        VkPageRepeatTryStart(key, WallpaperPageRepeatStep);
+    } else {
+        WallpaperPageRepeatStep(std::strcmp(key, "vk_prev") == 0 ? -1 : 1);
+    }
+    return true;
+}
+
+bool Wallpaper_OnVkKeyLongPress(const char* key) {
+    if (CancelWallpaperBatchForKey(key)) {
+        return true;
+    }
+    if (s_return_to_reading && key && std::strcmp(key, "vk_home") == 0) {
+        Wallpaper_ReturnToReading(true);
+        return true;
+    }
+    return VkPageRepeatTryStart(key, WallpaperPageRepeatStep);
+}
+
+bool Wallpaper_OnVkKeyPressUp(const char* key) {
+    return VkPageRepeatOnPressUp(key);
+}
+
+bool Wallpaper_OnVkKey(const char* key) {
+    if (key == nullptr) {
+        return false;
+    }
+    if (CancelWallpaperBatchForKey(key)) {
+        return true;
+    }
+    if (Wallpaper_State().mode == UiMode::kPreview) {
+        // 调整态：返回/Home 先退出调整（丢弃未保存变换），不直接关预览
+        if (Wallpaper_State().preview.adjust_open &&
+            (std::strcmp(key, "vk_prev") == 0 || std::strcmp(key, "vk_home") == 0)) {
+            if (Wallpaper_OperationPending(WallpaperOperation::Save)) {
+                Wallpaper_CancelRequest();
+            }
+            ScreenLvAsync(AsyncExitAdjustMode);
+            return true;
+        }
+        // 详情页：vk_home / vk_prev 均回网格（不直接回系统首页）
+        if (std::strcmp(key, "vk_prev") == 0 || std::strcmp(key, "vk_home") == 0) {
+            ESP_LOGI(TAG, "%s preview -> queue ClosePreview", key);
+            ScreenLvAsync(AsyncClosePreview);
+            return true;
+        }
+        if (std::strcmp(key, "vk_next") == 0) {
+            return true;
+        }
+        return false;
+    }
+    if (std::strcmp(key, "vk_prev") == 0) {
+        if (Wallpaper_State().list.list_page > 0) {
+            --Wallpaper_State().list.list_page;
+            ESP_LOGI(TAG, "vk_prev list -> page %d queue rebuild", Wallpaper_State().list.list_page + 1);
+            RequestWallpaperListRebuild(true);
+            return true;
+        }
+        if (Wallpaper_ReturnToReading(true)) {
+            return true;
+        }
+        return false;
+    }
+    if (std::strcmp(key, "vk_next") == 0) {
+        if (Wallpaper_State().list.list_page + 1 < Wallpaper_ListPageCount()) {
+            ++Wallpaper_State().list.list_page;
+            ESP_LOGI(TAG, "vk_next list -> page %d queue rebuild", Wallpaper_State().list.list_page + 1);
+            RequestWallpaperListRebuild(true);
+        } else {
+            ESP_LOGI(TAG, "vk_next list already last page=%d", Wallpaper_State().list.list_page + 1);
+        }
+        return true;
+    }
+    if (s_return_to_reading && std::strcmp(key, "vk_home") == 0) {
+        Wallpaper_ReturnToReading(true);
+        return true;
+    }
+    return false;
+}
+
+void Wallpaper_OnScreenDeleted(lv_event_t* e) {
+    if (lv_event_get_target(e) != Wallpaper_State().ui.screen) {
+        return;
+    }
+    CancelWallpaperDirectory();
+    Wallpaper_State().screen_alive = false;
+    ++Wallpaper_State().epoch;  // 作废在飞 preview/thumb/enable/delete/save 回调
+    CancelThumbFill();
+    // 先拆掉引用 RasterImage 的控件；缩略图缓存在进程内复用，下次进 app 免白屏
+    DetachRasterUsers();
+    ClearPreviewImage();
+    Wallpaper_State().preview.idx = -1;
+    Wallpaper_State().mode = UiMode::kList;
+    Wallpaper_State().list.multi = false;
+    Wallpaper_State().preview.adjust_open = false;
+    ResetOrientState();
+    Wallpaper_State().list.selected.clear();
+    Wallpaper_State().list.suppress_click_until_us = 0;
+    Wallpaper_State().list.suppress_click_idx = -1;
+    Wallpaper_CancelRequest();
+    Wallpaper_State().request.reset();
+    Wallpaper_State().apply_request = nullptr;
+    ScreenPaintCoalesceReset(&Wallpaper_State().wp_check_paint);
+    ScreenPaintCoalesceReset(&Wallpaper_State().wallpaper_paint);
+    Wallpaper_State().ui = {};
+}
+
+bool Wallpaper_DecodeCancelled(void* context) {
+    const auto* token = static_cast<const WallpaperDecodeToken*>(context);
+    auto& state = Wallpaper_State();
+    return !state.screen_alive.load() || state.decode_paused.load() || token->epoch != state.epoch.load() ||
+           token->generation != state.decode_generation.load();
+}
+
+lv_obj_t* WallpaperScreen::Create() {
+    s_return_to_reading = false;
+    s_return_requested = false;
+    Wallpaper_State().operation_revision = WallpaperRevision();
+    // 旧屏可能仍在 async delete：先拆引用，递增 epoch 丢弃在飞任务；缩略图按文件复用
+    Wallpaper_CancelRequest();
+    Wallpaper_State().request.reset();
+    Wallpaper_State().apply_request = nullptr;
+    CancelWallpaperDirectory();
+    Wallpaper_State().screen_alive = false;
+    ++Wallpaper_State().epoch;
+    CancelThumbFill();
+    DetachRasterUsers();
+    ClearPreviewImage();
+    Wallpaper_State().ui = {};
+    Wallpaper_State().mode = UiMode::kList;
+    Wallpaper_State().list.list_page = 0;
+    Wallpaper_State().preview.idx = -1;
+    Wallpaper_State().list.multi = false;
+    Wallpaper_State().preview.adjust_open = false;
+    ResetOrientState();
+    Wallpaper_State().list.selected.clear();
+    Wallpaper_State().list.suppress_click_until_us = 0;
+    Wallpaper_State().list.suppress_click_idx = -1;
+    ScreenPaintCoalesceReset(&Wallpaper_State().wp_check_paint);
+    ScreenPaintCoalesceReset(&Wallpaper_State().wallpaper_paint);
+
+    auto& storage_error = Wallpaper_State().storage_error;
+    storage_error = SdAccessStatus();
+    if (!storage_error && !SdEnsureAppLayout()) {
+        storage_error = StorageErrorFromErrno(StorageStage::CreateDirectory, errno);
+    }
+    Wallpaper_State().sd_ready = !storage_error;
+    if (storage_error) {
+        LogStorageError(TAG, storage_error);
+    }
+    // 禁止在 LVGL 任务读 NVS：只用内存缓存 / SD 回退；NVS 由后台 hydrate。
+    RefreshActiveName();
+    if (Wallpaper_State().sd_ready) {
+        CollectWallpapers();
+    } else {
+        Wallpaper_State().list.files.clear();
+        Wallpaper_State().list.thumbs.clear();
+    }
+    Wallpaper_State().list.selected.clear();
+
+    ScreenSetIsHome(false);
+
+    lv_obj_t* scr = lv_obj_create(nullptr);
+    Wallpaper_DisableScroll(scr);
+    lv_obj_set_style_bg_color(scr, UiColorBackground(), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_font(scr, Wallpaper_UiFont(), 0);
+    lv_obj_set_style_text_color(scr, UiColorForeground(), 0);
+    Wallpaper_State().ui.screen = scr;
+    lv_obj_add_event_cb(scr, Wallpaper_OnScreenDeleted, LV_EVENT_DELETE, nullptr);
+
+    EpdStatusBar status = ScreenCreateStatusBar(scr);
+    Wallpaper_State().ui.status_label = status.status_label;
+    if (status.status_label) {
+        lv_label_set_text(status.status_label, LangString_HOME_APP_WALLPAPER);
+    }
+    if (status.notification_label) {
+        lv_obj_add_flag(status.notification_label, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    Wallpaper_State().list.body_h = LV_VER_RES - status.height - kFooterH;
+    Wallpaper_State().list.list_per_page = kGridCols * kGridRows;
+    // 九格均分可用宽高（加大间距后仍铺满，不再用 4:3 压矮封面）
+    Wallpaper_State().list.grid_cell_w = (Wallpaper_ContentWidth() - kGridColGap * (kGridCols - 1)) / kGridCols;
+    {
+        const lv_coord_t usable = Wallpaper_State().list.body_h - kPad * 2;
+        lv_coord_t cover_h = (usable - kGridRowGap * (kGridRows - 1)) / kGridRows;
+        if (cover_h < 72) {
+            cover_h = 72;
+        }
+        Wallpaper_State().list.grid_cover_h = cover_h;
+    }
+
+    BuildListBody(scr, status.height);
+    BuildPreviewBody(scr, status.height);
+    BuildFooter(scr);
+
+    Wallpaper_State().decode_paused.store(false);
+    Wallpaper_State().screen_alive = true;
+    RebuildListPage();
+    ShowMode(UiMode::kList);
+    // 后台灌 NVS → 缓存，再 lv_async 刷新关机/待机标记
+    if (!TaskExecutor::Schedule(
+            [] {
+                Wallpaper_HydrateFromNvsNow();
+                if (!ScreenLvAsync(OnActiveHydrated)) {
+                    ESP_LOGW(TAG, "hydrate UI result queue full");
+                }
+            },
+            TaskDomain::Storage)) {
+        ESP_LOGW(TAG, "hydrate storage request rejected");
+    }
+
+    VkKey_AttachScreen(scr, kScreenId,
+                       VkKeyScreenDesc{WallpaperScreen::Create, Wallpaper_OnVkKey, nullptr, nullptr, nullptr, nullptr,
+                                       Wallpaper_OnVkKeyLongPress, Wallpaper_OnVkKeyPressUp, nullptr, nullptr,
+                                       Wallpaper_OnPageKey});
+    s_page.Bind(scr, {PollPendingWork, [](UiPagePowerEvent event) {
+        if (event == UiPagePowerEvent::PauseImages || event == UiPagePowerEvent::ResumeImages ||
+            event == UiPagePowerEvent::FinishResume) {
+            WallpaperScreen::SetDecodePaused(event == UiPagePowerEvent::PauseImages);
+        }
+    }, nullptr, 100});
+    return scr;
+}
+
+lv_obj_t* WallpaperScreen::CreateForReading() {
+    auto* screen = Create();
+    s_return_to_reading = true;
+    VkKey_SetScreenFactory(kScreenId, CreateForReading);
+    return screen;
+}
+
+void WallpaperScreen::SetDecodePaused(bool paused) {
+    auto& state = Wallpaper_State();
+    state.decode_paused.store(paused);
+    if (!state.screen_alive.load()) {
+        return;
+    }
+    if (paused) {
+        Wallpaper_CloseDialog();
+        state.decode_generation.fetch_add(1);
+        Wallpaper_CancelRequest();
+        CancelThumbFill();
+    } else if (state.mode == UiMode::kPreview) {
+        UpdateEnableButtonUi();
+        UpdateAdjustUi();
+        if (state.preview.raster == nullptr) {
+            ScheduleLoadPreview(state.preview.idx);
+        }
+    } else {
+        ScheduleThumbFill();
+    }
+}
+
+void WallpaperScreen::PollPendingWork() {
+    auto& state = Wallpaper_State();
+    if (!state.screen_alive || state.decode_paused) {
+        return;
+    }
+    if (state.request && state.request->completed.load(std::memory_order_acquire)) {
+        const auto request = std::move(state.request);
+        const auto apply = state.apply_request;
+        state.apply_request = nullptr;
+        if (apply) {
+            apply(*request);
+        }
+        state.operation_revision = WallpaperRevision();
+    } else if (!state.request && !WallpaperIsBusy() && state.operation_revision != WallpaperRevision()) {
+        state.operation_revision = WallpaperRevision();
+        RefreshActiveName();
+        if (state.mode == UiMode::kList) {
+            CollectWallpapers();
+            RebuildListPage();
+        } else {
+            ClearPreviewImage();
+            ScheduleLoadPreview(state.preview.idx);
+            UpdateEnableButtonUi();
+            UpdateDeleteButtonUi();
+        }
+    }
+}

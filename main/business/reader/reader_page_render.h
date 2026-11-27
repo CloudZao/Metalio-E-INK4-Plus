@@ -1,0 +1,247 @@
+#pragma once
+
+#include "lvgl.h"
+#include "reader_types.h"
+#include "text_spacing.h"
+
+/** @brief 关闭正文控件的滚动能力和滚动条，空对象不处理 */
+inline void DisableObjScroll(lv_obj_t* obj) {
+    if (obj == nullptr) {
+        return;
+    }
+    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_OFF);
+}
+
+/** @brief 按正文单字宽度计算段首缩进，与分页宽度度量保持一致 */
+inline lv_coord_t ParaIndentPadPx(const lv_font_t* font, int indent_chars = 2) {
+    // 与 TxtParaIndentWidth / 分页 indent_w 一致：优先「一」字宽
+    lv_coord_t em = 0;
+    if (font != nullptr) {
+        em = static_cast<lv_coord_t>(lv_font_get_glyph_width(font, 0x4E00u, 0));
+        if (em <= 1) {
+            em = static_cast<lv_coord_t>(lv_font_get_glyph_width(font, 0x3000u, 0));
+        }
+        if (em <= 1) {
+            em = font->line_height / 2;
+        }
+    }
+    if (em < 1) {
+        em = 12;
+    }
+    return em * indent_chars;
+}
+
+/** @brief 左对齐使用完整正文宽度，两端对齐按最终行宽计算整页栏宽。 */
+inline lv_coord_t PageTextColumnWidth(const Page& page, const lv_font_t* font, lv_coord_t max_width,
+                                      const TextStyle& style = {}) {
+    if (!font || max_width <= 0 || !style.justify) {
+        return max_width;
+    }
+    int width = 0;
+    for (const auto& item : page.items) {
+        if (item.kind != ContentKind::kText || item.centered) {
+            return max_width;
+        }
+        if (item.text.empty()) {
+            continue;
+        }
+        if (item.justify && !item.chapter_title) {
+            return max_width;
+        }
+        const int indent = item.para_indent && !item.chapter_title ? ParaIndentPadPx(font, style.indent_chars) : 0;
+        size_t begin = 0;
+        do {
+            const size_t end = item.text.find('\n', begin);
+            const std::string line = item.text.substr(begin, end == std::string::npos ? end : end - begin);
+            const int line_width =
+                MakeTextLineSpacing(font, line, max_width - indent, false, false, style.letter_gap).width;
+            width = std::max(width, indent + line_width + (item.chapter_title ? 1 : 0));
+            if (end == std::string::npos) {
+                break;
+            }
+            begin = end + 1;
+        } while (begin < item.text.size());
+    }
+    return width > 0 ? std::min<int>(max_width, width) : max_width;
+}
+
+/** @brief 标签回退逐字绘制，复用位图路径的像素分配。 */
+inline void DrawSpacedTextLabel(lv_event_t* event, bool justify) {
+    auto* label = static_cast<lv_obj_t*>(lv_event_get_target(event));
+    const auto* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+    const std::string text = lv_label_get_text(label);
+    lv_area_t area;
+    lv_obj_get_content_coords(label, &area);
+    const auto spacing = MakeTextLineSpacing(font, text, lv_area_get_width(&area), justify, false,
+                                             lv_obj_get_style_text_letter_space(label, LV_PART_MAIN));
+    lv_draw_label_dsc_t dsc;
+    lv_draw_label_dsc_init(&dsc);
+    lv_obj_init_draw_label_dsc(label, LV_PART_MAIN, &dsc);
+    dsc.font = font;
+    dsc.color = lv_obj_get_style_text_color(label, LV_PART_MAIN);
+    dsc.opa = LV_OPA_COVER;
+    int pen = area.x1;
+    const auto align = lv_obj_get_style_text_align(label, LV_PART_MAIN);
+    if (align == LV_TEXT_ALIGN_CENTER) {
+        pen += (lv_area_get_width(&area) - spacing.width) / 2;
+    } else if (align == LV_TEXT_ALIGN_RIGHT) {
+        pen += lv_area_get_width(&area) - spacing.width;
+    }
+    TextSpacingState state;
+    for (size_t i = 0; i < text.size();) {
+        uint32_t cp = 0;
+        const size_t n = Utf8Next(reinterpret_cast<const uint8_t*>(text.data()) + i, text.size() - i, &cp);
+        if (!n || cp == '\n' || cp == '\r') {
+            break;
+        }
+        lv_font_glyph_dsc_t glyph{};
+        const bool known = lv_font_get_glyph_dsc(font, &glyph, cp, 0);
+        ObserveTextGlyph(state, font, cp, glyph, known, lv_obj_get_style_text_letter_space(label, LV_PART_MAIN));
+        const lv_point_t point = {pen + spacing.Offset(state.slots, state.capacity), area.y1};
+        lv_draw_character(lv_event_get_layer(event), &dsc, &point, cp);
+        pen += TextAdvanceWithGap(TextGlyphAdvance(glyph), lv_obj_get_style_text_letter_space(label, LV_PART_MAIN));
+        i += n;
+    }
+}
+
+/** @brief 作为标签绘制回调按共享字距规则绘制两端对齐正文 */
+inline void DrawJustifiedTextLabel(lv_event_t* event) {
+    DrawSpacedTextLabel(event, true);
+}
+
+/** @brief 作为标签绘制回调绘制只收紧空白、不扩展对齐间隔的正文 */
+inline void DrawCompactTextLabel(lv_event_t* event) {
+    DrawSpacedTextLabel(event, false);
+}
+
+/** @brief 按已注册的绘制回调判断标签是否使用两端对齐绘制 */
+inline bool IsJustifiedTextLabel(lv_obj_t* label) {
+    for (uint32_t i = 0; i < lv_obj_get_event_count(label); ++i) {
+        if (lv_event_dsc_get_cb(lv_obj_get_event_dsc(label, i)) == DrawJustifiedTextLabel) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** @brief 按已注册的绘制回调判断标签是否使用收紧字距绘制 */
+inline bool IsCompactTextLabel(lv_obj_t* label) {
+    for (uint32_t i = 0; i < lv_obj_get_event_count(label); ++i) {
+        if (lv_event_dsc_get_cb(lv_obj_get_event_dsc(label, i)) == DrawCompactTextLabel) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** @brief 按共享自适应行布局创建正文控件，段距只计入当前项一次。 */
+inline lv_obj_t* CreatePageTextLabel(lv_obj_t* col, const PageItem& item, lv_coord_t max_w, const lv_font_t* book_font,
+                                     const TextLineLayout& layout, int& row_index, lv_coord_t para_gap,
+                                     void (*decorate_label)(lv_obj_t*) = nullptr, const TextStyle& style = {}) {
+    if (!col || !book_font || row_index >= layout.count || item.text.empty()) {
+        return nullptr;
+    }
+    const bool need_para_gap = item.para_gap_before && lv_obj_get_child_count(col) > 0;
+    const int gap_before = need_para_gap ? std::max<lv_coord_t>(0, para_gap) : 0;
+    const int first = row_index;
+    int lines = 1;
+    if (item.chapter_title) {
+        for (size_t i = 0; i + 1 < item.text.size(); ++i) {
+            if (item.text[i] == '\n') {
+                ++lines;
+            }
+        }
+    }
+    int height = gap_before;
+    for (int i = 0; i < lines; ++i) {
+        height += layout.CellHeight(row_index++);
+    }
+    const int offset = layout.TextOffset(first);
+    const int underline_extra = std::max<int>(0, layout.line_height - book_font->line_height);
+    lv_obj_t* label_parent = col;
+    lv_coord_t text_w = max_w;
+    if (item.para_indent) {
+        const lv_coord_t indent_px = ParaIndentPadPx(book_font, style.indent_chars);
+        auto* row = lv_obj_create(col);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_size(row, max_w, height);
+        lv_obj_set_style_pad_top(row, gap_before + offset, 0);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        DisableObjScroll(row);
+        auto* spacer = lv_obj_create(row);
+        lv_obj_remove_style_all(spacer);
+        lv_obj_set_size(spacer, indent_px, 1);
+        lv_obj_clear_flag(spacer, LV_OBJ_FLAG_CLICKABLE);
+        DisableObjScroll(spacer);
+        label_parent = row;
+        text_w -= indent_px;
+    }
+    if (item.chapter_title) {
+        auto* stack = lv_obj_create(col);
+        lv_obj_remove_style_all(stack);
+        lv_obj_set_size(stack, text_w, height);
+        lv_obj_clear_flag(stack, LV_OBJ_FLAG_CLICKABLE);
+        DisableObjScroll(stack);
+        lv_obj_t* first_label = nullptr;
+        size_t begin = 0;
+        int top = gap_before;
+        for (int line = 0; line < lines; ++line) {
+            const size_t end = item.text.find('\n', begin);
+            const std::string text = item.text.substr(begin, end == std::string::npos ? end : end - begin);
+            const int current = first + line;
+            for (int dx : {0, 1}) {
+                auto* label = lv_label_create(stack);
+                lv_label_set_text(label, text.c_str());
+                lv_obj_set_style_text_font(label, book_font, 0);
+                lv_obj_set_style_text_color(label, lv_color_black(), 0);
+                lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+                lv_obj_set_style_text_opa(label, LV_OPA_TRANSP, 0);
+                lv_obj_add_event_cb(label, DrawCompactTextLabel, LV_EVENT_DRAW_MAIN_END, nullptr);
+                lv_obj_set_style_pad_top(label, layout.TextOffset(current), 0);
+                lv_obj_set_style_pad_bottom(label, underline_extra, 0);
+                lv_obj_set_size(label, text_w, layout.CellHeight(current));
+                lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+                lv_obj_set_pos(label, dx, top);
+                lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+                DisableObjScroll(label);
+                if (dx == 0 && decorate_label) {
+                    decorate_label(label);
+                }
+                if (!first_label) {
+                    first_label = label;
+                }
+            }
+            top += layout.CellHeight(current);
+            begin = end == std::string::npos ? item.text.size() : end + 1;
+        }
+        return first_label;
+    }
+    auto* label = lv_label_create(label_parent);
+    lv_label_set_text(label, item.text.c_str());
+    lv_obj_set_style_text_font(label, book_font, 0);
+    lv_obj_set_style_text_color(label, lv_color_black(), 0);
+    if (item.centered) {
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    }
+    lv_obj_set_style_pad_bottom(label, underline_extra, 0);
+    lv_obj_set_width(label, text_w);
+    if (item.para_indent) {
+        lv_obj_set_height(label, layout.CellHeight(first) - offset);
+    } else {
+        lv_obj_set_height(label, height);
+        lv_obj_set_style_pad_top(label, gap_before + offset, 0);
+    }
+    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+    lv_obj_clear_flag(label, LV_OBJ_FLAG_CLICKABLE);
+    DisableObjScroll(label);
+    lv_obj_set_style_text_opa(label, LV_OPA_TRANSP, 0);
+    lv_obj_add_event_cb(label, style.justify && item.justify ? DrawJustifiedTextLabel : DrawCompactTextLabel,
+                        LV_EVENT_DRAW_MAIN_END, nullptr);
+    if (decorate_label) {
+        decorate_label(label);
+    }
+    return label;
+}

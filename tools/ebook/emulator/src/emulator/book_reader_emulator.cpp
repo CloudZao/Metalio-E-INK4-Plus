@@ -1,27 +1,23 @@
-#include "book_reader_emulator.h"
-
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
-
+#include "book_reader_emulator.h"
 #include "font_emulator.h"
-#include "epdfont.h"
 #include "book_session.h"
 #include "ebook_document.h"
+#include "epdfont.h"
+#include "infra/image/image_tone.h"
 #include "reader_page_render.h"
 #include "reader_types.h"
-#include "image_tone.h"
 
-namespace {
+static constexpr lv_coord_t kListPad = 12;
+static constexpr lv_coord_t kFooterH = 36;
+static constexpr lv_coord_t kStatusPadV = 8;
 
-constexpr lv_coord_t kListPad = 12;
-constexpr lv_coord_t kFooterH = 36;
-constexpr lv_coord_t kStatusPadV = 8;
-
-struct ReaderUi {
-    std::unique_ptr<reader::BookSession> session;
+struct BookReaderEmulatorReaderUi {
+    std::unique_ptr<BookSession> session;
     epdfont_t* epdfont = nullptr;
     std::string epdfont_path;
     std::string last_error;
@@ -36,12 +32,12 @@ struct ReaderUi {
 
 static bool s_ui_ready = false;
 
-ReaderUi& Ui() {
-    static ReaderUi s;
+static BookReaderEmulatorReaderUi& Ui() {
+    static BookReaderEmulatorReaderUi s;
     return s;
 }
 
-void DisableScroll(lv_obj_t* obj) {
+static void DisableScroll(lv_obj_t* obj) {
     if (obj == nullptr) {
         return;
     }
@@ -49,7 +45,7 @@ void DisableScroll(lv_obj_t* obj) {
     lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_OFF);
 }
 
-void EnsureEpdfont() {
+static void EnsureEpdfont() {
     auto& ui = Ui();
     if (ui.epdfont != nullptr || ui.epdfont_path.empty()) {
         return;
@@ -57,7 +53,7 @@ void EnsureEpdfont() {
     ui.epdfont = epdfont_open(ui.epdfont_path.c_str());
 }
 
-void ReleaseEpdfont() {
+static void ReleaseEpdfont() {
     auto& ui = Ui();
     if (ui.epdfont == nullptr) {
         return;
@@ -66,20 +62,20 @@ void ReleaseEpdfont() {
     ui.epdfont = nullptr;
 }
 
-const lv_font_t* UiFont() {
+static const lv_font_t* UiFont() {
     EnsureEpdfont();
     return epdfont_get_lv_font(Ui().epdfont);
 }
 
-const lv_font_t* ListFont() {
+static const lv_font_t* ListFont() {
     return UiFont();
 }
 
-const lv_font_t* BookFont() {
+static const lv_font_t* BookFont() {
     return UiFont();
 }
 
-void PrewarmPageFont(const reader::Page* page) {
+static void PrewarmPageFont(const Page* page) {
     auto& ui = Ui();
     if (ui.epdfont == nullptr || page == nullptr) {
         return;
@@ -87,7 +83,7 @@ void PrewarmPageFont(const reader::Page* page) {
     std::string blob;
     blob.reserve(2048);
     for (const auto& item : page->items) {
-        if (item.kind == reader::ContentKind::kText) {
+        if (item.kind == ContentKind::kText) {
             blob.append(item.text);
             blob.push_back('\n');
         }
@@ -97,20 +93,22 @@ void PrewarmPageFont(const reader::Page* page) {
     }
 }
 
-lv_coord_t ContentWidth() { return EPD_HOR_RES - kListPad * 2; }
+static lv_coord_t ContentWidth() {
+    return EPD_HOR_RES - kListPad * 2;
+}
 
-lv_coord_t StatusBarHeight() {
+static lv_coord_t StatusBarHeight() {
     const lv_font_t* ui_font = UiFont();
     const lv_coord_t line_h = ui_font != nullptr ? ui_font->line_height : 30;
     return line_h + kStatusPadV * 2;
 }
 
-lv_coord_t MeasureTextWidth(const lv_font_t* font, const char* text) {
+static lv_coord_t MeasureTextWidth(const lv_font_t* font, const char* text) {
     if (font == nullptr || text == nullptr) {
         return 0;
     }
     lv_coord_t w = 0;
-    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(text); *p; ) {
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(text); *p;) {
         uint32_t cp = 0;
         if ((*p & 0x80) == 0) {
             cp = *p++;
@@ -128,7 +126,7 @@ lv_coord_t MeasureTextWidth(const lv_font_t* font, const char* text) {
     return w;
 }
 
-std::string TruncateTextToWidth(std::string text, const lv_font_t* font, lv_coord_t max_w) {
+static std::string TruncateTextToWidth(std::string text, const lv_font_t* font, lv_coord_t max_w) {
     if (max_w <= 0 || MeasureTextWidth(font, text.c_str()) <= max_w) {
         return text;
     }
@@ -141,7 +139,7 @@ std::string TruncateTextToWidth(std::string text, const lv_font_t* font, lv_coor
     return "…";
 }
 
-void UpdateFooter() {
+static void UpdateFooter() {
     auto& ui = Ui();
     if (ui.footer == nullptr || !ui.session || !ui.session->IsOpen()) {
         return;
@@ -164,7 +162,7 @@ void UpdateFooter() {
     lv_label_set_text(ui.footer, buf);
 }
 
-void RenderPage() {
+static void RenderPage() {
     auto& ui = Ui();
     if (ui.content == nullptr || !ui.session) {
         return;
@@ -172,7 +170,7 @@ void RenderPage() {
     lv_obj_clean(ui.content);
     DisableScroll(ui.content);
 
-    const reader::Page* page = ui.session->CurrentPageData();
+    const Page* page = ui.session->CurrentPageData();
     if (page == nullptr) {
         lv_obj_t* msg = lv_label_create(ui.content);
         lv_label_set_text(msg, "无法加载页面");
@@ -184,8 +182,7 @@ void RenderPage() {
     const bool page_images = ui.session->IsPageImagesMode();
     const lv_coord_t max_w = ui.session->ViewportWidth();
     const lv_coord_t content_h = ui.session->ViewportHeight();
-    const lv_coord_t col_w = page_images ? max_w
-        : reader::PageTextColumnWidth(*page, BookFont(), max_w);
+    const lv_coord_t col_w = page_images ? max_w : PageTextColumnWidth(*page, BookFont(), max_w);
     lv_obj_t* col = lv_obj_create(ui.content);
     lv_obj_remove_style_all(col);
     lv_obj_set_size(col, col_w, page_images ? content_h : LV_SIZE_CONTENT);
@@ -197,30 +194,29 @@ void RenderPage() {
     lv_obj_clear_flag(col, LV_OBJ_FLAG_CLICKABLE);
     DisableScroll(col);
 
-    const auto line_layout = reader::MakeTextLineLayout(BookFont(), content_h, ui.session->LineSpacingPercent());
+    const auto line_layout = MakeTextLineLayout(BookFont(), content_h, ui.session->LineSpacingPercent());
     int row_index = 0;
     bool previous_title = false;
     for (const auto& item : page->items) {
-        if (item.kind == reader::ContentKind::kText) {
+        if (item.kind == ContentKind::kText) {
             const lv_font_t* book_font = BookFont();
             if (item.text.empty()) {
                 continue;
             }
-            reader::CreatePageTextLabel(col, item, col_w, book_font, line_layout, row_index,
-                                       reader::ReaderParagraphGap(ui.session->ParaGap(), previous_title));
+            CreatePageTextLabel(col, item, col_w, book_font, line_layout, row_index,
+                                ReaderParagraphGap(ui.session->ParaGap(), previous_title));
             previous_title = item.chapter_title;
         } else {
             previous_title = false;
-            reader::RasterImage img;
+            RasterImage img;
             lv_obj_t* slot = lv_obj_create(col);
             lv_obj_remove_style_all(slot);
             lv_obj_set_size(slot, max_w, page->items.size() == 1 ? content_h : item.image_h);
             lv_obj_clear_flag(slot, LV_OBJ_FLAG_CLICKABLE);
             DisableScroll(slot);
-            if (ui.session->LoadPageImage(item.image_href, item.image_w, item.image_h, img) &&
-                !img.empty()) {
-                auto* heap_img = new reader::RasterImage(std::move(img));
-                reader::ApplyImageDarkening(heap_img->pixels.data(), heap_img->pixels.size());
+            if (ui.session->LoadPageImage(item.image_href, item.image_w, item.image_h, img) && !img.empty()) {
+                auto* heap_img = new RasterImage(std::move(img));
+                ApplyImageDarkening(heap_img->pixels.data(), heap_img->pixels.size());
                 heap_img->BindDsc();
                 lv_obj_t* image = lv_image_create(slot);
                 lv_image_set_src(image, &heap_img->dsc);
@@ -228,8 +224,8 @@ void RenderPage() {
                 lv_obj_add_event_cb(
                     image,
                     [](lv_event_t* ev) {
-                        auto* p = static_cast<reader::RasterImage*>(lv_obj_get_user_data(
-                            static_cast<lv_obj_t*>(lv_event_get_target(ev))));
+                        auto* p = static_cast<RasterImage*>(
+                            lv_obj_get_user_data(static_cast<lv_obj_t*>(lv_event_get_target(ev))));
                         delete p;
                     },
                     LV_EVENT_DELETE, nullptr);
@@ -246,14 +242,16 @@ void RenderPage() {
     UpdateFooter();
 }
 
-bool NavigateSession(reader::BookSession::NavigationKind kind, int value) {
+static bool NavigateSession(BookSession::NavigationKind kind, int value) {
     auto& ui = Ui();
-    if (!ui.session) return false;
+    if (!ui.session) {
+        return false;
+    }
     auto cursor = ui.session->CreateNavigationCursor(kind, value);
     return cursor && cursor->PrepareNavigation(kind, value) && ui.session->CommitNavigation(*cursor);
 }
 
-void OnContentClicked(lv_event_t* e) {
+static void OnContentClicked(lv_event_t* e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
@@ -261,13 +259,13 @@ void OnContentClicked(lv_event_t* e) {
     if (!ui.session || !ui.session->IsOpen()) {
         return;
     }
-    if (NavigateSession(reader::BookSession::NavigationKind::kDelta, 1)) {
+    if (NavigateSession(BookSession::NavigationKind::kDelta, 1)) {
         ui.session->SaveProgress();
         RenderPage();
     }
 }
 
-void BuildScreen() {
+static void BuildScreen() {
     auto& ui = Ui();
     if (ui.scr != nullptr && lv_obj_is_valid(ui.scr)) {
         lv_obj_delete(ui.scr);
@@ -311,7 +309,7 @@ void BuildScreen() {
     lv_screen_load(ui.scr);
 }
 
-void ShowIdleScreen() {
+static void ShowIdleScreen() {
     auto& ui = Ui();
     if (ui.session && ui.session->IsOpen()) {
         return;
@@ -338,7 +336,7 @@ void ShowIdleScreen() {
     lv_screen_load(ui.scr);
 }
 
-bool OpenSessionPath(const char* path) {
+static bool OpenSessionPath(const char* path) {
     auto& ui = Ui();
     ui.last_error.clear();
     if (path == nullptr || path[0] == '\0') {
@@ -348,16 +346,16 @@ bool OpenSessionPath(const char* path) {
     ui.open_ebook_path = path;
 
     EnsureEpdfont();
-    ui.session = std::make_unique<reader::BookSession>();
+    ui.session = std::make_unique<BookSession>();
     ui.session->SetFont(BookFont());
-    ui.session->SetLineSpacing(reader::kReaderLineSpacingPercentDefault, reader::kReaderParaGapDefault);
+    ui.session->SetLineSpacing(kReaderLineSpacingPercentDefault, kReaderParaGapDefault);
 
     const lv_coord_t body_h = EPD_VER_RES - StatusBarHeight() - kFooterH;
     ui.session->SetViewport(ContentWidth(), body_h - 8);
 
-    reader::BookInfo info;
+    BookInfo info;
     info.path = path;
-    info.format = reader::BookFormat::kEbook;
+    info.format = BookFormat::kEbook;
     info.title = path;
 
     if (!ui.session->Open(info)) {
@@ -370,8 +368,6 @@ bool OpenSessionPath(const char* path) {
     RenderPage();
     return true;
 }
-
-}  // namespace
 
 extern "C" {
 
@@ -463,7 +459,7 @@ int book_reader_open_ebook_mem(const uint8_t* data, size_t len) {
 
 void book_reader_next_page(void) {
     auto& ui = Ui();
-    if (NavigateSession(reader::BookSession::NavigationKind::kDelta, 1)) {
+    if (NavigateSession(BookSession::NavigationKind::kDelta, 1)) {
         ui.session->SaveProgress();
         RenderPage();
     }
@@ -471,7 +467,7 @@ void book_reader_next_page(void) {
 
 void book_reader_prev_page(void) {
     auto& ui = Ui();
-    if (NavigateSession(reader::BookSession::NavigationKind::kDelta, -1)) {
+    if (NavigateSession(BookSession::NavigationKind::kDelta, -1)) {
         ui.session->SaveProgress();
         RenderPage();
     }
@@ -479,7 +475,7 @@ void book_reader_prev_page(void) {
 
 void book_reader_go_toc(int index) {
     auto& ui = Ui();
-    if (NavigateSession(reader::BookSession::NavigationKind::kToc, index)) {
+    if (NavigateSession(BookSession::NavigationKind::kToc, index)) {
         ui.session->SaveProgress();
         RenderPage();
     }
@@ -497,7 +493,7 @@ const char* book_reader_toc_title(int index) {
     if (!ui.session || index < 0) {
         return "";
     }
-    const reader::TocEntry* ent = ui.session->TocAt(index);
+    const TocEntry* ent = ui.session->TocAt(index);
     if (ent == nullptr) {
         return "";
     }
@@ -514,4 +510,4 @@ const char* book_reader_last_error(void) {
     return Ui().last_error.c_str();
 }
 
-}  // extern "C"
+} // extern "C"

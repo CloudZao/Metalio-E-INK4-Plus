@@ -32,7 +32,8 @@ INC=(
   -I"$ROOT/src/esp_compat"
   -I"$ROOT/src/font"
   -I"$ROOT/src/emulator"
-  -I"$ESP_MAIN/reader"
+  -I"$ESP_MAIN"
+  -I"$ESP_MAIN/business/reader"
   -I"$LVGL"
 )
 
@@ -44,19 +45,25 @@ DEFS=(
 
 CXXSRC=(
   "$ROOT/src/emulator/book_reader_emulator.cpp"
-  "$ROOT/src/emulator/image_util_emulator.cc"
+  "$ROOT/src/emulator/image_decode_emulator.cc"
   "$ROOT/src/font/epdfont_emulator.cc"
-  "$ESP_MAIN/display/font/epdfont.cc"
-  "$ESP_MAIN/reader/book_session.cc"
-  "$ESP_MAIN/reader/book_session_nav.cc"
-  "$ESP_MAIN/reader/book_disk_cache.cc"
-  "$ESP_MAIN/reader/book_bookmarks.cc"
-  "$ESP_MAIN/reader/ebook_document.cc"
-  "$ESP_MAIN/reader/epub_document.cc"
-  "$ESP_MAIN/reader/html_content.cc"
-  "$ESP_MAIN/reader/text_encoding.cc"
-  "$ESP_MAIN/reader/txt_chapter.cc"
-  "$ESP_MAIN/reader/zip_reader.cc"
+  "$ESP_MAIN/ui/common/drawing/font/epdfont.cc"
+  "$ESP_MAIN/business/reader/book_session.cc"
+  "$ESP_MAIN/business/reader/book_session_nav.cc"
+  "$ESP_MAIN/business/reader/book_session_structure_cache.cc"
+  "$ESP_MAIN/business/reader/book_disk_cache.cc"
+  "$ESP_MAIN/business/reader/book_bookmarks.cc"
+  "$ESP_MAIN/business/reader/ebook_document.cc"
+  "$ESP_MAIN/business/reader/epub_document.cc"
+  "$ESP_MAIN/business/reader/html_content.cc"
+  "$ESP_MAIN/business/reader/text_encoding.cc"
+  "$ESP_MAIN/business/reader/txt_chapter.cc"
+  "$ESP_MAIN/business/reader/zip_reader.cc"
+  "$ESP_MAIN/infra/image/image_geometry.cc"
+  "$ESP_MAIN/infra/image/image_tone.cc"
+  "$ESP_MAIN/infra/storage/file_write.cc"
+  "$ESP_MAIN/infra/storage/storage_error.cc"
+  "$ESP_MAIN/infra/storage/sd_file_commit.cc"
 )
 
 CSRC=(

@@ -2,11 +2,10 @@
  * Flash mmap 零拷贝示例（推荐长文）。
  *
  * 1. menuconfig / sdkconfig 使用分区表：
- *      CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/v2/16m_fontpack.csv"
- *    或 32m_fontpack.csv
+ *      CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/16m.csv"
  * 2. 烧录字体：
  *      parttool.py --port PORT write_partition --partition-name font_data \
- *          --input tools/epdfont/fonts.fontpack
+ *          --input tools/fontpack/fonts.fontpack
  * 3. 将本文件与 font_loader.c 加入组件编译。
  */
 

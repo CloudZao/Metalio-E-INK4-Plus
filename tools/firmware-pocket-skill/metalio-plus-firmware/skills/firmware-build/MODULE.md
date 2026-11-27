@@ -16,6 +16,6 @@
 3. 扩展需求并复测相关行为；卡在编译时按 [已知故障](references/build-failures.md) 找触发条件，不一次载入完整历史经验。
 4. 将真实分段交给 [验证与交付](../verify-delivery/MODULE.md)。完成必要业务检查，不以空壳工程、官方原版改名或仅元数据通过代替用户固件。
 
-需要固定官方工程时才读 [官方工程准备](references/official-preparation.md)，执行 `scripts/prepare_official_project.py`。该脚本会选择 798 个核验后的官方文件并加入明确标记的开发补全；原始归档不变。此选材与补全是本 Skill 的经验，不属于基线环境。
+需要固定官方工程时才读 [官方工程准备](references/official-preparation.md)，提供原始依赖锁后执行 `scripts/prepare_official_project.py`；该锁不随当前包分发，缺失时此路线不可用。该脚本会选择 798 个核验后的官方文件并加入明确标记的开发补全；原始归档不变。此选材与补全是本 Skill 的经验，不属于基线环境。
 
 无法执行命令、缺目标所需凭据、材料损坏或确认的外部阻塞应及时报告；普通实现/日志定位由 Agent 持续推进。新 SDK、加密或签名固件超出本版固定构建/检查工具的范围，不能通过删校验伪装支持。

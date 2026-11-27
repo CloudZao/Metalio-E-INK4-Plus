@@ -1,0 +1,203 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+#include <lvgl.h>
+#include "infra/storage/storage_error.h"
+#include "infra/storage/sd_paths.h"
+#include "business/reader/reader_types.h"
+#include "business/wallpaper/wallpaper_service.h"
+#include "config.h"
+#include "ui/common/drawing/ui_scale.h"
+#include "ui/common/runtime/lvgl/ui_dispatch.h"
+
+constexpr const char* TAG = "WallpaperScreen";
+constexpr const char* kScreenId = "wallpaper";
+constexpr const char* kPosixDir = SD_PATH_WALLPAPER;
+
+// 源值对齐 397 wallpaper_screen；经 UiSx/UiSy 同比例到 470
+constexpr lv_coord_t kPad = UiSx(16);
+constexpr lv_coord_t kBorderW = UiSx(2);
+constexpr lv_coord_t kFooterH = UiSy(36);
+constexpr lv_coord_t kActionH = UiSy(52);
+constexpr lv_coord_t kDeleteH = UiSy(48);
+constexpr lv_coord_t kPreviewGap = UiSy(12);  // 设置页纵向间距
+constexpr lv_coord_t kWpMultiBtnH = UiSy(36);
+constexpr lv_coord_t kWpUnderlineH = 2;
+constexpr lv_coord_t kWpUnderlinePadHor = UiSx(5);
+constexpr lv_coord_t kWpMultiDotSize = UiSx(6);
+constexpr lv_coord_t kWpCheckSize = UiSx(24);
+constexpr int64_t kWpSuppressRowClickUs = 400000;
+constexpr uint64_t kWpCheckPaintDebounceUs = 280000;
+constexpr int kGridCols = 3;
+constexpr int kGridRows = 3;
+constexpr lv_coord_t kGridColGap = UiSx(16);
+constexpr lv_coord_t kGridRowGap = UiSy(20);
+constexpr lv_coord_t kCoverRadius = UiSx(12);
+constexpr lv_coord_t kBtnRadius = 999;      // 胶囊
+constexpr lv_coord_t kGridFrameBorder = 2;  // 网格缩略外框；≥2px 减轻 DU 残影
+constexpr lv_coord_t kGridCellWDefault = UiSx(120);
+constexpr lv_coord_t kGridCoverHDefault = UiSy(160);
+constexpr lv_coord_t kPreviewMetaH = UiSy(36);
+constexpr lv_coord_t kPreviewBtnRowH = UiSy(48);
+constexpr lv_coord_t kPreviewChipH = UiSy(32);
+// 预览和缩略使用 L8；不要直接用全屏 I1，容易出现白底。
+constexpr int kPreviewMaxW = UiSx(280);
+constexpr int kPreviewMaxH = UiSy(420);
+
+/** @brief 边框内可用边长 */
+inline int FrameInner(lv_coord_t outer, lv_coord_t border) {
+    const lv_coord_t inset = 2 * border;
+    return static_cast<int>(outer > inset ? outer - inset : 1);
+}
+
+enum class UiMode : uint8_t { kList = 0, kPreview = 1 };
+
+struct FileEntry {
+    char name[SD_FILE_NAME_CAPACITY] = {};
+    char title[SD_FILE_NAME_CAPACITY] = {};
+    char path[SD_FILE_PATH_CAPACITY] = {};
+    int64_t mtime = 0;  // 文件版本用于缩略图缓存失效
+    size_t size_bytes = 0;
+    StorageError thumb_storage_error; // 缩略图文件访问错误
+    ImageDecodeError thumb_error = ImageDecodeError::kNone;  // 缩略图最近一次解码结果
+};
+
+struct WallpaperUiState {
+    struct Widgets {
+        lv_obj_t* screen = nullptr;
+        lv_obj_t* list_body = nullptr;
+        lv_obj_t* list_host = nullptr;
+        lv_obj_t* list_empty = nullptr;
+        lv_obj_t* page_lbl = nullptr;   // 页码；多选时靠右下
+        lv_obj_t* multi_bar = nullptr;  // 取消 / 全选 / 移除
+        lv_obj_t* status_label = nullptr;
+        lv_obj_t* preview_body = nullptr;
+        lv_obj_t* preview_title = nullptr;
+        lv_obj_t* preview_meta = nullptr;
+        lv_obj_t* preview_status = nullptr;
+        lv_obj_t* preview_img = nullptr;
+        lv_obj_t* preview_img_host = nullptr;
+        lv_obj_t* actions_row = nullptr;
+        lv_obj_t* actions_normal_row = nullptr;
+        lv_obj_t* actions_adjust_row = nullptr;
+        lv_obj_t* enable_shutdown_btn = nullptr;
+        lv_obj_t* enable_shutdown_lbl = nullptr;
+        lv_obj_t* enable_standby_btn = nullptr;
+        lv_obj_t* enable_standby_lbl = nullptr;
+        lv_obj_t* enable_reading_btn = nullptr;
+        lv_obj_t* enable_reading_lbl = nullptr;
+        lv_obj_t* adjust_btn = nullptr;
+        lv_obj_t* adjust_lbl = nullptr;
+        lv_obj_t* rotate_left_btn = nullptr;
+        lv_obj_t* rotate_right_btn = nullptr;
+        lv_obj_t* mirror_btn = nullptr;
+        lv_obj_t* bottom_slot = nullptr;
+        lv_obj_t* delete_btn = nullptr;
+        lv_obj_t* delete_lbl = nullptr;
+        lv_obj_t* save_row = nullptr;
+        lv_obj_t* cancel_btn = nullptr;
+        lv_obj_t* save_btn = nullptr;
+        lv_obj_t* save_lbl = nullptr;
+        lv_obj_t* dialog_mask = nullptr;
+    } ui;
+
+    std::atomic<bool> screen_alive{false};
+    bool sd_ready = false;
+    StorageError storage_error; // 介质或目录准备失败原因
+    UiMode mode = UiMode::kList;
+    // 每次 Create / DELETE 递增，异步回调会带 epoch，避免过期结果访问 UAF。
+    std::atomic<uint32_t> epoch{0};
+    std::atomic<uint32_t> decode_generation{0};  // 返回或待机时作废在途图片解码
+    std::atomic<bool> decode_paused{false};      // 待机时禁止加载图片
+    std::string shutdown_name;
+    std::string standby_name;
+    WallpaperRequest request; // 页面只接收结果，业务持有操作及执行状态
+    uint32_t request_epoch = 0;
+    uint32_t request_generation = 0;
+    uint32_t operation_revision = 0;
+    int request_index = -1;
+    void (*apply_request)(const WallpaperResult&) = nullptr;
+    ScreenPaintCoalesce wp_check_paint{};
+    ScreenPaintCoalesce wallpaper_paint{};
+
+    struct List {
+        int loaded_page = -1;        // 当前页数据所属页码
+        bool loading_shown = false;  // 同一次等待只刷新一次提示
+        int64_t requested_us = 0;    // 短缓存交接期间保留原页面
+        bool loading = false;        // 当前目录页加载中
+        bool failed = false;         // 当前目录页加载失败
+        StorageError error;           // 当前目录页失败原因
+        int list_page = 0;
+        int list_per_page = kGridCols * kGridRows;
+        bool multi = false;
+        std::vector<std::string> selected;  // 已选壁纸文件名，跨页保留
+        int64_t suppress_click_until_us = 0;
+        int suppress_click_idx = -1;
+        lv_coord_t body_h = 0;
+        lv_coord_t grid_cell_w = kGridCellWDefault;
+        lv_coord_t grid_cover_h = kGridCoverHDefault;
+        std::vector<FileEntry> files;
+        std::vector<std::unique_ptr<RasterImage>> thumbs;
+    } list;
+
+    struct Preview {
+        int idx = -1;
+        RasterImage* raster = nullptr;
+        RasterImage* base = nullptr;  // 调整态相对原预览的叠加基准
+        bool adjust_open = false;
+        bool enable_for_standby = false;                          // 显示方式弹窗对应待机或关机配置
+        ImageDecodeError decode_error = ImageDecodeError::kNone;  // 当前预览的解码错误
+        uint8_t rot_cw = 0;                                       // 相对原图顺时针 90° 次数 0..3
+        bool mirror_h = false;                                    // 原图水平镜像（先镜像再旋转）
+    } preview;
+
+    struct Workers {
+        std::atomic<bool> load_busy{false};
+        std::atomic<bool> thumb_busy{false};
+    } workers;
+};
+
+/** @brief 壁纸页 UI 单例状态 */
+WallpaperUiState& Wallpaper_State();
+
+/** @brief 登记当前页面的结果接收；返回false表示请求未接纳。 */
+bool Wallpaper_TrackRequest(WallpaperRequest request, void (*apply)(const WallpaperResult&), int index = -1);
+
+/** @brief 检查业务在途操作及当前页面尚未处理的结果。 */
+bool Wallpaper_OperationPending(WallpaperOperation operation);
+
+/** @brief 取消当前页面发起的保存或批量删除；单项修改及选择独立完成。 */
+void Wallpaper_CancelRequest();
+
+/** @brief 检查当前结果是否仍属于有效页面，图片结果同时检查解码代次。 */
+bool Wallpaper_RequestCurrent(bool image = false);
+
+/** @brief 阅读入口请求返回；保存进行中时延后，完成回调传 false 继续处理。 */
+bool Wallpaper_ReturnToReading(bool request);
+
+/** @brief 切换壁纸页 UI 模式 */
+void ShowMode(UiMode mode);
+
+/** @brief 壁纸页盖板键短按 */
+bool Wallpaper_OnVkKey(const char* key);
+
+/** @brief 壁纸页盖板键长按 */
+bool Wallpaper_OnVkKeyLongPress(const char* key);
+
+/** @brief 壁纸页盖板键抬起 */
+bool Wallpaper_OnVkKeyPressUp(const char* key);
+
+/** @brief 壁纸页删除事件 */
+void Wallpaper_OnScreenDeleted(lv_event_t* e);
+
+struct WallpaperDecodeToken {
+    uint32_t epoch;       // 页面生命周期
+    uint32_t generation;  // 解码生命周期
+};
+
+/** @brief 检查壁纸解码是否因离页、返回或待机而取消 */
+bool Wallpaper_DecodeCancelled(void* context);

@@ -14,6 +14,7 @@ build/
 .cursor/
 .devcontainer/
 dependencies.lock
+/sdkconfig.old
 .env
 releases/
 local-changes-summary.md
@@ -42,13 +43,21 @@ tools/ebook/.venv/
 # ELF application runtime.
 !components/elf_loader/
 !components/elf_loader/**
+!components/json/
+!components/json/**
 
 # Generated sample app packages and reading pages.
-tools/elf_app/*/*.elf
-tools/elf_app/*/manifest.json
+tools/elf_app/**/*.elf
+tools/elf_app/**/manifest.json
 tools/elf_app/english_reader/content.h
 
 tools/elf_app/*/assets.bin
+tools/elf_app/imaging/image_assets.h
+tools/elf_app/imaging/icon.pbm
 
 # Distributed separately: exceeds the Git hosting file limit.
 /tools/fontpack/fonts/Extended-Fonts/metalio/e-ink/fonts/extended-fonts.fontpack
+
+# Generated ELF build trees and resource headers.
+/tools/elf_app/*/build/
+/tools/elf_app/gravity_maze/music_assets.h

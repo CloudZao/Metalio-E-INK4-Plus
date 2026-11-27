@@ -1,0 +1,81 @@
+#include <cstring>
+#include <esp_log.h>
+#include <driver/i2s_common.h>
+#include "audio_codec.h"
+#include "infra/storage/settings.h"
+
+#define TAG "AudioCodec"
+
+AudioCodec::AudioCodec() {}
+
+AudioCodec::~AudioCodec() {}
+
+bool AudioCodec::OutputData(std::vector<int16_t>& data) {
+    int written = Write(data.data(), data.size());
+    if (written != static_cast<int>(data.size())) {
+        ESP_LOGE(TAG, "Output short write: expected=%u actual=%d", static_cast<unsigned>(data.size()), written);
+    }
+    return written == static_cast<int>(data.size());
+}
+
+bool AudioCodec::InputData(std::vector<int16_t>& data) {
+    int samples = Read(data.data(), data.size());
+    if (samples != static_cast<int>(data.size())) {
+        ESP_LOGE(TAG, "Input short read: expected=%u actual=%d; discard frame", static_cast<unsigned>(data.size()),
+                 samples);
+        return false;
+    }
+    if (samples > 0) {
+        return true;
+    }
+    return false;
+}
+
+void AudioCodec::Start() {
+    Settings settings("audio", false);
+    int volume = settings.GetInt("output_volume", output_volume_.load());
+    if (volume <= 0) {
+        ESP_LOGW(TAG, "Output volume value (%d) is too small, setting to default (10)", volume);
+        volume = 10;
+    }
+    output_volume_.store(volume);
+
+    if (tx_handle_ != nullptr) {
+        ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
+    }
+
+    if (rx_handle_ != nullptr) {
+        ESP_ERROR_CHECK(i2s_channel_enable(rx_handle_));
+    }
+
+    EnableInput(true);
+    EnableOutput(true);
+    ESP_LOGI(TAG, "Audio codec started");
+}
+
+void AudioCodec::SetOutputVolume(int volume) {
+    output_volume_.store(volume);
+    ESP_LOGI(TAG, "Set output volume to %d", volume);
+
+    Settings settings("audio", true);
+    settings.SetInt("output_volume", volume);
+}
+
+void AudioCodec::SetInputGain(float gain) {
+    input_gain_.store(gain);
+    ESP_LOGI(TAG, "Set input gain to %.1f", static_cast<double>(gain));
+}
+
+void AudioCodec::EnableInput(bool enable) {
+    if (input_enabled_.exchange(enable) == enable) {
+        return;
+    }
+    ESP_LOGI(TAG, "Set input enable to %s", enable ? "true" : "false");
+}
+
+void AudioCodec::EnableOutput(bool enable) {
+    if (output_enabled_.exchange(enable) == enable) {
+        return;
+    }
+    ESP_LOGI(TAG, "Set output enable to %s", enable ? "true" : "false");
+}

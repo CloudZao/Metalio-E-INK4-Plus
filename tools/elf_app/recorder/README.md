@@ -12,7 +12,7 @@ Recording and playback are mutually exclusive. Record again first stops playback
 
 ## Build and installation
 
-Configure the toolchain using the [developer guide](../DEVELOPMENT.md), then run:
+Configure the toolchain using the [developer guide](../README.md), then run:
 
 ```powershell
 ./tools/elf_app/build_app.ps1 -Compiler $compiler -AppDirectory ./tools/elf_app/recorder
@@ -20,4 +20,4 @@ Configure the toolchain using the [developer guide](../DEVELOPMENT.md), then run
 
 The output is `recorder.elf`. For manual installation, use the delivery filename `录音机.elf` with its matching `manifest.json` under `metalio/e-ink/apps/录音机/`. Update the manifest size and SHA256 after rebuilding, or publish through App Store. Upgrade to firmware supporting `XZ_APP_CAP_RECORDING` and WAV playback first. Missing requirements return `XZ_APP_ERR_UNSUPPORTED` at entry.
 
-See the [recording developer guide](../DEVELOPMENT.md#recording-xz_app_cap_recording) for parameters, results and lifecycle rules.
+See the [recording developer guide](../README.md#single-slot-recording) for parameters, results and lifecycle rules.

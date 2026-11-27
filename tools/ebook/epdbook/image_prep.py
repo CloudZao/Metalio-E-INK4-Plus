@@ -251,7 +251,7 @@ def _floyd_steinberg(pixels: bytes, w: int, h: int) -> bytes:
     return bytes(out)
 
 
-# 与固件 main/reader/image_util.cc GrayToL8Dither / kBayer4 同构
+# 与桌面图像解码后端 tools/ebook/emulator/src/emulator/image_decode_emulator.cc 的抖动规则一致
 _BAYER4 = (
     (0, 8, 2, 10),
     (12, 4, 14, 6),

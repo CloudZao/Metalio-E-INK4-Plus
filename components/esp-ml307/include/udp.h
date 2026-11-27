@@ -2,6 +2,8 @@
 #define UDP_H
 
 
+#include <atomic>
+#include <cstddef>
 #include <string>
 #include <functional>
 
@@ -11,6 +13,9 @@ public:
     virtual bool Connect(const std::string& host, int port) = 0;
     virtual void Disconnect() = 0;
     virtual int Send(const std::string& data) = 0;
+
+    /** @brief 设置单条接收数据报的最大字节数，须在连接前调用。 */
+    virtual bool SetReceiveBufferSize(size_t) { return false; }
 
     virtual void OnMessage(std::function<void(const std::string& data)> callback) {
         message_callback_ = std::move(callback);
@@ -22,7 +27,7 @@ public:
 
 protected:
     std::function<void(const std::string& data)> message_callback_;
-    bool connected_ = false;
+    std::atomic<bool> connected_{false};
 };
 
 #endif // UDP_H

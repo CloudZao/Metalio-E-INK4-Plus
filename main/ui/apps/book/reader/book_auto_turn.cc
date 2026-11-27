@@ -1,0 +1,117 @@
+#include <atomic>
+#include <esp_timer.h>
+#include "ui/apps/book/reader/book_auto_turn.h"
+#include "sysmgmt/power/policy/power_policy.h"
+#include "ui/common/drawing/adapter/lv_adapter_display.h"
+#include "ui/apps/book/book_nav.h"
+#include "ui/apps/book/book_screen_priv.h"
+#include "business/reader/book_reader_prefs.h"
+#include "ui/common/widgets/screen_frontlight.h"
+#include "ui/apps/standby/standby_screen.h"
+
+static lv_timer_t* s_auto_turn_timer = nullptr;
+static std::atomic<bool> s_auto_turn_enabled{false};
+static std::atomic<bool> s_auto_turn_pending{false};
+static bool s_auto_turn_ready = false;
+static std::atomic<int64_t> s_auto_turn_due_us{0};
+
+static bool AutoTurnReadingVisible() {
+    const auto& st = Book_State();
+    auto visible = [](lv_obj_t* obj) {
+        return obj && lv_obj_is_valid(obj) && !lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    };
+    return st.reader.read_scr && lv_obj_is_valid(st.reader.read_scr) && lv_screen_active() == st.reader.read_scr &&
+           !StandbyPresentation::IsActive() && st.reader.read_chrome == BookUiState::ReadChrome::kReading &&
+           !visible(st.settings.settings_sheet) && !ScreenFrontlightIsVisible() && st.reader.session &&
+           st.reader.session->IsOpen() && !st.reader.opening.load() && !st.reader.standby_paused &&
+           !st.reader.deferred_cleanup && !st.reader.prefs_reopen_pending && !st.reader.layout_again;
+}
+
+static void OnReaderAutoTurnTick(lv_timer_t*) {
+    auto& st = Book_State();
+    if (!s_auto_turn_enabled) {
+        return;
+    }
+    // 菜单、触摸和前台翻页完成后重新计时，后台编排不推迟当前可读页。
+    if (!AutoTurnReadingVisible() || TouchUiFingerIsDown() || TouchUiHasPendingEdges() || s_auto_turn_pending.load() ||
+        ReaderPageWorkPending() || s_reader_paint.seq.load() != s_reader_paint.done.load()) {
+        s_auto_turn_ready = false;
+        ResetReaderAutoTurnDeadline();
+        return;
+    }
+    if (!st.reader.session->HasNextPage()) {
+        StopReaderAutoTurn();
+        return;
+    }
+    if (!s_auto_turn_ready) {
+        s_auto_turn_ready = true;
+        ResetReaderAutoTurnDeadline();
+        return;
+    }
+    if (esp_timer_get_time() < s_auto_turn_due_us) {
+        return;
+    }
+    ResetReaderAutoTurnDeadline();
+    // Keep auto turns separate so a manual event can cancel one before rendering.
+    s_auto_turn_pending.store(true);
+    RequestRenderReaderPage();
+}
+
+bool ReaderAutoTurnEnabled() {
+    return s_auto_turn_enabled;
+}
+
+void SetReaderAutoTurnEnabled(bool enabled) {
+    if (!enabled) {
+        StopReaderAutoTurn();
+        return;
+    }
+    if (!s_auto_turn_timer) {
+        s_auto_turn_timer = lv_timer_create(OnReaderAutoTurnTick, 200, nullptr);
+    }
+    s_auto_turn_enabled = s_auto_turn_timer != nullptr;
+    s_auto_turn_ready = false;
+    ResetReaderAutoTurnDeadline();
+}
+
+void StopReaderAutoTurn() {
+    s_auto_turn_enabled = false;
+    s_auto_turn_pending.store(false);
+    s_auto_turn_ready = false;
+    if (s_auto_turn_timer) {
+        lv_timer_del(s_auto_turn_timer);
+        s_auto_turn_timer = nullptr;
+    }
+}
+
+void ResetReaderAutoTurnDeadline() {
+    s_auto_turn_due_us = esp_timer_get_time() + static_cast<int64_t>(BookReaderPrefsAutoTurnSeconds()) * 1000000;
+}
+
+void ReaderAutoTurnPageMoved() {
+    if (!s_auto_turn_enabled) {
+        return;
+    }
+    ResetReaderAutoTurnDeadline();
+    PowerPolicy::GetInstance().NotifyUserActivity();
+}
+
+void ReaderAutoTurnManualInput() {
+    if (!s_auto_turn_enabled.load()) {
+        return;
+    }
+    s_auto_turn_pending.store(false);
+    ResetReaderAutoTurnDeadline();
+}
+
+bool ConsumeReaderAutoTurnRequest() {
+    if (!s_auto_turn_pending.exchange(false)) {
+        return false;
+    }
+    if (!s_auto_turn_enabled.load() || !AutoTurnReadingVisible() || ReaderPageWorkPending() || TouchUiFingerIsDown() ||
+        TouchUiHasPendingEdges()) {
+        ResetReaderAutoTurnDeadline();
+        return false;
+    }
+    return true;
+}

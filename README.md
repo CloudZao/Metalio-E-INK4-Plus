@@ -11,10 +11,14 @@
 - ESP-IDF docs: [ESP32-S31 Get Started](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32s31/get-started/index.html)
 - Sibling product: [Metalio E-Ink 4](https://github.com/CloudZao/Metalio-E-INK4) (3.97" SPI)
 
-- [App Store](docs/app-store_en.md)
-- [ELF app developer guide](tools/elf_app/DEVELOPMENT.md)
+- [Multi-board architecture, UI layout and integration](docs/hardware-adaptation.md)
 
-ELF apps install independently on SD and use host-provided UI, private storage, drawing, acceleration, vibration and audio. Examples include Gravity Maze and a Recorder with recording, saving and playback. See the [ELF app overview](tools/elf_app/README.md) for capabilities and compatibility requirements.
+Build profiles: `470`, `397`, `470-global` and `397-global`. Activate ESP-IDF 6.1, then run `python tools/firmware/build_board.py <profile>`. Each profile uses a separate build directory. Hardware-specific constraints and resources are described in the integration guide.
+
+- [App Store](docs/app-store_en.md)
+- [ELF app developer guide](tools/elf_app/README.md)
+
+ELF apps install independently on SD and support host-managed HTTP/HTTPS, WebSocket/WSS, TCP/TLS and UDP networking. See [ELF apps and development](tools/elf_app/README.md) for capabilities, compatibility and development.
 
 ---
 
@@ -64,11 +68,12 @@ Product data lives under SD `metalio/e-ink/`. Cloud APIs use **ink-screen** push
 
 ### 2.2 E-paper reading
 
-- **E-paper UI**: LVGL I1 / A2I1 via EPDiy; full and partial refresh; lists and reader **must not scroll** -- page with bezel keys or volume keys (TCA9555 **P1.0** + / **P1.1** -)
+- **E-paper UI**: LVGL I1 / A2I1 via EPDiy; full and partial refresh; page the reader with bezel keys or volume keys (TCA9555 **P1.0** + / **P1.1** -); Settings lists move by viewport, show a scrollbar and stop between text lines
 - **Logical UI size**: 680x1212 with 2px insets on all sides; standby and shutdown use the full 684x1216 panel (`DISPLAY_CONTENT_*` in `config.h`).
 - **Library**: 3x3 cover grid -> detail -> body; `.ebook` / `.epub` / `.txt`
 - **UI scheduling**: reader navigation and page pixels are prepared in background workers; input dispatch and result publication stay on the UI task. See [UI scheduling](docs/ui-scheduling.md).
-- **Fonts**: UI uses Flash `font_data` first and an SD extension for missing glyphs; see [building and installing an extension](docs/ui-font-extension.md). The supported MiSans `.ef` reader fonts also use same-size fallback; reader `.ef` fonts are stored on SD or downloaded via Transfer
+- **Appearance**: Settings uses a grouped home page and separate detail pages. Theme, system font, frontlight and screen have separate entries; charging current is under Power. See [UI ownership and resources](docs/hardware-adaptation.md) for native fonts, shared controls and application layout boundaries.
+- **Fonts**: System fonts can be selected, previewed and applied directly from `.ttf` / `.otf` files in SD `fonts_ttf/`. The built-in font uses Flash `font_data` and an SD extension for missing glyphs; see [building and installing an extension](docs/ui-font-extension.md). The supported MiSans `.ef` reader fonts also use same-size fallback; reader `.ef` fonts are stored on SD or downloaded via Transfer
 - **Text layout**: Adjust paragraph, letter and line spacing, with first-line indentation from 0–3 characters. Select Top, Bottom, Left or Right to adjust each reading margin independently. Hold adjustment buttons to repeat; preferences save automatically. Backgrounds and underlines affect drawing without changing pagination. See [reader layout and cards](docs/ui-scheduling.md).
 - **Text direction**: Nine setting cards open individual option pages. Horizontal or vertical writing is independent of screen rotation. Vertical columns can run left to right (default) or right to left, with underlines on the right of each column.
 - **BLE page turner**: Supports `Free 2`, `Free3-R`, `Smart 1-E`, `HBTR002-X` and `HBTR003-X`. See [behavior and protocol details](docs/ui-scheduling.md) and the [BLE module directory](main/boards/common/bluetooth/). Turning the switch off or reaching the automatic connection timeout fully deinitializes BLE in the background. With the switch off, leaving manual discovery also releases the stack. Enabling or scanning again reinitializes BLE; saved devices and button bindings are retained.
@@ -77,7 +82,7 @@ Product data lives under SD `metalio/e-ink/`. Cloud APIs use **ink-screen** push
 ### 2.3 Local multimodal features
 
 - **Daily checklist**: cloud sync + local cache (also shown on classic standby)
-- **Wallpaper**: SD gallery; standby and power-off can each use a fullscreen wallpaper or an overlay on the current screen
+- **Wallpaper**: SD gallery; standby and power-off can each use a fullscreen wallpaper or a transparent wallpaper over the current screen
 - **Transfer**: cloud push of books, wallpapers, fonts to SD
 - **Quick controls**: swipe down in non-scrolling areas on any page for Wi-Fi on the left and vertical brightness and warm-light ratio sliders on the right. Swipe up outside the sliders or tap outside the panel to close it. Disabled during OTA upgrades and standby (11.6).
 - **Sensors**: SC7A20H accel; PCF8563 RTC; BQ27220 gauge
@@ -96,7 +101,7 @@ Product data lives under SD `metalio/e-ink/`. Cloud APIs use **ink-screen** push
 - **Idle policy** (Settings -> Power, `PowerPolicy`):
   - Inactivity shows a classic clock or wallpaper standby page; sliced light sleep starts after software cleanup and physical display refresh complete.
   - Idle CPU frequency, network grace, standby delay, and accumulated standby power-off are configurable. Manual Wi-Fi-off takes priority over automatic network recovery.
-  - See the [low-power policy](main/boards/common/power_policy/README.en.md) for standby entry/exit software and hardware order, defaults, and limits.
+  - See the [low-power policy](main/sysmgmt/power/policy/README.en.md) for standby entry/exit software and hardware order, defaults, and limits.
 - **Buttons**:
   - **POWER short press**: enter / leave standby overlay
   - **POWER long press ~3 s**: hard power-off
@@ -117,7 +122,7 @@ The first home page enables these six apps (`home_screen.cc` -> `kApps[]`):
 | **Reader** | Local library browse and paged reading (volume keys P1.0 / P1.1) |
 | **Wallpaper** | Wallpaper gallery; standby / shutdown art |
 | **Transfer** | Cloud push of books, wallpapers, fonts |
-| **Settings** | Network, theme, language, haptics, power, charging, screen, conversation, Bluetooth, test, about |
+| **Settings** | Wi-Fi, Bluetooth, pager, theme, system font, frontlight, screen, haptics, keys and gestures, chat, power, language, test, logs, about |
 
 ---
 
@@ -167,7 +172,7 @@ flowchart LR
 | Category | Spec |
 |:---|:---|
 | **MCU** | ESP32-S31; Flash 16 MB; Octal PSRAM @ 200 MHz |
-| **Storage** | On-board Flash (`partitions/v1/16m.csv`) + microSD (SDMMC **4-bit**) |
+| **Storage** | On-board Flash (`partitions/16m.csv`) + microSD (SDMMC **4-bit**) |
 | **Display** | ED047TC2_1216, ~4.7", native 1216x684 / UI 684x1216; EPDiy parallel 8-bit; TPS65185 PMIC |
 | **Touch** | FT6336U (I2C 0x38); INT=GPIO5; RST=TCA9555 **P1.2** (high = powered) |
 | **Frontlight** | Cool GPIO6 / Warm GPIO7 (YX6016N EN/PWM) |
@@ -204,9 +209,9 @@ flowchart TB
 | **BT audio** | Codec / speaker / headset | UART AT + I2S | Three modes (12.1) |
 | **TPS65185** | Panel PMIC | I2C via TCA control pins | VCOM / power-up / PWR_GOOD |
 
-> Select Wi-Fi or 4G under **Settings -> Network**. In 4G mode, switching between the internal and external SIM takes effect after modem communication is restored and the device restarts.
+> Select Wi-Fi or 4G under **Settings → Wi-Fi → Network settings**. In 4G mode, switching between the internal and external SIM takes effect after modem communication is restored and the device restarts.
 
-Before a software restart, the cellular modem stops its handshake, DMA and network tasks. Startup clears GPIO interrupt and UHCI state retained across CPU resets before peripheral initialization. A failed SIM switch does not start the success restart countdown.
+Keys & gestures: enable or disable horizontal swipe recognition and assign short and long key presses under Settings → Keys & gestures. Swipe right for the default previous-page action and left for the default next-page action, independently of custom key assignments. Configuration is stored on SD. See [Keys & gestures](docs/key-bindings.md) for details.
 
 Wi-Fi settings are saved to NVS and `metalio/e-ink/settings/wificonfig.json` on the SD card. Boot imports the card configuration. See [Wi-Fi configuration and SD synchronization (Chinese)](docs/wifi-config.md) for the format, recovery rules, and plaintext password handling.
 
@@ -215,7 +220,7 @@ Wi-Fi settings are saved to NVS and `metalio/e-ink/settings/wificonfig.json` on 
 ## 7. Peripherals and pins
 
 Pins: `main/boards/metalio-e-ink4-plus/config.h`  
-Board glue: `main/boards/metalio-e-ink4-plus/display/epd_board_metalio_eink4_plus.c`  
+Board glue: `main/boards/common/display/epdiy/panel/epd_board_adapter.c`\
 (Hardware rev notes in `config.h`: e.g. XSTL / MODE for V1.3-V1.4.)
 
 ### 7.1 ESP32-S31 GPIO
@@ -319,10 +324,10 @@ flowchart LR
 |:---|:---|
 | Battery / charge policy | [docs/battery-soc-and-charge.md](docs/battery-soc-and-charge.md) |
 | EPD Bayer dither | [docs/epd-bayer-dither-gray.md](docs/epd-bayer-dither-gray.md) |
-| SPV timing investigation | [docs/epd-spv-investigation.md](docs/epd-spv-investigation.md#english) |
+| SPV timing investigation | [docs/epd-spv-investigation.en.md](docs/epd-spv-investigation.en.md) |
 | SD font / resources | [docs/sd-font-resources-upgrade.md](docs/sd-font-resources-upgrade.md) |
 
-Firmware pin truth is `config.h` / `epd_board_metalio_eink4_plus.*`. If schematics are published elsewhere, follow the hardware team docs.
+Firmware pin truth is `config.h` / `epd_board_adapter.*`. If schematics are published elsewhere, follow the hardware team docs.
 
 ---
 
@@ -341,20 +346,20 @@ Firmware is based on xiaozhi-esp32, customized for `metalio-e-ink4-plus`. CMake 
 | **Audio** | `audio/` + BT UART | Codec, record / play |
 | **Protocols** | `protocols/` | WebSocket, MQTT+UDP |
 | **MCP** | `mcp_server.cc` | On-device Model Context Protocol |
-| **Power** | `boards/common/power_policy/` | Power tiers, standby, shutdown |
+| **Power** | `boards/common/power/policy/` | Power tiers, standby, shutdown |
 | **Common** | `boards/common/` | Wi-Fi, SD, gauge, USB MSC, BT codec |
 
 The display uses a 30-phase image waveform table, preserving existing phase counts and the TPS65185 power driver. The S31 parallel path reuses its line queues to prefill the next phase during the current scan, targeting an 85 Hz phase cadence. Use `EpdTiming` for the measured rate and validate display quality on the target device.
 
 `EpdTiming` reports the software-measured SPV phase rate after updates with at least two completed phases. This is distinct from the full-image refresh rate.
 
-Common display scheduling coordinates rendering with physical updates while input and cancellation remain active. Shared book-cover cells load images in a bounded background worker. See the [display documentation](main/display/README.md#绘制调度与资源准备--rendering-and-resource-preparation) for the UI submission and lifetime rules.
+Common display scheduling coordinates rendering with physical updates while input and cancellation remain active. Shared book-cover cells load images in a bounded background worker. See the [display documentation](main/ui/README.md#rendering-and-resource-preparation) for the UI submission and lifetime rules.
 
 ### 9.2 State machine
 
 Baiwen AI keeps networking available while in the foreground without using the idle network grace timer. Automatic standby still follows the system setting. Entering standby stops voice work and releases the page network hold; user wake restores the connection when the page remains open, without starting recording. Background waits do not reset user inactivity, and the manual Wi-Fi switch takes precedence.
 
-After startup, `app_main` returns so the SDK can reclaim its stack. At runtime, `MainEventLoop` only receives and dispatches events. `Application::Schedule` routes bounded messages to separate serial workers for voice sessions, networking, storage, local audio and cleanup. Workers use internal-RAM stacks and retire when idle; active audio sessions retain their control workers. Submission takes only the short queue lock and does not wait for business execution or queue space. A rejected submission returns `false` so the caller can recover or retain the context for retry. Voice callbacks do not drain their queue recursively; sending yields after at most eight audio packets. Stop intents and asynchronous audio releases survive queue pressure. Audio test initialization reuses the audio worker with cancellation checks, and reacquiring a client cancels its pending release. NetEase text and sentence-boundary transitions retry in receive order; at most 32 unacknowledged boundaries are retained, favoring newer boundaries during sustained congestion.
+After startup, `app_main` returns so the SDK can reclaim its stack. At runtime, `MainEventLoop` only receives and dispatches events. `TaskExecutor` routes bounded messages to separate serial workers for voice sessions, network control, storage, local audio, cleanup, longer network jobs, image processing and file transfers. Control workers use internal-RAM stacks; cleanup, network I/O and image workers use PSRAM stacks. Workers retire when idle; active audio sessions retain their control workers. Submission takes only the short queue lock and does not wait for business execution or queue space. A rejected submission returns `false` so the caller can recover or retain the context for retry. Voice callbacks do not drain their queue recursively; sending yields after at most eight audio packets. Stop intents and asynchronous audio releases survive queue pressure. Audio test initialization reuses the audio worker with cancellation checks, and reacquiring a client cancels its pending release. NetEase text and sentence-boundary transitions retry in receive order; at most 32 unacknowledged boundaries are retained, favoring newer boundaries during sustained congestion.
 
 `ScreenLvAsync` and `ScreenLvAsyncUrgent` use separate normal and priority UI queues consumed by the existing LVGL tick, independently of the application dispatcher. Accepted messages transfer context ownership to the callback; rejected messages remain the sender's responsibility. Existing page generations and cancellation flags protect late results. Network waits, HTTP shutdown and hardware teardown stay outside UI callbacks; NVS operations require internal-RAM stacks.
 
@@ -367,7 +372,7 @@ After startup, `app_main` returns so the SDK can reclaim its stack. At runtime, 
 
 SD card upgrade: copy the application firmware `Metalio-E-Ink4-Plus.bin` for this device to the SD card root (do not use the full `merged-binary.bin` image). Insert the card, restart the device, and confirm the upgrade when prompted. Wait for completion and the automatic restart. Keep the device powered and the card inserted throughout the upgrade. Wi-Fi is not required.
 
-Touch firmware: startup checks the FT6336U version and updates versions below `0x10`; equal or newer versions are skipped. Keep power connected during the update. See [touch firmware documentation](main/boards/metalio-e-ink4-plus/display/firmware/README.md) for panel compatibility, configuration and recovery limits.
+Touch firmware: startup checks the FT6336U version and updates versions other than `0x04` to `0x04`; matching versions are skipped. Keep power connected during the update. See [touch firmware documentation](main/boards/common/input/touch/ft6336u/firmware/README.en.md) for panel compatibility, configuration and recovery limits.
 
 ### 9.3 Board init order
 
@@ -375,7 +380,7 @@ Approx. `MetalioEInk4PlusBoard` constructor sequence:
 
 ```mermaid
 flowchart TD
-    s1["1. MetalioEpd_Init<br/>I2C + TCA + TPS65185 + EPDiy"] --> s2["2. MetalioPower_Init<br/>BQ27220 + CX25601N"]
+    s1["1. EpdPanel_Init<br/>I2C + TCA + TPS65185 + EPDiy"] --> s2["2. ChargerControl_Init<br/>BQ27220 + CX25601N"]
     s2 --> s3["3. Frontlight Init + NVS restore"]
     s3 --> s4["4. RTC -> Accel -> FT6336U touch"]
     s4 --> s5["5. Display create"]
@@ -385,37 +390,26 @@ flowchart TD
 
 ### 9.4 Tree (excerpt)
 
-```
+```text
 main/
-|-- application.cc                 # boot, state machine, protocol dispatch
-|-- cloudzao_endpoints.c           # cloud hosts, paths and connection settings
-|-- api_endpoints.h                # URL helpers (no host literals)
-|-- boards/metalio-e-ink4-plus/    # board (config.h / EPDiy / FT6336 / FL)
-|-- boards/common/                 # Wi-Fi, SD, gauge, power, USB MSC
-|-- display/screen/                # apps, standby, OTA, settings
-|-- display/a2ui/                  # A2UI render
-|-- reader/                        # e-book session
-|-- audio/                         # record / play
-|-- protocols/                     # WebSocket / MQTT
+├─ sysmgmt/                         # Lifecycle and cross-module coordination
+├─ business/                       # Reading, conversation, store and workbuddy
+├─ infra/                          # Audio, networking, protocols, storage and OTA
+├─ ui/                             # Screens, drawing and display integration
+├─ assets/                         # Fonts, images, languages and resource profiles
+└─ boards/                         # Board configuration and hardware implementations
 
-main/assets/embedded/                  # Firmware-embedded images and backgrounds
-main/assets/device/                    # Device icons and resource pack
-main/assets/factory-test/              # Factory test audio
-build/esp-idf/main/generated/      # Generated resource index header
-docs/images/                      # Documentation images
-docs/datasheets/                  # Hardware datasheets
-tools/assets/                     # Resource generation and packing
-tools/firmware/                   # Build, merge and release scripts
-tools/git/                        # Git helper scripts
-tools/tests/                      # Host-side regression tests
-tools/ebook/                       # .ebook convert, Web, emulator
-tools/fontpack/                    # UI font packaging
-partitions/v1/16m.csv              # active 16MB partition table
-main/assets/fonts/font.fontpack         # merged into font_data
-tools/firmware/merge_firmware.sh    # build + merge full bin
+partitions/16m.csv                 # Shared partition table
+patches/                          # SDK and dependency compatibility patches
+tools/                            # Build, packaging and maintenance tools
+docs/                             # Developer documentation
 ```
 
-### 9.5 Flash partitions (`sdkconfig` -> `partitions/v1/16m.csv`)
+A shared UI dispatcher owns key actions; system lifecycle code coordinates network recovery and shutdown, while board implementations own hardware sequencing. See [multi-board architecture](docs/hardware-adaptation.md) for integration contracts.
+
+### 9.5 Flash partitions (`sdkconfig` -> `partitions/16m.csv`)
+
+Both boards share one table. See the [partition documentation](partitions/README.md) for configuration and compatibility requirements.
 
 | Partition | ~Size | Use |
 |:---|:---|:---|
@@ -432,9 +426,9 @@ tools/firmware/merge_firmware.sh    # build + merge full bin
 
 ## 10. Cloud services and APIs
 
-Cloud hosts and HTTP paths live in `main/cloudzao_endpoints.c` / `main/cloudzao_endpoints.h`. Call sites only use `main/api_endpoints.h` to build URLs. Cloud-dependent features require compatible service addresses and credentials in the endpoint file and device configuration. Keep the symbol names unchanged when configuring a backend. Local reading, wallpapers, AP transfer, Wi-Fi transfer, and USB transfer do not require this configuration.
+Cloud services are configured in `main/infra/network/endpoints/cloudzao_endpoints.c` / `cloudzao_endpoints.h` and device settings. Voice services, APP push and cloud checklists require compatible service configuration and credentials. Local reading, wallpapers, AP, Wi-Fi and USB transfer do not require this configuration.
 
-At boot, network time prefers the cloud response. If no cloud time is received and Wi-Fi is connected, `NtpServer` queries `ipwho.is` over HTTP for the public IP timezone and current UTC offset, then obtains UTC time through NTP. An explicit IPv4 or IPv6 address can also be supplied to the module. Failed timezone lookups use a saved offset; without one, NTP fallback is skipped. The timezone request has an 8-second deadline; up to three NTP servers are tried, with a 10-second wait each. System time and new PCF8563 writes use UTC; display conversion uses the saved offset. Existing RTC calendars remain readable and migrate on the next successful network sync. No periodic calibration or delayed NTP retry is performed: starting offline skips fallback until the next boot. Timezone and daylight-saving changes take effect on the next successful boot sync. HTTP timezone data is unauthenticated, and IP geolocation follows the network exit, including VPNs. DNS, outbound HTTP port 80 and UDP port 123 must be available.
+Network time is synchronized at boot; an offline start skips synchronization until the next boot. System time and new RTC writes use UTC, with a cached timezone offset for display. Timezone and daylight-saving changes take effect after the next successful boot sync. Failed timezone queries use a saved offset; without one, NTP fallback is skipped. HTTP timezone data is unauthenticated, and IP geolocation follows the network exit, including VPNs. DNS, outbound HTTP port 80 and UDP port 123 must be available.
 
 Primary voice transport remains **WebSocket / MQTT+UDP**. Device tools can be exposed via **MCP**.
 
@@ -455,7 +449,7 @@ Home list: `home_screen.cc` -> `kApps[]` (max 6 per page).
 | **Reader** | Library 3x3 -> detail -> body; volume keys (P1.0 / P1.1) paging (11.3) |
 | **Wallpaper** | SD gallery; shutdown / standby (11.4) |
 | **Transfer** | Unified push list for books / wallpapers / fonts (11.5) |
-| **Settings** | Network / theme / language / haptics / power / charging / screen / conversation / BT / test / about (11.6) |
+| **Settings** | Grouped home with connection, display, preference and system pages |
 
 System pages (no home icon): **standby**, **OTA upgrade**, Settings-embedded **Bluetooth**.
 
@@ -469,11 +463,11 @@ System pages (no home icon): **standby**, **OTA upgrade**, Settings-embedded **B
 
 ### 11.2 Baiwen AI (assistant)
 
-See `main/display/screen/assistant_screen/README.md`.
+See `main/ui/apps/assistant/README.md`.
 
 - Enter page: start voice session; leave: stop
 - **Multi-source PTT**: hold BOOT or the bottom talk button for about **500 ms** to listen; release to end. Tap the conversation area to turn pages.
-- **Photo questions**: Baiwen supports one pending photo, a floating thumbnail, deletion and an overlay viewer. Send submits a default image question over WebSocket after upload; releasing a photo-associated recording uploads the image before submitting the recording end message. A new recording replaces the previous question without cancelling its upload. Ordinary recordings do not include earlier photos. The backend must enable vision. See [assistant screen](main/display/screen/assistant_screen/README.md) for protocol and retry behavior.
+- **Photo questions**: Baiwen supports one pending photo, a floating thumbnail, deletion and an overlay viewer. Send submits a default image question over WebSocket after upload; releasing a photo-associated recording uploads the image before submitting the recording end message. A new recording replaces the previous question without cancelling its upload. Ordinary recordings do not include earlier photos. The backend must enable vision. See [assistant screen](main/ui/apps/assistant/README.md) for protocol and retry behavior.
 - Server sends **A2UI**; device pages by glyph metrics; `vk_prev` / `vk_next`
 - **Create Daily checklist by voice**: conversation can create todos on the cloud checklist and refresh local `checklist_cache`
 - Session may persist under `/sdcard/metalio/e-ink/chat_log/` (cleared on boot; RAM-only without SD)
@@ -483,18 +477,19 @@ See `main/display/screen/assistant_screen/README.md`.
 ### 11.3 Reader (book)
 
 - Path: `/sdcard/metalio/e-ink/books` (user-facing `metalio/e-ink/books`)
-- Formats: `.ebook` / `.epub` / `.txt`; `.txt.idx` index; side-car cover `.a2i1`
-- EPUB chapter navigation reads EPUB 3 nav with EPUB 2 NCX fallback, retains directory hierarchy, and opens the page containing each target anchor. Native directory targets start a new page even when several chapters share one content document; duplicate targets do not add blank pages. Multiple entries may target the same content document. Missing anchors fall back to the document start. Text EPUBs without a usable native directory show no table of contents; spine file numbers are not inserted as body headings. Navigation is parsed as a stream without fixed file-size or entry-count limits; capacity depends on available memory. Nesting depth is limited to 64 and labels to 1,024 bytes. Failed navigation parsing falls back to NCX when available. Image and cover loading skip navigation parsing. Horizontal EPUB and .ebook text uses glyph widths for English word wrapping: after reserving room for a hyphen, words move to the next line when more than five letters remain; otherwise a display-only hyphen marks the split. Words wider than a full line are split across lines. Existing .ebook and TXT reading behavior is retained. If the first contents target follows the first book page, the nine-row contents view includes a Home entry. Its label follows the book language: EPUB uses the OPF language declaration; missing declarations, TXT and .ebook use a bounded heuristic over chapter titles, with Home as the fallback.
+- Formats: `.ebook` / `.epub` / `.txt`; legacy `.txt.idx` for resume compatibility; side-car cover `.a2i1`
+- EPUB chapter navigation reads EPUB 3 nav with EPUB 2 NCX fallback, retains directory hierarchy, and opens the page containing each target anchor. Native directory targets start a new page even when several chapters share one content document; duplicate targets do not add blank pages. Multiple entries may target the same content document. Missing anchors fall back to the document start. Text EPUBs without a usable native directory show no table of contents; spine file numbers are not inserted as body headings. Navigation is parsed as a stream without fixed file-size or entry-count limits; capacity depends on available memory. Nesting depth is limited to 64 and labels to 1,024 bytes. Failed navigation parsing falls back to NCX when available. Image and cover loading skip navigation parsing. Horizontal EPUB and .ebook text uses glyph widths for English word wrapping: after reserving room for a hyphen, words move to the next line when more than five letters remain; otherwise a display-only hyphen marks the split. Words wider than a full line are split across lines. If the first contents target follows the first book page, the nine-row contents view includes a Home entry. Its label follows the book language: EPUB uses the OPF language declaration; missing declarations, TXT and .ebook use a bounded heuristic over chapter titles, with Home as the fallback.
+- Page numbers show the current page within the current chapter. Percentages follow source content positions; only the active chapter is paginated. Chapter transitions show “Loading chapter…” when necessary. TXT files without detected chapters use streaming page turns and display `--/--` for page totals. Resume first shows one page from a stable source anchor, then completes chapter pagination and contents structure in the background, retaining legacy compatibility. Background scans, structural caching and limitations are described in [reader scheduling](docs/ui-scheduling.md).
 - Reading settings → Text layout → Illustrations is enabled by default and saved automatically. Turn it off to replace book images with “[Illustration]” and reflow the text. The Chinese interface shows “[插图]”. Turn it back on to restore images.
 - Images shrink proportionally without enlarging small originals. Pagination and rendering share image slot dimensions, with images centered horizontally and vertically within each slot.
 - Grayscale images use fixed level-5 darkening (gamma 2.0), covering reading illustrations, covers, wallpaper thumbnails and previews, standby and shutdown wallpapers, photos, and assistant images. Midtones are darkened only during drawing, preserving pure black and white, source images, and caches. Text antialiasing and UI backgrounds remain unchanged; content configured for black-and-white display retains that policy. All refresh profiles and full-screen wallpapers share the same darkening curve and 16-level grayscale quantization rule.
 - EPUBs whose reading-order documents each contain one image and no body text, and `.ebook` files marked as page images, use full-page image reading. Images fit proportionally within the drawable area after subtracting all four reading margins and the footer. Chapter headings are not inserted. Text fonts, line spacing, paragraph gaps, underlines, text antialiasing, writing mode, and reading backgrounds do not affect these pages; all settings remain available, including font selection and management. Text preferences are saved with a notice that they do not apply to comics; they take effect when opening a text book. Margins, screen orientation, footer, and page-turn settings remain available. Complex CSS, image rotation, and synthetic spreads are not fully supported. Books exceeding the image-page inspection budget use normal text-and-image layout.
-- Comic footers use page numbers, and the progress panel offers previous/next page navigation. The current image loads first, followed by alternating forward/backward prefetch. The target is 3–10 images on each side, reduced or paused when memory is limited. The L8 cache holds at most 21 images, uses no more than half the available PSRAM, and leaves at least 2 MiB for decoding and other work. Cache hits display directly; misses show a centered loading message. Prefetch does not refresh the screen. Opening settings pauses prefetch. Orientation or drawable-area changes clear old-size entries; standby SD detachment and book closure release the cache.
+- Comic footers use page numbers, and the progress panel offers previous/next page navigation. The current image loads first, followed by alternating forward/backward prefetch. Prefetch expands one image at a time within the memory budget, without a fixed image-count limit, while retaining decoding and system memory reserves. Public memory-intensive operations pause prefetch and can reclaim unused caches. Cache hits display directly; misses show a centered loading message. Prefetch does not refresh the screen. Opening settings pauses prefetch. Orientation or drawable-area changes clear old-size entries; standby SD detachment and book closure release the cache.
 - When powered off from a reading page (including standby over that page), the device saves the book and reading position. The next boot opens that book directly after SD initialization, using the normal reader controls. Missing SD cards or book files return to Home; open failures use the existing reader error screen. Forced power cuts do not guarantee the latest position or automatic restoration.
-- TXT supports UTF-8 and GB18030 (including GBK/GB2312) with streaming decoding; no full-book conversion is required. Contents detection accepts Chinese chapter headings without leading indentation and English numbered headings with optional indentation, up to 60 characters. English chapter numbers and names on consecutive lines form one heading; standalone Roman numerals and names matched against an initial Contents list are supported. Recognized TXT headings and EPUB HTML headings use centered bold styling in horizontal layout. TXT indexes rebuild automatically after format updates. Detection filters common dates, measurements, list markers, and obvious prose references. Dense contents excerpts that lack body text and repeat later in the book are excluded; contents appear in batches during scanning and are finalized after indexing. Glyph display depends on the selected font's character coverage.
+- TXT supports UTF-8 and GB18030 (including GBK/GB2312) with streaming decoding; no full-book conversion is required. Contents detection accepts Chinese chapter headings without leading indentation and English numbered headings with optional indentation, up to 60 characters. English chapter numbers and names on consecutive lines form one heading; standalone Roman numerals and names matched against an initial Contents list are supported. Recognized TXT headings and EPUB HTML headings use centered bold styling in horizontal layout. Detection filters common dates, measurements, list markers, and obvious prose references. Dense contents excerpts that lack body text and repeat later in the book are excluded; contents become available after the structural scan. Glyph display depends on the selected font's character coverage.
 - Fonts: `.../fonts/*.ef`
-- The font card lists the current page from the reading and source font directories in directory order, with nine entries per page, swipe paging and a position scrollbar; only files directly in the font roots are listed. The total page count appears after lightweight counting. TTF/OTF sizes range from 20–80px in 1px steps; EF uses its embedded size. Long-press to select and delete files on the current page. Restore defaults resets only the font. See [font scanning and application](docs/ap-file-transfer.md).
-- The bookshelf reads the current directory by page; wallpaper and font browsers list only files in their respective roots and load progress, covers and previews for visible entries with memory-bounded nearby-page prefetch. When SD becomes ready after startup, installed apps populate the existing home page without a second page-entry wipe. Startup does not scan the full library; recent reading and statistics retain their existing storage. Counting does not delay the first page, and tasks end on completion, navigation away or standby. Automatic reading-statistics snapshot reporting that requires a full library scan is disabled.
+- The font card lists EF files from `fonts` before TTF/OTF files from `fonts_ttf`, retaining enumeration order within each directory, with nine entries per page, swipe paging and a position scrollbar; only files directly in the font roots are listed. Opening the list locates the page containing the current font. The total page count appears after lightweight counting. TTF/OTF sizes range from 20–80px in 1px steps; EF uses its embedded size. Long-press to select and delete files on the current page. Restore defaults resets only the font. See [font scanning and application](docs/ap-file-transfer.md).
+- The bookshelf search field matches filenames throughout books and its subfolders. It supports Chinese phrase candidates and English word completion, with typed letters shown directly in the field and a candidate bar that appears inside the keyboard only when needed. Install the SD dictionary described in [bookshelf search](docs/book-search.md). The bookshelf reads the current directory by page; wallpaper and font browsers list only files in their respective roots and load progress, covers and previews for visible entries with memory-bounded nearby-page prefetch. When SD becomes ready after startup, installed apps populate the existing home page without a second page-entry wipe. Startup does not scan the full library; recent reading and statistics retain their existing storage. Counting does not delay the first page, and tasks end on completion, navigation away or standby. Automatic reading-statistics snapshot reporting that requires a full library scan is disabled.
 - Layout prefs in NVS; **no scroll** on list/body; VK / volume keys page
 - Reading settings → Orientation: portrait, left landscape, right landscape, or auto; the selection is saved. Auto works in the reading page, reading settings, fonts, bookmarks, and contents. It uses the SC7A20H gravity readings and rotates after the detected orientation remains stable for 0.8 seconds. Ambiguous readings keep the current orientation; upside-down portrait is excluded from auto mode. While the new page layout is pending, a loading message replaces only the reading content, leaving menus, navigation, and standby available. The current page replaces the message when ready. Leaving the reader restores portrait.
 - Reading settings → Page turn settings: slide or white wipe; the selection is saved. White wipe runs right to left for the next page and left to right for the previous page in either orientation. Required cleaning uses a full refresh.
@@ -504,24 +499,22 @@ See `main/display/screen/assistant_screen/README.md`.
 
 ### 11.4 Wallpaper and standby
 
-Open an image in Wallpaper, tap **Set as standby** or **Set as power-off**, then choose **Fullscreen wallpaper** or **Transparent wallpaper**. Fullscreen wallpaper replaces the screen; overlay mode keeps the screen shown before standby or power-off, in any application. Reopen the selected image's display-mode dialog to switch modes or choose **Clear selection**. Tap outside or press Back to close the dialog without changing settings. Standby and power-off each save one image and its display mode. Both modes fit and center images within the full portrait panel while preserving aspect ratio, without enlarging small images. Wallpaper orientation stays portrait; transparent mode leaves the underlying screen in its original orientation. PNG retains its own transparency. JPEG, A2L8 and ordinary A2I1 images cover their rectangle, including white pixels; A2I1 palette alpha is used when present. Transparent pixels retain the current screen; partial alpha blends against it.
+Open an image in Wallpaper, tap **Set as standby** or **Set as power-off**, then choose **Fullscreen wallpaper** or **Transparent wallpaper**. Fullscreen wallpaper replaces the screen; transparent wallpaper keeps the screen shown before standby or power-off, in any application. Reopen the selected image's display-mode dialog to switch modes or choose **Clear selection**. Tap outside or press Back to close the dialog without changing settings. Standby and power-off each save one image and its display mode. Both modes fit and center images within the full portrait panel while preserving aspect ratio, without enlarging small images. Wallpaper orientation stays portrait; transparent mode leaves the underlying screen in its original orientation. PNG retains its own transparency. JPEG, A2L8 and ordinary A2I1 images cover their rectangle, including white pixels; A2I1 palette alpha is used when present. Transparent pixels retain the current screen; partial alpha blends against it.
 
 Failed thumbnails show **Decode failed (code)** in their cells. Preview, save, delete and selection failures use a top notification; a failed operation keeps the existing selection. Codes: 1 = damaged or incomplete data, 2 = unsupported format, encoding or dimensions, 3 = insufficient memory, 4 = file I/O failure, 5 = decoding cancelled, 6 = invalid arguments, 7 = other decoder failure. Cancellation caused by leaving the page does not show an error.
 
-Gallery previews decode to the preview bounds and thumbnails to their cell bounds, without enlarging small images. File input no longer has a 4 MiB compressed-size limit. Small images retain their existing decoder; large progressive JPEGs use bounded coefficient bands and, when needed, temporary coefficient files under `metalio/e-ink/temp/wallpaper/`, removed when processing ends. Both fullscreen and transparent standby and power-off wallpapers decode to the complete 684×1216 portrait panel bounds. Images fit proportionally and remain centered, without the normal UI's 2 px inset. The nine-cell gallery processes images with lower estimated decoding costs first, while keeping their displayed order. Both Save as and Overwrite fit the adjusted image to 684×1216 for portrait images or 1216×684 for landscape images, without enlarging small images. Save as retains the source file; Overwrite replaces it with the resized result. Saved A2L8 images are read by row for previews and display. See [image decoding](main/reader/jpeg/README.md) for format and resource limits.
-
 In reading settings, choose **Background → Custom** to open the Wallpaper app. Select **Set as reading background** in an image preview to save the choice; tap the selected button again to clear it. Exiting Wallpaper returns to the current book's reading settings. Leaving without selecting an image keeps the previous background. The same action is available when opening Wallpaper from Home. Reading backgrounds use a fixed full-page area: grids and dots are distributed across the UI page, while custom images are scaled down proportionally and centered within the full physical panel. Small images are not enlarged. Margins and footer visibility do not resize the background; the text viewport dimensions remain unchanged. Page turns reuse the decoded background without changing pagination. Unavailable images fall back to white. Full-page comics do not use reading backgrounds.
 
-If an overlay cannot be read, the current screen is retained. If the base-frame allocation fails, the fullscreen wallpaper path is used. Powering off from standby builds the off overlay from the clean screen captured before standby, without stacking the standby image or loading notice. Wake restores the original application. Gallery previews use a white background. The existing rotate/mirror save operation writes A2L8 without transparency; select the original image when transparency is needed.
+If a transparent wallpaper cannot be read, the current screen is retained. If the base-frame allocation fails, the fullscreen wallpaper path is used. Powering off from standby builds the shutdown image from the clean screen captured before standby, without stacking the standby image or loading notice. Wake restores the original application. Gallery previews use a white background. The existing rotate/mirror save operation writes A2L8 without transparency; select the original image when transparency is needed.
 
 - Gallery: `/sdcard/metalio/e-ink/wallpaper`, paged 3x3 browsing / enable. Listing and batch deletion have no fixed item limit; capacity depends on SD storage and available memory. Thumbnails are cached for the current and adjacent pages only.
 - Filenames: reading, wallpapers, reader fonts and transfers share a 246-byte UTF-8 limit, including the extension. Scanning and file operations use the same limit. Wallpaper Save As reserves space for its timestamp and extension without splitting UTF-8 characters.
 - **Standby routing** (`standby_screen`):
-  - Enabled standby wallpaper -> selected fullscreen or overlay mode
+  - Enabled standby wallpaper -> selected fullscreen or transparent mode
   - Else -> classic (date / lunar / weather / todos)
 - Shutdown image: NVS wallpaper first, else built-in `bg_shutdown.a2i1`
 - Startup first refreshes to white with a complete GC16 waveform, then reveals the home screen with a wipe. Refresh failures retain the recovery path.
-- Entering or leaving standby and shutting down first perform a full GC16 refresh to white, then reveal the target frame with a wipe. These transitions take longer and produce a visible flash; ordinary page changes keep their existing refresh behavior. See the [display documentation](main/display/README.md).
+- Entering or leaving standby and shutting down first perform a full GC16 refresh to white, then reveal the target frame with a wipe. These transitions take longer and produce a visible flash; ordinary page changes keep their existing refresh behavior. See the [display documentation](main/ui/README.md).
 
 ### 11.5 Transfer
 
@@ -529,12 +522,8 @@ If an overlay cannot be read, the current screen is retained. If the base-frame 
 - Save directories: BOOK->`books`, BADGE->`wallpaper`, FONT->`fonts`
 - APP push uses the active Wi-Fi or 4G connection. AP and Wi-Fi transfer require Wi-Fi mode; in 4G mode, the page asks users to switch to Wi-Fi.
 
-APP 推送、AP 传输和 Wi-Fi 传输页面打开期间持续保网，并暂停无操作自动待机；APP 推送不区分浏览、刷新、预览或下载状态。切到 USB 传输或退出传输页面后释放页面保网需求，恢复系统电源策略。
-
 APP push, AP transfer and Wi-Fi transfer keep networking active and suspend automatic idle standby while their page is open. APP push applies the same policy when browsing, refreshing, previewing or downloading. Switching to USB transfer or leaving Transfer releases the page requirement and restores the system power policy.
 - APP push supports replacing, skipping, or keeping both files when names conflict. The status bar displays the clock.
-
-APP 推送的书籍、字体和壁纸采用固定缓冲分块写入 SD，不设应用层文件大小上限，实际受存储空间及文件系统约束。封面和预览图使用共享 SD 临时缓存，按显示尺寸从文件解码；最后一个使用者释放后删除缓存，首次创建缓存时清理上次运行的遗留文件。推送列表逐条解析，不保留完整响应及整棵 JSON 树。图片仍受格式及解码内存预算约束，临时预览需要可用的 SD 卡。
 
 APP push writes books, fonts and wallpapers to SD in fixed-size chunks without an application-level file-size cap; available storage and filesystem limits still apply. Covers and previews share temporary SD files and decode at display size. Cache files are deleted after their last user releases them; the first cache creation removes files left by the previous run. The push list is parsed one item at a time without retaining the full response or JSON tree. Image format and decoding memory budgets still apply, and temporary previews require an available SD card.
 
@@ -542,33 +531,27 @@ APP push writes books, fonts and wallpapers to SD in fixed-size chunks without a
 
 | Tab | Content |
 |:---|:---|
-| **Network** | Wi-Fi / 4G selection, Wi-Fi setup and SIM switching |
-| **Theme** | Home card style |
-| **Language** | Simplified Chinese / English, applied immediately; the file transfer web page follows the device language after a browser refresh |
-| **Haptics** | Key vibration on / off |
-| **Charging** | 0.5A / 1A / 1.5A; default 1A; saved and restored after reboot |
-| **Power** | AppIdle CPU, standby delay, network grace, cumulative power-off |
-| **Screen** | Refresh mode, black depth showing the ble_chip calibration value, with the original three levels available when no valid record is read, and frontlight color and brightness; the [VCOM factory tool](tools/vcom/README.md) supports scanner programming, verified readback and cloud sync; frontlight controls are also available in the global swipe-down panel |
-| **Conversation** | Cloud service entry shows only Baiwen AI on the domestic variant and NetEase AI on the global variant; speech playback settings |
-| **Bluetooth** | Modes 1/2/3, scan/pair (12.1) |
-| **Test** | Factory / aging entry; auto test cycles the frontlight through cool + warm, cool, warm and off, then restores the previous state on exit |
-| **About** | Model, chip, FW version, MAC, Flash, PSRAM |
+| **Wi-Fi** | Automatic discovery, saved and other networks, connection details and signal strength |
+| **Bluetooth** | Audio modes, device information, sender devices and HID key tests |
+| **Page turner** | Auto-connect, current device and device management |
+| **Theme** | White background / Dotted gray / Black border / Slash grid / Pixel Vision |
+| **System font** | Opens at the current font; preview and apply TTF/OTF files from `fonts_ttf`. Uses built-in text while restoring the font after standby; a failed startup or standby restore shows a dialog with the default font in use |
+| **Frontlight** | Frontlight mode and brightness |
+| **Screen** | Refresh modes and VCOM calibration; black-depth options appear without valid calibration; the [VCOM factory tool](tools/vcom/README.md) supports programming, verified readback and cloud sync |
+| **Haptic** | Haptic switch and feedback intensity |
+| **Keys & gestures** | Gesture recognition switch, function help, short- and long-press assignments and restore defaults |
+| **Conversation** | Current cloud service and speech playback switch |
+| **Power** | Idle CPU, network grace, standby auto-off, charging current and light-sleep information |
+| **Language** | Simplified Chinese / English, applied immediately; refresh the file transfer web page to follow the device language |
+| **Test** | Automatic, touch, battery, aging, display and UI adjustment; system actions provide power off and restart |
+| **Log** | Log collection, local file count, last update, upload and clear |
+| **About** | Device information and firmware update entry |
 
-Settings → Test → UI adjustment calibrates the position of the entire UI without changing layout dimensions or control spacing. Up, Down, Left and Right each range from −20–20 pixels and initially use 0. Negative values move in the opposite direction; opposite directions cancel. Drawing and touch coordinates move together, with off-panel pixels clipped. Reading content margins remain independent in reading settings. The page retains hold-to-repeat buttons and sliders, with a calibration chart covering the drawable UI area rather than the full physical panel. Set as default saves the current offsets; Restore defaults applies and saves the stored defaults. A top notification confirms a successful save or restore. The calibration chart is hidden before standby and restored on wake.
-
-Settings → Screen shows Clear, Balanced and Fast refresh modes in one row, with Clear as the default. Previously saved Ultra fast selections use Fast.
-
-The auto test page displays the VCOM calibration value with a Query button, followed by the Bluetooth chip version. SD card status also shows free and total capacity. A bordered UI adjustment button sits at the top right beside the title; Back returns to the auto test page. Equal-width Power off and Restart buttons share a row below the last option on the test selection page.
-
-The aging test restarts the device every 5 minutes and resumes automatically after boot. The large number retains its playback-cycle meaning for the current boot, with a separate Restarts: x label. Each cycle rereads the first image in SD wallpaper directory order without using the thumbnail cache, then waits before starting the next cycle. The image fits inside a fixed square centered on the page; an empty directory shows No wallpaper in the center, and separate messages identify an unmounted SD card, initialization timeouts, mount failures, insufficient initialization memory, other initialization errors, USB ownership, directory and file access errors, damaged or unsupported images, memory shortages and task creation failures. Initialization and mount failures retain their original error codes. An initialization timeout prompts the user to check the card and contacts without assuming the card is absent. Logs record the failure stage and error code on status changes. The first run starts at 0. The Back button midway between the wallpaper and the bottom edge, or hardware Back stops the test and saves −1, disabling automatic resumption on later boots.
+Settings → Screen provides Clear mode on the 3.97-inch model, and Clear, Balanced and Fast on the 4.7-inch model. Clear is the default; previously saved Ultra fast selections use Fast.
 
 VCOM factory programming supports scanner input, persistent ble_chip storage and readback verification, with cloud sync handled by the HTML tool. Bluetooth module firmware **1.08 or later** is required; see the [VCOM factory guide](tools/vcom/README.md).
 
 Swiping down in an area without an actual vertical scroll range opens the quick panel, including scroll-enabled containers whose content fits within the viewport. Lists with vertical overflow retain their own gestures, including at the top and bottom. The panel includes the top status bar. Swipe up outside the sliders, tap outside the panel, or press Back or Home to close it while keeping the current page. OTA upgrades and standby dismiss and block the panel. Opening and closing it requests a GC16 full refresh, which produces a visible flash.
-
-The left side contains a Wi-Fi switch with a paw icon and a frontlight switch. The right side contains brightness and warm-light ratio sliders; moving up increases each value. Icons keep their native sizes and appear black over white areas and white over black fills. Slider titles, percentages and Bluetooth controls are omitted. Brightness 0 disables output. A warm-light ratio of 0 selects cool light, 50 drives both channels, and 100 selects warm light. PWM supports continuous blending; GPIO mode provides channel switching only. Turning the frontlight off retains its brightness and ratio. Adjusting either slider turns it on; adjusting the ratio or switching it on at brightness 0 uses brightness 40. The switch and values are saved; startup output waits until the Bluetooth shared-power reset finishes.
-
-Settings → Network shows the network mode and its current value on one line. In Wi-Fi mode, a button below Wi-Fi status shows Enabled or Off. Horizontal dividers separate this section from network mode above and Wi-Fi network below. The section is hidden in 4G mode. Settings and the quick panel share the same Wi-Fi switch operation and state.
 
 In Wi-Fi mode, turning Wi-Fi off stops scanning, connections and wireless file transfer, and blocks automatic reconnection and standby restoration. Tap again to enable it. The switch state is saved across reboots without removing saved credentials. In 4G mode, the panel shows Wi-Fi as off and cannot enable it; Wi-Fi mode uses the saved switch state. Internet services over 4G do not depend on the saved Wi-Fi switch state, and missing weather data can also be fetched over 4G. Wi-Fi scans, connections and local transfers distinguish 4G mode and a disabled Wi-Fi switch from a driver initialization failure. When Wi-Fi is manually disabled, a toast also asks users to enable it before retrying.
 
@@ -581,15 +564,16 @@ Product root: `/sdcard/metalio/e-ink/` (`sd_paths.h`)
 | `.../books` | Book content, with optional category subdirectories; legacy sidecars remain supported |
 | `.../wallpaper` | Wallpapers and shutdown art |
 | `.../fonts`, `.../fonts_ttf` | Reader `.ef` fonts, extension `.fontpack` files and `.ttf` / `.otf` fonts |
-| `.../settings` | Wi-Fi configuration; `books/` stores reading positions, time and bookmarks; `system/logs/` stores runtime logs and crash dumps |
+| `.../fonts_ime/zh-CN` | Chinese input dictionary and licenses |
+| `.../settings` | Wi-Fi configuration; `books/` stores reading positions, time and bookmarks; `sysmgmt/logs/` stores runtime logs and crash dumps |
 | `.../temp/books` | `cache/` stores rebuildable covers, page counts and TXT indexes; `work/` stores pagination work files |
 | `.../temp/bwchat` | `images/` stores chat images; `messages/` stores session JSON for the current boot, cleared on startup |
 | `.../temp/wallpaper` | `work/` stores image processing and preview work files; `meta/` stores wallpaper names |
 | `.../temp/transfer/work` | Download and preview work files owned by the transfer app |
 
-SD mounting ensures the application layout, cleans pagination work files and recovers wallpaper backups left by interrupted saves. HTTP downloading and JPEG decoding clean their own temporary files on first use; failed cleanup prevents new work files from being created and can be retried. Wallpaper saves and deletions clean their own work files beforehand. It does not scan book libraries, wallpaper libraries or auxiliary cache libraries, move existing auxiliary data, or read or update a migration-complete flag. Existing auxiliary files remain at their current locations for both reading and writing. Book-side legacy files take precedence, followed by grouped and flat files in the new directories; files are created in the new layout only when no existing data is found. Wallpaper names support adjacent `.meta.json` and `.meta` files as well as existing files in the new metadata directory. New book auxiliary files and wallpaper metadata use `0`–`f` subdirectories based on the first hash character to limit directory size. Old files are not reorganized automatically; back up existing data before organizing it on a computer. Clearing `temp/` preserves reading positions and bookmarks. Covers and indexes can be rebuilt; missing wallpaper metadata falls back to the filename. New Baiwen sessions use the new directories directly. Old session caches and log directories are not moved automatically. Explicit book and wallpaper renames, moves and deletions maintain the corresponding auxiliary data. Existing `ui/` and `recordings/` directories remain untouched; the recordings directory is no longer created by default. Both upload instruction files remain at the application root.
+See [SD storage and data management](docs/sd-storage.md) for recovery, sidecar compatibility and cleanup rules. Back up reading positions, bookmarks and other important data before clearing temporary files or organizing books and wallpaper on a computer.
 
-The bookshelf, cloud library and file transfer page share book and wallpaper deletion handling. Deleting a book removes associated progress, bookmarks, covers, indexes, their fixed-name backups and recent-reading entries, and subtracts its contribution to the home-page reading-time and finished-book totals. Dated reading history is retained. Legacy covers shared by another format of the same title are kept while that book exists. Books being opened or read cannot be deleted; successful deletion cancels pending progress writes. Individual-book deletion cleans known paths without enumerating the book directory. Legacy pagination work files with unknown session IDs are left for removal with their containing directory. Recursive directory deletion processes books before sidecar files. Deleting a wallpaper also removes its name metadata, save backup and corresponding selections. Direct deletion through a computer USB drive does not run this application cleanup.
+Deleting books or wallpaper on the device also cleans their associated data. Direct deletion through a computer USB drive bypasses this cleanup. See [SD data management](docs/sd-storage.md) for the detailed effects.
 
 ---
 
@@ -618,7 +602,7 @@ Bluetooth settings lists the Bluetooth name, firmware version, reset action, and
 | **3** | `AT+RX=1` -> -> `AT+MODE=3` | Bluetooth receive: receive audio from phones or other devices | Settings |
 | **5** | `AT+MODE=5` | Bluetooth keyboard & voice: send keystrokes and voice (requires module firmware support for mode 5) | Settings -> Bluetooth -> mode 5; pair on PC and select the Bluetooth microphone |
 
-> Mode 2 conversation requires a headset **with mic**. Boot applies mode 1 after `MetalioAudio_Init`.
+> Mode 2 conversation requires a headset **with mic**. Startup initializes the Bluetooth chip UART and confirms mode 1 in the background.
 
 Mode 5 provides an HID shortcut test entry at the bottom of Bluetooth settings. It opens a full-screen page with a centered title and no upper-left back button; short or long Home returns to Bluetooth settings first, releasing held keys before leaving. The page provides character keys, Enter, Space, Tab, Esc, Backspace, Delete, arrow keys, Ctrl+A/C/V, Alt+Tab, Win+D, Hold Alt, and Release all. Pair and connect the module as an HID device on the PC, open a blank text field, then use Settings -> Bluetooth -> mode 5 -> HID shortcut test. Return brings you back to Bluetooth settings. Buttons send `AT+SHORTCUT=<key>\r`; each click includes key release. `OK` means the module accepted the request, not that the PC executed it. `DISCONNECTED` means HID is not enabled or no HID host is connected. Hold Alt sends `AT+SHORTCUT=ALT,DOWN\r` while pressed and `AT+SHORTCUT=ALT,UP\r` on release or touch cancellation. Leaving the page or switching modes also releases Alt. Release all sends `AT+SHORTCUT=RELEASE\r`. Custom key editing is not provided.
 
@@ -664,7 +648,7 @@ cd xingzhi-ai-470
 |:---|:---|:---|
 | ESP-IDF | v6.1 | Must match |
 | Target | esp32s31 | Preconfigured |
-| Flash | 16MB | `partitions/v1/16m.csv` |
+| Flash | 16MB | `partitions/16m.csv` |
 | PSRAM | Octal 200 MHz | |
 
 ---
@@ -679,9 +663,13 @@ cd xingzhi-ai-470
 idf.py build
 ```
 
-To build the global variant, run `idf.py menuconfig` and select **Metalio E-Ink4-Plus → Board Type → Metalio E-Ink4-Plus Global (4.7 parallel)**, then build. Its board ID is `metalio-e-ink4-plus-global`; it shares the existing hardware drivers, hides WorkBuddy in all home styles, defaults to English when no language preference is saved, and uses the global NetEase Yunxin appkey for WebSocket requests. When NetEase AI is selected, device linking is checked through the overseas binding endpoint every three seconds. At startup, unlinked devices show a brief notification directing users to NetEase AI. The AI page and the App push tab each show a QR code and linking instructions in their own content area. Navigation and other device features remain available; completing the link restores the AI conversation or App push list. The QR code is updated only when its content changes. A successful `active` response confirms device linking, not a paid subscription. Firmware updates remain independent. The global variant uses Wi-Fi only: network settings show the Wi-Fi switch and configuration without 4G or SIM switching, and a previously saved 4G mode is ignored. A saved language preference still takes precedence, and both Chinese and English remain available in Settings. The default board remains `metalio-e-ink4-plus`.
+International variants use the `470-global` or `397-global` build profile and share the corresponding hardware. They use Wi-Fi only and hide WorkBuddy on home. English is the default without a saved language preference; saved preferences take priority. Cloud AI still requires compatible service configuration and device binding; binding does not imply a purchased plan. See [multi-board configuration](docs/hardware-adaptation.md) and [International usage](docs/device-guide.md#international-variants).
 
 ### 14.2 About sdkconfig
+
+The aging counter and pixel clock fonts use native lossless LVGL compression. The build also re-encodes Montserrat 14 with the same decoder. Keep `CONFIG_LV_USE_FONT_COMPRESSED=y` enabled. `tools/assets/compress_lvgl_font.py` re-encodes existing fmt_txt glyph data without changing pixels or metrics.
+
+With CP936 selected, the build generates compact read-only mappings from the current SDK FatFS tables using `tools/firmware/generate_fatfs_cp936.py`. Unicode/OEM conversion uses these mappings; uppercase conversion remains in the SDK. Generation does not modify SDK files or filesystem data. These optimizations affect the application image only, with no changes to the partition layout, resource images or SD fonts.
 
 **Do not edit `sdkconfig` casually.** It is tuned for e-paper, PSRAM, and partitions. Bad edits can break refresh, Wi-Fi, or SD mount.
 
@@ -768,7 +756,7 @@ Open Settings -> Network, scan for Wi-Fi networks, select a network, and enter i
 
 **Q: SD mount failed**
 
-FAT32; check SDMMC 4-bit pins (GPIO20-25); on S31 ensure CNNT SDIO pad mux is released to GPIO if needed.
+FAT32; check SDMMC 4-bit pins (GPIO20-25). If card identification fails, initialization is retried once at 100 kHz; a filesystem mount failure is not retried. On S31, ensure the CNNT SDIO pad mux is released to GPIO if needed.
 
 **Q: Virtual USB disk**
 
@@ -792,14 +780,12 @@ Plus is **S31 + parallel 4.7" + FT6336 + frontlight**. The 397 board is **S3 + S
 
 ---
 
-_This document tracks firmware changes. Prefer source for pins and behavior; open an Issue if docs disagree with hardware._
-
 ### WorkBuddy
 
 The home screen shows six apps per page. Page two contains WorkBuddy; use the page keys to switch. The bottom dots only indicate the page and do not respond to taps; the active dot is larger. Page keys wrap between the first and last pages; holding a key cycles one page at a time. Page changes wipe the display to white before drawing the target page. The upper information area stays visible in each theme. Pressing Home on page two returns to the first home page; leaving WorkBuddy returns to the app page it was opened from. Pixel View labels the app buddy and uses the same icon display size as the other apps; other themes label it workbuddy.
 
-Pixel Vision loads the latest book’s saved progress asynchronously on demand, without scanning or warming the library. Recent-reading filenames stay on one line, with middle ellipsis for long names and the extension retained. Today counts tasks scheduled for the current date; Done and Pending count all cached tasks, including undated tasks, matching the task app. Without cached data, counts show `--`. Before the device clock is set, only Today shows `--`.
+Pixel Vision loads the latest book's saved progress asynchronously on demand, without scanning or warming the library. Recent-reading filenames stay on one line, with middle ellipsis for long names and the extension retained. Today counts tasks scheduled for the current date; Done and Pending count all cached tasks, including undated tasks, matching the task app. Without cached data, counts show `--`. Before the device clock is set, only Today shows `--`.
 
 WorkBuddy supports QR binding to the desktop local assistant, rebinding, hold-to-talk commands, automatic reply polling and message synchronization. User and assistant messages use separate plain-text bubbles, with screen pagination and ten-page repeats when a page key is held. History evicts older messages according to actual PSRAM allocation. Standby stops recording and polling; wake restores the connection without resending accepted commands.
 
-The service requires WorkBuddy local-assistant mode, realtime ASR and WebSocket forwarding. The desktop assistant must remain online under the authorized account. Configure the dedicated service in `main/cloudzao_endpoints.c`. See the [WorkBuddy module guide](main/workbuddy/README.md) for operation, interfaces, history scope and memory budgets.
+The service requires WorkBuddy local-assistant mode, realtime ASR and WebSocket forwarding. The desktop assistant must remain online under the authorized account. Configure the dedicated service in `main/infra/network/endpoints/cloudzao_endpoints.c`. See the [WorkBuddy module guide](main/business/workbuddy/README.en.md) for operation, interfaces, history scope and memory budgets.

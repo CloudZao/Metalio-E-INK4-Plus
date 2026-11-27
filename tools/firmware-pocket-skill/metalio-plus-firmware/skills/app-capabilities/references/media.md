@@ -6,7 +6,7 @@
 
 | helper | 实际范围及边界 |
 |---|---|
-| MicSlotToPcm16 / ExtractMicrophone | Plus BH1098G左/偶数麦克风槽；32bit右移12等效整数运算及历史±32767限幅；不混右侧回采参考 |
+| MicSlotToPcm16 / ExtractMicrophone | Plus蓝牙芯片左/偶数麦克风槽；32bit右移12等效整数运算及历史±32767限幅；不混右侧回采参考 |
 | Pcm16ToPlaybackSlot / MakePlayback | 平方音量曲线、64位乘法、左右复制单声道；不代表两路独立麦克风或提高采样率 |
 | WriteAllPcm | 有取消检查的部分写入推进；成功仅表示全部入队，之后仍等真实DMA排空再停PA |
 | CompositeLineArt / CompositeGray4 | 白底alpha合成后落黑芯；前者8位预览域，后者0..15生产灰域，不把两种编码混用 |

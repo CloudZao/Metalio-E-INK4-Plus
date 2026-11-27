@@ -1,6 +1,6 @@
 """TXT / 启发式章节识别。
 
-与固件 `main/reader/txt_chapter.cc` 对齐并扩展（参考网文 TXT→EPUB 常见规则）：
+与固件 `main/business/reader/txt_chapter.cc` 对齐并扩展（参考网文 TXT→EPUB 常见规则）：
 - 第N章/回/节/集/话/篇
 - 序章/楔子/番外/前言/后记/尾声/终章…
 - Chapter / Part / Volume

@@ -1,0 +1,54 @@
+#pragma once
+
+#include "ui/home/home_screen_priv.h"
+
+/** @brief 绑定应用图标并限制在目标边长内；空间足够时保留原尺寸，单色图标复用预缩放路径 */
+void Home_SetAppIcon(lv_obj_t* image, const AppEntry& entry, int edge, const char* fallback = nullptr);
+
+/** @brief 在细体上轻叠一像素，让应用名略微加粗。 */
+void Home_OnAppNameDraw(lv_event_t* e);
+
+/** @brief 盖板键短按翻应用页 */
+bool Home_OnVkKey(const char* key);
+
+/** @brief BOOT 长按快捷进百问 */
+bool Home_OnBootLongPress();
+
+/** @brief 按方向循环切换一页应用，单页时返回 false */
+bool HomePageRepeatStep(int page_delta);
+
+/** @brief 首页删除事件：停 Hero */
+void Home_OnHomeDeleted(lv_event_t* e);
+
+/** @brief 盖板键长按连翻 */
+bool Home_OnVkKeyLongPress(const char* key);
+
+/** @brief 填充经典布局应用页 */
+void Home_FillAppsPage();
+
+/** @brief 盖板键抬起停止连翻 */
+bool Home_OnVkKeyPressUp(const char* key);
+
+/** @brief 点击应用格 */
+void Home_OnAppClicked(lv_event_t* e);
+
+/** @brief 持久化卡片样式后台任务 */
+void Home_PersistCardStyleTask(void* arg);
+
+/** @brief 异步启动应用页 */
+void Home_LaunchAppAsync(void* user_data);
+
+/** @brief 请求填充应用页 */
+void Home_RequestFillAppsPage();
+
+/** @brief 应用页总页数 */
+int Home_PageCount();
+
+/** @brief 灰网点纹理图 */
+const lv_image_dsc_t* Home_GrayDitherImg();
+
+/** @brief 创建经典布局应用格 */
+lv_obj_t* Home_CreateAppCell(lv_obj_t* parent, const AppEntry& entry, int card_style);
+
+/** @brief 更新只读分页圆点 */
+void Home_UpdatePageIndicator();

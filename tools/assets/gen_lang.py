@@ -65,7 +65,7 @@ def generate_sounds(assets_dir, sound_lang):
             f"""
         extern const char ogg_{base_name}_start[] asm("_binary_{base_name}_ogg_start");
         extern const char ogg_{base_name}_end[] asm("_binary_{base_name}_ogg_end");
-        static const std::string_view OGG_{base_name.upper()} {{
+        static const std::string_view LangSound_OGG_{base_name.upper()} {{
         static_cast<const char*>(ogg_{base_name}_start),
         static_cast<size_t>(ogg_{base_name}_end - ogg_{base_name}_start)
         }};"""
@@ -77,7 +77,7 @@ def generate_sounds(assets_dir, sound_lang):
             f"""
         extern const char ogg_{base_name}_start[] asm("_binary_{base_name}_ogg_start");
         extern const char ogg_{base_name}_end[] asm("_binary_{base_name}_ogg_end");
-        static const std::string_view OGG_{base_name.upper()} {{
+        static const std::string_view LangSound_OGG_{base_name.upper()} {{
         static_cast<const char*>(ogg_{base_name}_start),
         static_cast<size_t>(ogg_{base_name}_end - ogg_{base_name}_start)
         }};"""
@@ -94,7 +94,7 @@ def generate(sound_lang, header_path, cc_path):
     key_macros = [k.upper() for k in keys]
     orig_by_upper = {k.upper(): k for k in keys}
 
-    decl_lines = [f"        extern const char* {k};" for k in key_macros]
+    decl_lines = [f"        extern const char* LangString_{k};" for k in key_macros]
     sounds = generate_sounds(assets_dir, sound_lang)
     font_guard = locale_var(sound_lang)
 
@@ -112,34 +112,28 @@ def generate(sound_lang, header_path, cc_path):
 #define LANG_DEFAULT_CODE "{sound_lang}"
 #endif
 
-namespace Lang {{
     /** 当前 UI 语言码（zh-CN / en-US），可热切换 */
-    extern const char* CODE;
+    extern const char* LangCode;
 
     /**
-     * @brief 切换 UI 语言并重绑 Strings 指针
+     * @brief 切换 UI 语言并更新语言字符串指针
      * @param code "zh-CN" 或 "en-US"；其它值回退 en-US
      * @param persist true 时写入 NVS ui/language
      * @return 语言实际发生变化时为 true
      */
-    bool SetLanguage(const char* code, bool persist = true);
+    bool LangSetLanguage(const char* code, bool persist = true);
 
-    /** @brief 当前语言码，同 CODE */
-    const char* Current();
+    /** @brief 当前语言码，同 LangCode */
+    const char* LangCurrent();
 
     /** @brief 从 NVS 加载语言；无记录则用 LANG_DEFAULT_CODE */
-    void InitFromNvs();
+    void LangInitFromNvs();
 
-    // 字符串资源（指针随 SetLanguage 重绑）
-    namespace Strings {{
+    // 字符串资源（指针随 LangSetLanguage 重绑）
 {chr(10).join(decl_lines)}
-    }}
 
     // 音效资源（编译期嵌入，随 CONFIG_LANGUAGE_*）
-    namespace Sounds {{
 {sounds}
-    }}
-}}
 """
 
     table_structs = []
@@ -157,21 +151,19 @@ namespace Lang {{
         )
 
     apply_assigns = "\n".join(
-        f"    Strings::{ku} = literals[static_cast<size_t>(LangStringId::{ku})];"
+        f"    LangString_{ku} = literals[static_cast<size_t>(LangStringId::{ku})];"
         for ku in key_macros
     )
     enum_entries = ",\n".join(f"    {ku}" for ku in key_macros)
-    ptr_defs = "\n".join(f'const char* Strings::{ku} = "";' for ku in key_macros)
+    ptr_defs = "\n".join(f'const char* LangString_{ku} = "";' for ku in key_macros)
 
     cc = f"""// Auto-generated runtime language tables — do not edit
 #include "assets/lang_config.h"
-#include "settings.h"
+#include "infra/storage/settings.h"
 
 #include <cstring>
 #include <string>
 
-namespace Lang {{
-namespace {{
 
 enum class LangStringId : size_t {{
 {enum_entries},
@@ -179,39 +171,38 @@ enum class LangStringId : size_t {{
 }};
 
 {"".join(table_structs)}
-void ApplyLiterals(const char* const* literals) {{
+static void LangApplyLiterals(const char* const* literals) {{
 {apply_assigns}
 }}
 
-const char* const* LiteralsFor(const char* code) {{
+static const char* const* LangLiteralsFor(const char* code) {{
     if (code != nullptr && std::strcmp(code, "zh-CN") == 0) {{
         return kLiterals_zh_cn;
     }}
     return kLiterals_en_us;
 }}
 
-const char* NormalizeCode(const char* code) {{
+static const char* LangNormalizeCode(const char* code) {{
     if (code != nullptr && std::strcmp(code, "zh-CN") == 0) {{
         return "zh-CN";
     }}
     return "en-US";
 }}
 
-}}  // namespace
 
-const char* CODE = LANG_DEFAULT_CODE;
+const char* LangCode = LANG_DEFAULT_CODE;
 
 {ptr_defs}
 
-const char* Current() {{
-    return CODE;
+const char* LangCurrent() {{
+    return LangCode;
 }}
 
-bool SetLanguage(const char* code, bool persist) {{
-    const char* normalized = NormalizeCode(code);
-    const bool changed = (CODE == nullptr) || (std::strcmp(CODE, normalized) != 0);
-    ApplyLiterals(LiteralsFor(normalized));
-    CODE = normalized;
+bool LangSetLanguage(const char* code, bool persist) {{
+    const char* normalized = LangNormalizeCode(code);
+    const bool changed = (LangCode == nullptr) || (std::strcmp(LangCode, normalized) != 0);
+    LangApplyLiterals(LangLiteralsFor(normalized));
+    LangCode = normalized;
     if (persist) {{
         Settings settings("ui", true);
         settings.SetString("language", normalized);
@@ -219,26 +210,23 @@ bool SetLanguage(const char* code, bool persist) {{
     return changed;
 }}
 
-void InitFromNvs() {{
+void LangInitFromNvs() {{
     Settings settings("ui", false);
     const std::string saved = settings.GetString("language", "");
     if (saved.empty()) {{
-        SetLanguage(LANG_DEFAULT_CODE, false);
+        LangSetLanguage(LANG_DEFAULT_CODE, false);
     }} else {{
-        SetLanguage(saved.c_str(), false);
+        LangSetLanguage(saved.c_str(), false);
     }}
 }}
 
-}}  // namespace Lang
 
-namespace {{
 struct LangStaticInit {{
     LangStaticInit() {{
-        Lang::SetLanguage(LANG_DEFAULT_CODE, false);
+        LangSetLanguage(LANG_DEFAULT_CODE, false);
     }}
 }};
-LangStaticInit g_lang_static_init;
-}}  // namespace
+static LangStaticInit g_lang_static_init;
 """
 
     os.makedirs(os.path.dirname(header_path), exist_ok=True)

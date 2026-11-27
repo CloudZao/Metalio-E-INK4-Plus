@@ -1,16 +1,12 @@
-## Metalio-E-Ink4-Plus：百问 AI 整栈（WiFi + Opus + Assistant）
+## ESP32 墨水屏应用栈（WiFi + Opus + Assistant）
 dependencies:
   idf:
-    version: '>=5.4.0'
+    version: '>=6.1.0,<6.2.0'
   lvgl/lvgl: "==9.5.0"
   espressif/esp_lvgl_adapter: "==0.6.3"
   espressif/esp_mmap_assets: '>=1.2'
   78/esp-opus-encoder: ~2.4.1
   espressif/esp_codec_dev: ~1.5
-  espressif/esp-sr:
-    version: ~2.2.0
-    rules:
-      - if: target in [esp32s3, esp32p4]
   espressif/button: ~4.1.3
   espressif/zlib: "*"
   espressif/cjson: "*"
@@ -22,4 +18,17 @@ dependencies:
   espressif/esp_tinyusb:
     version: "^2.0.0"
     rules:
-      - if: target in [esp32s31]
+      - if: target in [esp32s3, esp32s31]
+
+  espressif/esp_lcd_touch_cst816s:
+    version: ^1.0.6
+    rules:
+      - if: target == esp32s3
+  espressif/esp_io_expander_tca95xx_16bit:
+    version: ^2.0.0
+    rules:
+      - if: target == esp32s3
+  espressif/usb_host_uvc:
+    version: "==2.3.1"
+    rules:
+      - if: target == esp32s3

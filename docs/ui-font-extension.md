@@ -2,9 +2,19 @@
 
 [简体中文](ui-font-extension_zn.md)
 
+## Selecting the system font
+
+Place `.ttf` or `.otf` files in `metalio/e-ink/fonts_ttf/` on the SD card. In **Settings → System font**, select a font to preview it, then select **Apply**. Fonts appear as rows in a shared outlined group, with **Current** beside the current font; **Default font** restores the built-in font. Directory reads use viewport-sized batches; the interface does not create controls for the whole directory. Preview retains the list and its scroll position for an immediate return. Exact-sized filename data is cached in PSRAM according to available memory. Memory pressure evicts cached batches, which are reread only when needed. Leaving system font settings releases the filename cache. Applying a font updates the retained list without rebuilding Settings.
+
+Opening the list locates the current font's batch by filename in the background, then scrolls to its row after loading. The default font or a missing file opens the first batch. Locating a file does not read font contents or create controls for other batches. Manual paging and returning from preview preserve the user's position.
+
+System fonts use the existing FreeType renderer directly, without conversion. The 470 uses its native 30-pixel body and 25-pixel caption sizes. Preview and Apply share the loaded font resource. Separate icon and pixel fonts, independent reader body fonts, and startup drawing that reads Flash glyphs directly retain their own resources.
+
+The selection is saved in NVS and restored after startup and SD mounting. Missing glyphs use built-in resources. On startup without the card, or after confirming the file is unavailable, the interface uses the built-in font while retaining the saved choice. An existing complete snapshot continues rendering while storage is temporarily unavailable. When a complete font file fits in PSRAM with sufficient working headroom, an immutable snapshot keeps rendering through standby and USB ownership. After remounting, a background byte comparison reuses the font instances and glyph caches if the file is unchanged; changed files are prepared before replacing the active resource. Fonts that cannot fit keep bounded streaming reads, and old streams cannot access newly mounted media. UI font reads close their file handles after each cache miss so that standby and virtual-disk transitions can drain SD access. File size and modification time are checked with path-based `stat`; ESP-IDF FAT `fstat` does not provide modification times.
+
 ## Installation
 
-The UI uses the main fontpack in the Flash `font_data` partition first. It queries the SD extension only when a glyph is missing. Copy the extension to:
+The built-in UI font uses the main fontpack in the Flash `font_data` partition first. It queries the SD extension only when a glyph is missing. Copy the extension to:
 
 ```text
 metalio/e-ink/fonts/extended-fonts.fontpack

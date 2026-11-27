@@ -3,7 +3,7 @@
 #include <string>
 namespace plus_examples {
 // Narrow example: verifies a conservative RX-only budget and coordinates P14.
-// It does NOT announce microphone-ready or create UART/I2S. Actual BH1098G
+// It does NOT announce microphone-ready or create UART/I2S. Actual Bluetooth chip
 // handshake and sample arrival must succeed before recording is reported.
 bool ResetSharedAudioForRx(std::size_t reserve_bytes, std::string* error) {
     const auto before = plus_services::ReadMemorySnapshot();

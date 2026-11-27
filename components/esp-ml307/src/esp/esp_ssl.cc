@@ -1,11 +1,11 @@
-#include "esp_ssl.h"
-#include <esp_log.h>
-#include <esp_crt_bundle.h>
-#include <cstring>
 #include <algorithm>
+#include <cstring>
 #include <arpa/inet.h>
-#include <sys/socket.h>
+#include <esp_crt_bundle.h>
+#include <esp_log.h>
 #include <esp_timer.h>
+#include <sys/socket.h>
+#include "esp_ssl.h"
 
 static const char *TAG = "EspSsl";
 
@@ -23,6 +23,11 @@ EspSsl::~EspSsl() {
 }
 
 bool EspSsl::Connect(const std::string& host, int port) {
+    if (!event_group_) {
+        last_error_ = ENOMEM;
+        ESP_LOGE(TAG, "operation=connect stage=event_group result=no_memory");
+        return false;
+    }
     if (tls_client_ != nullptr) {
         ESP_LOGE(TAG, "tls client has been initialized");
         return false;
@@ -35,7 +40,12 @@ bool EspSsl::Connect(const std::string& host, int port) {
     }
 
     esp_tls_cfg_t cfg = {};
-    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    if (ca_pem_.empty()) {
+        cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    } else {
+        cfg.cacert_buf = reinterpret_cast<const unsigned char*>(ca_pem_.c_str());
+        cfg.cacert_bytes = ca_pem_.size() + 1;
+    }
     if (request_deadline_us_) {
         const int64_t remaining_ms = (request_deadline_us_ - esp_timer_get_time()) / 1000;
         if (remaining_ms <= 0) {
@@ -67,7 +77,7 @@ bool EspSsl::Connect(const std::string& host, int port) {
     const esp_err_t socket_result = esp_tls_get_conn_sockfd(tls_client_, &sockfd);
     if (socket_result != ESP_OK || sockfd < 0) {
         last_error_ = socket_result != ESP_OK ? socket_result : EBADF;
-        ESP_LOGE(TAG, "TLS receive socket unavailable: code=%d", last_error_);
+        ESP_LOGE(TAG, "TLS receive socket unavailable: code=%d", last_error_.load());
         esp_tls_conn_destroy(tls_client_);
         tls_client_ = nullptr;
         return false;
@@ -77,7 +87,7 @@ bool EspSsl::Connect(const std::string& host, int port) {
     receive_slice.tv_usec = 200000;
     if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &receive_slice, sizeof(receive_slice)) != 0) {
         last_error_ = errno;
-        ESP_LOGE(TAG, "TLS receive timeout setup failed: socket_errno=%d", last_error_);
+        ESP_LOGE(TAG, "TLS receive timeout setup failed: socket_errno=%d", last_error_.load());
         esp_tls_conn_destroy(tls_client_);
         tls_client_ = nullptr;
         return false;
@@ -89,7 +99,16 @@ bool EspSsl::Connect(const std::string& host, int port) {
     xEventGroupClearBits(event_group_, ESP_SSL_EVENT_RECEIVE_TASK_EXIT);
     const auto task_result = xTaskCreate([](void* arg) {
         EspSsl* ssl = (EspSsl*)arg;
-        ssl->ReceiveTask();
+        try {
+            ssl->ReceiveTask();
+        } catch (...) {
+            ssl->last_error_ = ENOMEM;
+            ssl->connected_.store(false);
+            if (ssl->disconnect_callback_) {
+                ssl->disconnect_callback_();
+            }
+            ESP_LOGE(TAG, "operation=receive result=no_memory");
+        }
         xEventGroupSetBits(ssl->event_group_, ESP_SSL_EVENT_RECEIVE_TASK_EXIT);
         vTaskDelete(NULL);
     }, "ssl_receive", 4096, this, 1, &receive_task_handle_);
@@ -139,10 +158,27 @@ int EspSsl::Send(const std::string& data) {
             last_error_ = ETIMEDOUT;
             return -1;
         }
+        if (request_deadline_us_) {
+            const int64_t remaining = request_deadline_us_.load() - esp_timer_get_time();
+            if (remaining <= 0) {
+                last_error_ = ETIMEDOUT;
+                return -1;
+            }
+            int socket = -1;
+            timeval timeout{};
+            timeout.tv_sec = remaining / 1000000;
+            timeout.tv_usec = remaining % 1000000;
+            if (esp_tls_get_conn_sockfd(tls_client_, &socket) != ESP_OK || socket < 0 ||
+                setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) != 0) {
+                last_error_ = errno;
+                return -1;
+            }
+        }
         const size_t write_size = data_size - total_sent;
         int ret = esp_tls_conn_write(tls_client_, data_ptr + total_sent, write_size);
 
-        if (ret == ESP_TLS_ERR_SSL_WANT_WRITE) {
+        if (ret == ESP_TLS_ERR_SSL_WANT_WRITE || ret == ESP_TLS_ERR_SSL_WANT_READ) {
+            vTaskDelay(1);
             continue;
         }
 

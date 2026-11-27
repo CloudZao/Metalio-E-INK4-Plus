@@ -4,7 +4,7 @@
 
 ## 音频硬件与资源
 
-Plus的BH1098G提供时钟，ESP32-S31为I2S从机、Philips格式、左右双槽、每槽32位。左/偶数槽是麦克风，右/奇数槽是扬声器回采参考，不是立体声双麦。当前语音配置16kHz，麦克风转PCM16 mono；历史实现沿官方 `bit_shift=true`、`left_align=true`、32位右移12再限幅，不等于最佳有效位或增益已校准。只改WAV头不能提高实际采样率。
+Plus的蓝牙芯片提供时钟，ESP32-S31为I2S从机、Philips格式、左右双槽、每槽32位。左/偶数槽是麦克风，右/奇数槽是扬声器回采参考，不是立体声双麦。当前语音配置16kHz，麦克风转PCM16 mono；历史实现沿官方 `bit_shift=true`、`left_align=true`、32位右移12再限幅，不等于最佳有效位或增益已校准。只改WAV头不能提高实际采样率。
 
 引脚和端口见 [设备档案](plus-hardware.md)。需要完整初始化细节时，在已获取的固定官方源码读取 `main/boards/common/audio/bt_audio_codec.cc`、`main/boards/metalio-e-ink4-plus/periph/metalio_audio.cc` 和 `docs/audio-self-test-diagnostics.md`。仅复制必要驱动/适配，不读取整个官方系统做上下文。
 
